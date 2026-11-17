@@ -1,0 +1,6621 @@
+import { clamp, dist, randInt } from './core/math.js';
+import { Input } from './core/Input.js';
+import { AudioSystem } from './core/AudioSystem.js';
+import {
+  COMMAND_ACTIONS,
+  COMMAND_BY_ID,
+  BOTTOM_BAR_CATEGORIES,
+  SPACING_PRESETS,
+  HQ_BUILDING_SPEC,
+  HQ_UPGRADES,
+  BASE_BUILDINGS,
+  BASE_BUILDING_BY_ID,
+  AIR_DOCTRINES,
+  AIR_DOCTRINE_BY_ID,
+  SQUAD_FORMATIONS,
+  SQUAD_FORMATION_BY_ID,
+} from './data/rtsData.js';
+import {
+  TECH_NODES,
+  TECH_NODE_BY_ID,
+  computeTechResearchCost,
+} from './data/techTreeData.js';
+import { BattlefieldMap, BATTLEFIELD_SIZE } from './world/BattlefieldMap.js';
+import { getTerrainHeight } from './world/terrainHeight.js';
+import {
+  SquadUnit,
+  TrenchSegment,
+  BarricadeLine,
+  FortifiedWallLine,
+  BarbedWireLine,
+  Landmine,
+} from './entities/SquadUnit.js';
+import { FloatingText } from './entities/Particle.js';
+import { Renderer3D } from './render/Renderer3D.js';
+
+// Exportações compatíveis para testes legados
+import { CityMap } from './world/CityMap.js';
+import { Player } from './entities/Player.js';
+import { WeaponSystem } from './systems/WeaponSystem.js';
+import { TerritorySystem } from './systems/TerritorySystem.js';
+import { HeistSystem } from './systems/HeistSystem.js';
+import { WantedSystem } from './systems/WantedSystem.js';
+
+export class Game {
+  constructor({ canvas, overlayCanvas, onHudUpdate, onInterrogate } = {}) {
+    this.canvas = canvas;
+    this.onHudUpdate = onHudUpdate;
+    this.onInterrogate = onInterrogate;
+
+    this.settings = {
+      camSpeed: 1.0,
+      volume: 0.35,
+      highQuality: true,
+    };
+
+    this.gameMode = '1v1'; // '1v1' ou '2v2'
+    this.startingResourcesPreset = 600; // 450 (Escasso) | 600 (Padrão) | 1000 (Alto Comando)
+
+    // Controle de Velocidade na HUD: 0 (Pausado [Espaço]), 0.5x (Tático Lento), 1x (Normal), 1.5x
+    this.timeScale = 1.0;
+    this.lastNonZeroSpeed = 1.0;
+
+    this.input = canvas
+      ? new Input(canvas)
+      : {
+          down: () => false,
+          wasPressed: () => false,
+          endFrame: () => {},
+          destroy: () => {},
+          mouse: {
+            x: 0,
+            y: 0,
+            down: false,
+            rightDown: false,
+            clicked: false,
+            rightClicked: false,
+            released: false,
+            rightReleased: false,
+            isDragging: false,
+            isRightDragging: false,
+            dragStartX: 0,
+            dragStartY: 0,
+            rightDragStartX: 0,
+            rightDragStartY: 0,
+          },
+          wheel: 0,
+        };
+
+    this.audio = new AudioSystem();
+    this.mapId = 'normandy_fields';
+    this.map = new BattlefieldMap({ seed: 1944, mapId: this.mapId });
+    this.renderer = canvas ? new Renderer3D(canvas, overlayCanvas) : null;
+
+    this.camera = {
+      x: 2100,
+      y: 4800,
+      zoom: 660,
+      shake: (mag, t) => this.renderer?.shake(mag, t),
+    };
+
+    this.units = [];
+    if (typeof window !== 'undefined') window.__frontlineGame = this;
+    this.trenches = [];
+    this.barricades = [];
+    this.fortifiedWalls = [];
+    this.guidedTrainingActive = false;
+    this.guidedTrainingStep = 0;
+    this.guidedTrainingTimer = 0;
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('frontline_start_guided') === '1') {
+        localStorage.removeItem('frontline_start_guided');
+        this.guidedTrainingActive = true;
+      }
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('frontline_assault_drill') === '1') {
+        localStorage.removeItem('frontline_assault_drill');
+        setTimeout(() => this.startAssaultSandboxDrill(), 220);
+      }
+    } catch {
+      // noop
+    }
+    this.barbedWires = [];
+    this.mines = [];
+    this.baseBuildings = [];
+    this.aircrafts = [];
+    this.bullets = [];
+    this.pendingGrenades = [];
+    this.repairSparkTimer = 0;
+    this.particles = [];
+    this.texts = [];
+    this.notifications = [];
+
+    this.selectedBuildingId = null;
+    this.selectedStructureId = null;
+    this.victoryPoints = 0;
+
+    // Quadro de Planejamento Tático Interativo ([TAB] / Mini-Mapa)
+    this.tacticalMapOpen = false;
+    this.tacticalArrows = [];
+    this.tacticalPings = [];
+
+    this.supplies = 600;
+    this.ammo = 140;
+    this.fuel = 95;
+    this.enemySupplies = { enemy_1: 600, enemy_2: 600 };
+    this.allyAiSupplies = 600;
+    this.supplyIncomeTimer = 6.0;
+
+    // Ondas de IA a cada 38 segundos (ritmo cadenciado estilo Company of Heroes)
+    this.aiWaveTimer = 38.0;
+    this.aiTacticalOrderTimer = 6.0;
+    this.wreckSmokeTimer = 0.25;
+    this.vehicleExhaustTimer = 0.14;
+
+    this.activeCommandSlot = 0;
+    this.activeBottomCategory = 'infantry'; // 'infantry' | 'vehicles' | 'engineering' | 'defenses' | 'all'
+    this.activeCommandMode = null;
+    this.activeEngineeringActionId = null;
+    this.activeAirStrikeMode = null;
+    this.airCooldowns = {
+      recon_drone: 0,
+      a10_strafe: 0,
+      precision_bomb: 0,
+    };
+
+    this.trenchShapeL = false;
+    this.trenchPreview = null;
+    this.orientationPreview = null;
+    this.coverSnapPreview = null;
+    this.hoverPathPreview = null;
+    this.rightOrderStartWorld = null;
+    this.selectionBox = null;
+    this.worldMouse = { x: 4800, y: 4800 };
+
+    // Árvore de Pesquisa & Drones de Guerra + Progressão do QG (Nv. 1-3) e Pontos de Comando (CP)
+    this.hqLevel = 1;
+    this.commandPoints = 0;
+    this.aiDifficulty = 'medium'; // 'easy' | 'medium' | 'hard'
+    this.playerSkinId = 'olive_classic';
+    this.aiHqLevels = { ally_ai: 1, enemy_1: 1, enemy_2: 1 };
+    this.techModalOpen = false;
+    this.selectedBudgetTier = 0.25;
+    this.completedTechs = new Set();
+    this.activeResearch = null;
+    this.activeDrones = [];
+    this.activeDroneLaunchMode = null; // 'uav_recon' | 'fpv_kamikaze' | null
+    this.radioInterceptTimer = 0;
+
+    // Estatísticas da Batalha & Fim de Jogo
+    this.gameOver = false;
+    this.matchStats = {
+      elapsedSeconds: 0,
+      unitsEliminated: 0,
+      prisonersInterrogated: 0,
+      trenchesDug: 0,
+      researchesCompleted: 0,
+    };
+
+    // Modo de Controle Touch: 'select' ([Modo Seleção ▭]) ou 'camera' ([Modo Câmera ✋])
+    this.touchControlMode = 'select';
+
+    this.intelRevealed = false;
+    this.sandboxMode = false;
+    this.sandboxFogDisabled = false;
+    this.sandboxAiPaused = false;
+    this.powPrisoners = [];
+    this.enemyProductionDebuffTimer = 0;
+    this.enemySabotageTimer = 0;
+    this.victoryState = null;
+
+    this.menuActive = true;
+    this.paused = false;
+    this.hudSyncTimer = 0;
+    this.rafId = null;
+    this.lastTs = 0;
+
+    // Armazenamento em memória de fallback (caso localStorage não esteja disponível em testes Node.js)
+    this._memorySaves = [];
+    this.saveStorageKey = 'cof_rts_saved_battles_v1';
+
+    // Instâncias auxiliares para compatibilidade com smoke-test
+    this.cityMap = new CityMap(2077);
+    this.player = new Player(this.cityMap.spawnPoint.x, this.cityMap.spawnPoint.y);
+    this.weaponSystem = new WeaponSystem();
+    this.territorySystem = new TerritorySystem();
+    this.heistSystem = new HeistSystem();
+    this.wantedSystem = new WantedSystem();
+
+    if (this.renderer) {
+      this.renderer.buildWorld(this.map);
+      this.renderer.applySettings(this.settings);
+    }
+
+    this.setupMatch(this.gameMode, this.startingResourcesPreset);
+  }
+
+  setTouchControlMode(mode) {
+    this.touchControlMode = mode === 'camera' ? 'camera' : 'select';
+    this.selectionBox = null;
+    this.audio.play('switch');
+    this.notify(
+      this.touchControlMode === 'camera'
+        ? '✋ MODO CÂMERA ATIVADO (ARRASTAR 1 DEDO MOVE O MAPA)'
+        : '▭ MODO SELEÇÃO ATIVADO (ARRASTAR 1 DEDO SELECIONA TROPAS)',
+      'Toque Simples seleciona/ordena • 2 Dedos sempre movem e dão zoom (Pinça)',
+      '#38bdf8'
+    );
+    this._emitHud();
+    return this.touchControlMode;
+  }
+
+  toggleTouchControlMode() {
+    return this.setTouchControlMode(this.touchControlMode === 'select' ? 'camera' : 'select');
+  }
+
+  setGameSpeed(mult) {
+    if (mult === 0) {
+      if (this.timeScale > 0) this.lastNonZeroSpeed = this.timeScale;
+      this.timeScale = 0;
+      this.notify('PAUSA TÁTICA ATIVADA [ESPAÇO]', 'Você pode inspecionar o campo e emitir ordens.', '#d4a338');
+    } else {
+      this.paused = false;
+      this.timeScale = Number.isFinite(mult) && mult > 0 ? mult : 1.0;
+      this.lastNonZeroSpeed = this.timeScale;
+      this.notify(`VELOCIDADE DA OPERAÇÃO: ${this.timeScale}x`, '', '#c87d28');
+    }
+    this._emitHud();
+  }
+
+  toggleTacticalPause() {
+    if (this.timeScale === 0) {
+      this.setGameSpeed(this.lastNonZeroSpeed || 1.0);
+    } else {
+      this.setGameSpeed(0);
+    }
+  }
+
+  toggleTacticalMap(forceFlag = null) {
+    this.tacticalMapOpen = typeof forceFlag === 'boolean' ? forceFlag : !this.tacticalMapOpen;
+    this.selectionBox = null;
+    if (this.input?.mouse) {
+      this.input.mouse.down = false;
+      this.input.mouse.released = false;
+      this.input.mouse.clicked = false;
+      this.input.mouse.rightDown = false;
+      this.input.mouse.rightReleased = false;
+      this.input.mouse.rightClicked = false;
+      this.input.mouse.isDragging = false;
+    }
+    this.audio.play('switch');
+    this._emitHud();
+  }
+
+  addTacticalArrow(x1, y1, x2, y2, color = '#ef4444', label = 'ATAQUE') {
+    if (dist(x1, y1, x2, y2) < 120) return null;
+    const arrow = {
+      id: `arrow_${Date.now()}_${Math.random()}`,
+      x1: clamp(x1, 80, BATTLEFIELD_SIZE - 80),
+      y1: clamp(y1, 80, BATTLEFIELD_SIZE - 80),
+      x2: clamp(x2, 80, BATTLEFIELD_SIZE - 80),
+      y2: clamp(y2, 80, BATTLEFIELD_SIZE - 80),
+      color,
+      label,
+      createdAt: Date.now(),
+    };
+    this.tacticalArrows.push(arrow);
+    if (this.tacticalArrows.length > 14) this.tacticalArrows.shift();
+    this.audio.play('switch');
+    this._emitHud();
+    return arrow;
+  }
+
+  addTacticalPing(x, y, type = 'attack') {
+    const meta =
+      type === 'defend'
+        ? { label: 'DEFENDER SETOR', color: '#38bdf8' }
+        : type === 'rally'
+        ? { label: 'PONTO DE REUNIÃO', color: '#a3be8c' }
+        : { label: 'ALVO DE ARTILHARIA / ATAQUE', color: '#ef4444' };
+
+    const ping = {
+      id: `ping_${Date.now()}_${Math.random()}`,
+      x: clamp(x, 80, BATTLEFIELD_SIZE - 80),
+      y: clamp(y, 80, BATTLEFIELD_SIZE - 80),
+      type,
+      label: meta.label,
+      color: meta.color,
+      life: 18.0,
+      maxLife: 18.0,
+    };
+    this.tacticalPings.push(ping);
+    if (this.tacticalPings.length > 8) this.tacticalPings.shift();
+    this.audio.play('star');
+    this.spawnText(ping.x, ping.y - 24, `📍 ${meta.label}`, meta.color);
+    this._emitHud();
+    return ping;
+  }
+
+  clearTacticalPlan() {
+    this.tacticalArrows = [];
+    this.tacticalPings = [];
+    this.audio.play('switch');
+    this._emitHud();
+  }
+
+  // Emitir ordens diretas clicando no Mapa Tático / Mini-Mapa (ASSALTO, DEFENDER POSIÇÃO ou EM MARCHA)
+  issueTacticalMapOrder(wx, wy, orderMode = 'ASSAULT') {
+    const tx = clamp(wx, 100, BATTLEFIELD_SIZE - 100);
+    const ty = clamp(wy, 100, BATTLEFIELD_SIZE - 100);
+
+    // Se um prédio da base aliada estiver selecionado e nenhum esquadrão móvel selecionado, define Ponto de Encontro (Rally Point)
+    const selectedUnits = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected);
+    if (selectedUnits.length === 0 && this.selectedBuildingId) {
+      const bld = this.baseBuildings.find((b) => b.id === this.selectedBuildingId && b.team === 'allies' && b.alive !== false);
+      if (bld) {
+        bld.rallyX = tx;
+        bld.rallyY = ty;
+        this.audio.play('pickup');
+        this.spawnText(tx, ty, `🚩 PONTO DE ENCONTRO (${bld.short || 'BASE'})`, '#a3be8c');
+        this.notify('PONTO DE ENCONTRO ATUALIZADO', `Tropas de ${bld.name || 'Base'} marcharão para as coordenadas marcadas.`, '#a3be8c');
+        this._emitHud();
+        return true;
+      }
+    }
+
+    if (selectedUnits.length === 0) {
+      // Se nenhuma unidade estiver selecionada, centraliza a câmera no ponto clicado
+      this.camera.x = tx;
+      this.camera.y = ty;
+      return false;
+    }
+
+    // Verifica se clicou próximo a um Ponto de Suprimento
+    const nearSector = this.map.sectors.find((s) => dist(tx, ty, s.x, s.y) <= s.radius + 220);
+    const destX = nearSector ? nearSector.x : tx;
+    const destY = nearSector ? nearSector.y : ty;
+
+    const mode = orderMode === 'DEFEND' || orderMode === 'MARCH' ? orderMode : 'ASSAULT';
+    const modePrefix =
+      mode === 'DEFEND' ? '🛡️ Defendendo' : mode === 'MARCH' ? '🏃 Em Marcha' : '⚔️ Em Assalto';
+    const targetLabel = nearSector ? `${modePrefix}: ${nearSector.shortName || nearSector.name}` : modePrefix;
+
+    const cols = Math.ceil(Math.sqrt(selectedUnits.length));
+    const spacing = 68;
+    selectedUnits.forEach((u, idx) => {
+      if (u.garrisonedBuildingId) this._ungarrisonUnit(u);
+      u.holdPosition = false;
+      const row = Math.floor(idx / cols);
+      const col = idx % cols;
+      const ox = (col - (cols - 1) * 0.5) * spacing;
+      const oy = (row - Math.floor((selectedUnits.length - 1) / cols) * 0.5) * spacing;
+      const fx = clamp(destX + ox, 90, BATTLEFIELD_SIZE - 90);
+      const fy = clamp(destY + oy, 90, BATTLEFIELD_SIZE - 90);
+      const path =
+        this.map?.buildPathAroundObstacles
+          ? this.map.buildPathAroundObstacles(
+              { x: u.x, y: u.y },
+              { x: fx, y: fy },
+              u.spec?.type === 'vehicle' ? 38 : 22,
+              this.fortifiedWalls,
+              this.barricades
+            )
+          : null;
+      u.tacticalOrderMode = mode;
+      u.tacticalTargetLabel = targetLabel;
+      u.tacticalAttackOrder = mode === 'ASSAULT';
+      u.setMoveOrder(fx, fy, null, null, path);
+      // Desmarcação Automática após enviar a tropa para agilizar o comando da próxima unidade
+      u.selected = false;
+    });
+
+    if (this.isMultiplayer && this.networkManager) {
+      this.networkManager.sendCommand({
+        type: 'move',
+        orderMode: mode,
+        unitIds: selectedUnits.map((u) => u.id),
+        targetX: destX,
+        targetZ: destY,
+      });
+    }
+
+    this.audio.play('pickup');
+    if (nearSector) {
+      this.spawnText(nearSector.x, nearSector.y - 20, `🚩 ${modePrefix.toUpperCase()} — ${nearSector.shortName || nearSector.name}`, '#7faed9');
+      this.notify(
+        `ORDEM TÁTICA: ${nearSector.name.toUpperCase()}`,
+        `${selectedUnits.length} esquadrão(ões) enviados (${modePrefix}).`,
+        '#7faed9'
+      );
+    } else {
+      this.spawnText(destX, destY - 16, `▶ ${modePrefix.toUpperCase()}`, '#7faed9');
+    }
+    this._emitHud();
+    return true;
+  }
+
+  repairNearestVehicleForSelected() {
+    const engineers = this.units.filter(
+      (u) => u.alive && u.faction === 'player' && u.selected && (u.spec.id === 'engineers' || u.spec.canBuild)
+    );
+    if (engineers.length === 0) return false;
+    const ref = engineers[0];
+    let bestVeh = null;
+    let bestDist = Infinity;
+    for (const v of this.units) {
+      if (!v.alive || v.team !== 'allies' || v.spec.type !== 'vehicle' || v.hp >= v.maxHp) continue;
+      const scoreDist = dist(ref.x, ref.y, v.x, v.y) * (v.isBrokenDown ? 0.45 : 1.0);
+      if (scoreDist < bestDist) {
+        bestDist = scoreDist;
+        bestVeh = v;
+      }
+    }
+    if (!bestVeh) {
+      this.notify('SEM VEÍCULOS DANIFICADOS', 'Todos os blindados aliados estão com 100% de integridade.', '#a3be8c');
+      return false;
+    }
+    engineers.forEach((eng) => {
+      if (eng.garrisonedBuildingId) this._ungarrisonUnit(eng);
+      eng.holdPosition = false;
+      const fx = clamp(bestVeh.x - 42, 90, BATTLEFIELD_SIZE - 90);
+      const fy = clamp(bestVeh.y, 90, BATTLEFIELD_SIZE - 90);
+      const path = this.map?.buildPathAroundObstacles
+        ? this.map.buildPathAroundObstacles(
+            { x: eng.x, y: eng.y },
+            { x: fx, y: fy },
+            22,
+            this.fortifiedWalls,
+            this.barricades
+          )
+        : null;
+      eng.setMoveOrder(fx, fy, null, null, path);
+    });
+    this.audio.play('pickup');
+    this.spawnText(bestVeh.x, bestVeh.y - 24, `🔧 ENGENHEIROS A CAMINHO`, '#38bdf8');
+    this._emitHud();
+    return true;
+  }
+
+  startGuidedTraining() {
+    this.guidedTrainingActive = true;
+    this.guidedTrainingStep = 0;
+    this.guidedTrainingTimer = 0;
+    this.audio.play('star');
+    this._emitHud();
+  }
+
+  stopGuidedTraining() {
+    this.guidedTrainingActive = false;
+    this._emitHud();
+  }
+
+  startOnlineMatch({ networkManager, room, localSlot = 1 } = {}) {
+    this.isMultiplayer = true;
+    this.networkManager = networkManager;
+    this.localSlot = localSlot;
+    this.localPlayerFaction = localSlot === 2 ? 'enemy_1' : 'player';
+    this.localPlayerTeam = localSlot === 2 ? 'enemies' : 'allies';
+    this.mpHeartbeatTimer = 1.5;
+
+    const mapId = room?.mapId || 'normandy_fields';
+    const mapSeed = room?.mapSeed || 1944;
+    const startingRes = room?.startingResources || 600;
+
+    this.mapId = mapId;
+    this.map = new BattlefieldMap({ seed: mapSeed, mapId });
+    this.renderer?.buildWorld(this.map);
+
+    this.setupMatch('1v1', startingRes, mapId, 'medium');
+    this.isMultiplayer = true;
+    this.networkManager = networkManager;
+    this.localSlot = localSlot;
+    this.localPlayerFaction = localSlot === 2 ? 'enemy_1' : 'player';
+    this.localPlayerTeam = localSlot === 2 ? 'enemies' : 'allies';
+
+    // Inversão de Câmera & Facção para Jogador 2 (Eixo - Base Norte/Leste)
+    if (localSlot === 2) {
+      const axisHq = this.map.hqs?.enemy_1 || { x: 8450, y: 4280 };
+      this.camera.x = axisHq.x - 450;
+      this.camera.y = axisHq.y + 120;
+    }
+
+    // Assina ordens remotas e heartbeat de estado (a cada 1.5s)
+    this._mpUnsubCmd?.();
+    this._mpUnsubState?.();
+    if (networkManager) {
+      this._mpUnsubCmd = networkManager.onCommand((cmd) => this._handleRemoteCommand(cmd));
+      this._mpUnsubState = networkManager.onStateHeartbeat((state) =>
+        this._applyRemoteStateHeartbeat(state)
+      );
+    }
+
+    this.notify(
+      '🌐 BATALHA ONLINE INICIADA',
+      localSlot === 2
+        ? 'Você comanda o EIXO (Base Norte/Leste).'
+        : 'Você comanda os ALIADOS (Base Sul/Oeste).',
+      '#c28e38'
+    );
+    this._emitHud();
+  }
+
+  _handleRemoteCommand(cmd) {
+    if (!cmd || cmd.slot === this.localSlot) return;
+    const remoteFaction = cmd.slot === 2 ? 'enemy_1' : 'player';
+    const matchingUnits = Array.isArray(cmd.unitIds)
+      ? this.units.filter((u) => u.alive && u.faction === remoteFaction && cmd.unitIds.includes(u.id))
+      : this.units.filter((u) => u.alive && u.faction === remoteFaction).slice(0, 2);
+
+    if (cmd.type === 'move' && typeof cmd.targetX === 'number' && typeof cmd.targetZ === 'number') {
+      matchingUnits.forEach((u) => {
+        const path = this.map?.buildPathAroundObstacles(
+          { x: u.x, y: u.y },
+          { x: cmd.targetX, y: cmd.targetZ },
+          u.spec?.type === 'vehicle' ? 38 : 22,
+          this.fortifiedWalls,
+          this.barricades
+        );
+        u.setMoveOrder(cmd.targetX, cmd.targetZ, null, null, path);
+      });
+    } else if (cmd.type === 'garrison' && cmd.structureId) {
+      const st = this.map?.structures?.find((s) => s.id === cmd.structureId && !s.destroyed);
+      if (st && matchingUnits[0]) {
+        matchingUnits[0].setGarrisonOrder(st);
+      }
+    } else if (cmd.type === 'produce' && cmd.unitType) {
+      const hq = this.map?.hqs?.[remoteFaction];
+      if (hq) this.spawnUnit(remoteFaction, cmd.unitType, hq.x - 140, hq.y + 80, Math.PI);
+    }
+  }
+
+  _applyRemoteStateHeartbeat(state) {
+    if (!state || this.localSlot === 1) return;
+    if (Array.isArray(state.sectors)) {
+      for (const rs of state.sectors) {
+        const localSec = this.map?.sectors?.find((s) => s.id === rs.id);
+        if (localSec) {
+          localSec.owner = rs.owner;
+          localSec.captureProgress = rs.captureProgress;
+        }
+      }
+    }
+    if (Array.isArray(state.units)) {
+      for (const ru of state.units) {
+        const lu = this.units.find((u) => u.id === ru.id);
+        if (lu) {
+          lu.hp = ru.hp;
+          if (!lu.selected) {
+            lu.x = lu.x + (ru.x - lu.x) * 0.35;
+            lu.y = lu.y + (ru.y - lu.y) * 0.35;
+          }
+        }
+      }
+    }
+  }
+
+  startAssaultSandboxDrill() {
+    if (!this.sandboxMode) {
+      this.toggleSandboxMode(true);
+    }
+    const baseX = clamp(this.camera?.x || 2200, 1200, BATTLEFIELD_SIZE - 1400);
+    const baseY = clamp(this.camera?.y || 4800, 1200, BATTLEFIELD_SIZE - 1200);
+
+    // Entrega 1 Fuzileiros + 1 Assalto + 1 APC Stryker prontos para manobra
+    this.spawnUnit('player', 'rifle_squad', baseX - 110, baseY + 55, 0);
+    this.spawnUnit('player', 'assault_squad', baseX - 110, baseY - 55, 0);
+    this.spawnUnit('player', 'apc_stryker', baseX - 175, baseY, 0);
+
+    // Cenário prático à frente: trincheira/casa inimiga guarnecida ou defendida
+    const targetX = clamp(baseX + 360, 1200, BATTLEFIELD_SIZE - 900);
+    const targetY = baseY;
+    const nearStruct = this.map?.structures?.find(
+      (st) => !st.destroyed && st.garrisonable && !st.garrisonUnitId && dist(st.x, st.y, targetX, targetY) < 900
+    );
+    if (nearStruct) {
+      const def = this.spawnUnit('enemy_1', 'rifle_squad', nearStruct.x, nearStruct.y, Math.PI);
+      if (def) {
+        def.garrisonedBuildingId = nearStruct.id;
+        def.garrisonedBuilding = nearStruct;
+        nearStruct.garrisonUnitId = def.id;
+        nearStruct.garrisonTeam = 'enemies';
+        nearStruct.garrisonedSquad = def;
+      }
+    } else {
+      const def = this.spawnUnit('enemy_1', 'rifle_squad', targetX, targetY, Math.PI);
+      if (def) def.holdPosition = true;
+    }
+
+    this.camera.x = baseX + 120;
+    this.camera.y = baseY;
+    this.audio.play('star');
+    this.notify(
+      '🎯 CENÁRIO DE ASSALTO PRONTO!',
+      'Use Fuzileiros [F] para suprimir, Assalto [G] para flanquear e o APC [U] para desembarcar!',
+      '#c28e38'
+    );
+    this._emitHud();
+  }
+
+  _getGuidedTrainingTip() {
+    if (!this.guidedTrainingActive) return null;
+    const tips = [
+      { step: 1, title: 'PASSO 1/5 • Seleção & Mapa Tático [TAB]', text: 'Selecione seus Fuzileiros ou pressione [TAB] para abrir o Quadro Tático. Escolha ⚔️ ASSALTO e clique em um Setor de Recurso.' },
+      { step: 2, title: 'PASSO 2/5 • Economia & Setores', text: 'Envie tropas até as bandeiras com sacos de areia para capturar +SUP, +MUN e +COMB. Evolua seu QG até Nível 3.' },
+      { step: 3, title: 'PASSO 3/5 • Cobertura & Florestas', text: 'Use trincheiras escavadas (+65% Defesa) e florestas (+35% Dano de Emboscada). Pressione [G] para lançar granadas e [F] para supressão.' },
+      { step: 4, title: 'PASSO 4/5 • Blindados & Engenheiros', text: 'Veículos com <= 30% HP entram em pane mecânica! Envie Engenheiros ou clique em [🔧 Consertar Veículo Mais Próximo].' },
+      { step: 5, title: 'PASSO 5/5 • Comandantes & Interrogatório', text: 'Construa o Campo de Prisioneiros (POW). Quando um Comandante Inimigo (★) se render, clique nele para capturar e interrogar.' },
+    ];
+    return tips[Math.min(tips.length - 1, this.guidedTrainingStep || 0)];
+  }
+
+  setupMatch(
+    mode = '1v1',
+    startingResources = this.startingResourcesPreset,
+    mapId = this.mapId,
+    aiDifficulty = this.aiDifficulty
+  ) {
+    this.gameMode = mode === '2v2' ? '2v2' : '1v1';
+    if (aiDifficulty === 'easy' || aiDifficulty === 'medium' || aiDifficulty === 'hard') {
+      this.aiDifficulty = aiDifficulty;
+    }
+    this.hqLevel = 1;
+    this.commandPoints = 0;
+    this.aiHqLevels = { ally_ai: 1, enemy_1: 1, enemy_2: 1 };
+    if (typeof startingResources === 'number' && startingResources > 0) {
+      this.startingResourcesPreset = startingResources;
+    }
+    const nextMapId = mapId || 'normandy_fields';
+    if (nextMapId !== this.mapId || !this.map) {
+      this.mapId = nextMapId;
+      this.map = new BattlefieldMap({ seed: 1944, mapId: this.mapId });
+      this.renderer?.buildWorld(this.map);
+    }
+
+    this.units = [];
+    if (typeof window !== 'undefined') window.__frontlineGame = this;
+    this.trenches = [];
+    this.barricades = [];
+    this.fortifiedWalls = [];
+    this.guidedTrainingActive = false;
+    this.guidedTrainingStep = 0;
+    this.guidedTrainingTimer = 0;
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('frontline_start_guided') === '1') {
+        localStorage.removeItem('frontline_start_guided');
+        this.guidedTrainingActive = true;
+      }
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('frontline_assault_drill') === '1') {
+        localStorage.removeItem('frontline_assault_drill');
+        setTimeout(() => this.startAssaultSandboxDrill(), 220);
+      }
+    } catch {
+      // noop
+    }
+    this.barbedWires = [];
+    this.mines = [];
+    this.baseBuildings = [];
+    this.aircrafts = [];
+    this.bullets = [];
+    this.pendingGrenades = [];
+    this.repairSparkTimer = 0;
+    this.particles = [];
+    this.texts = [];
+    this.selectedBuildingId = null;
+    this.selectedStructureId = null;
+    this.victoryPoints = 0;
+    this.tacticalMapOpen = false;
+    this.tacticalArrows = [];
+    this.tacticalPings = [];
+    this.intelRevealed = false;
+    this.sandboxMode = false;
+    this.sandboxFogDisabled = false;
+    this.sandboxAiPaused = false;
+    this.powPrisoners = [];
+    this.enemyProductionDebuffTimer = 0;
+    this.enemySabotageTimer = 0;
+    this.victoryState = null;
+    this.gameOver = false;
+    this.techModalOpen = false;
+    this.selectedBudgetTier = 0.25;
+    this.completedTechs = new Set();
+    this.activeResearch = null;
+    this.activeDrones = [];
+    this.activeDroneLaunchMode = null;
+    this.radioInterceptTimer = 0;
+    this.hoverPathPreview = null;
+    this.matchStats = {
+      elapsedSeconds: 0,
+      unitsEliminated: 0,
+      prisonersInterrogated: 0,
+      trenchesDug: 0,
+      researchesCompleted: 0,
+    };
+    this.activeCommandMode = null;
+    this.activeAirStrikeMode = null;
+    this.trenchPreview = null;
+    this.orientationPreview = null;
+    this.rightOrderStartWorld = null;
+    this.selectionBox = null;
+    this.timeScale = 1.0;
+
+    this.airCooldowns = {
+      recon_drone: 0,
+      a10_strafe: 0,
+      precision_bomb: 0,
+    };
+
+    const initSup = this.startingResourcesPreset || 600;
+    this.supplies = initSup;
+    this.ammo = initSup >= 1000 ? 240 : initSup <= 450 ? 90 : 140;
+    this.fuel = initSup >= 1000 ? 180 : initSup <= 450 ? 60 : 95;
+    this.allyAiSupplies = initSup;
+    this.enemySupplies = { enemy_1: initSup, enemy_2: initSup };
+    this.supplyIncomeTimer = 6.0;
+    this.aiWaveTimer = 38.0; // Primeira onda de reforço inimigo após 38s
+
+    // Reseta Névoa de Guerra Real (0 = Inexplorado, 1 = Shroud, 2 = Visão Ativa)
+    this.map.resetFog();
+
+    for (const sec of this.map.sectors) {
+      sec.owner = 'neutral';
+      sec.captureProgress = 0;
+    }
+    for (const st of this.map.structures) {
+      st.garrisonUnitId = null;
+      st.garrisonTeam = null;
+    }
+
+    // Câmera inicial focada na linha de frente aliada no mapa expandido 9600x9600
+    this.camera.x = 2400;
+    this.camera.y = 4800;
+    this.camera.zoom = 660;
+
+    // 1. Trincheiras Escavadas Iniciais em Zig-Zag (Baioneta) nas laterais das estradas (NUNCA sobre a pista)
+    this.trenches.push(
+      new TrenchSegment({
+        points: [
+          { x: 3500, y: 4260 },
+          { x: 3545, y: 4380 },
+          { x: 3495, y: 4490 },
+        ],
+        team: 'allies',
+        revealed: true,
+      }),
+      new TrenchSegment({
+        points: [
+          { x: 3520, y: 5060 },
+          { x: 3570, y: 5180 },
+          { x: 3520, y: 5300 },
+        ],
+        team: 'allies',
+        revealed: true,
+      }),
+      new TrenchSegment({
+        points: [
+          { x: 6040, y: 4260 },
+          { x: 6090, y: 4380 },
+          { x: 6040, y: 4500 },
+          { x: 6180, y: 4500 },
+        ],
+        team: 'enemies',
+        isLShape: true,
+        revealed: false,
+      }),
+      new TrenchSegment({
+        points: [
+          { x: 6060, y: 2020 },
+          { x: 6100, y: 2160 },
+          { x: 6060, y: 2300 },
+        ],
+        team: 'enemies',
+        revealed: false,
+      }),
+      new TrenchSegment({
+        points: [
+          { x: 6060, y: 7260 },
+          { x: 6100, y: 7400 },
+          { x: 6060, y: 7540 },
+        ],
+        team: 'enemies',
+        revealed: false,
+      })
+    );
+
+    // 2. Barricadas Iniciais de Dentes de Dragão e Arame Farpado (fora das trincheiras)
+    this.barricades.push(
+      new BarricadeLine({ x1: 3860, y1: 4680, x2: 3860, y2: 4820, team: 'allies' }),
+      new BarricadeLine({ x1: 5760, y1: 4920, x2: 5760, y2: 5060, team: 'enemies' })
+    );
+
+    this.barbedWires.push(
+      new BarbedWireLine({ x1: 3720, y1: 4280, x2: 3720, y2: 4460, team: 'allies' }),
+      new BarbedWireLine({ x1: 5880, y1: 4280, x2: 5880, y2: 4480, team: 'enemies' })
+    );
+
+    // 3. Campos Minados Ocultos do Inimigo (invisíveis na Névoa de Guerra até batedor/drone/interrogatório)
+    const enemyMineSpots = [
+      { x: 5520, y: 4680 },
+      { x: 5560, y: 4780 },
+      { x: 5520, y: 4900 },
+      { x: 5640, y: 2080 },
+      { x: 5680, y: 2180 },
+      { x: 5640, y: 7340 },
+      { x: 5680, y: 7440 },
+    ];
+    for (const mp of enemyMineSpots) {
+      this.mines.push(
+        new Landmine({
+          x: mp.x,
+          y: mp.y,
+          team: 'enemies',
+          faction: 'enemy_1',
+          revealed: false,
+        })
+      );
+    }
+
+    // 4. Estruturas de Base Militar 3D (Interativas, Selecionáveis e Destrutíveis com HP e Ponto de Encontro)
+    const playerHqPos = this.map.hqs.player;
+    this.baseBuildings.push({
+      id: 'ally_main_hq',
+      buildingType: 'hq_command',
+      name: HQ_BUILDING_SPEC.name,
+      short: HQ_BUILDING_SPEC.short,
+      subtitle: HQ_BUILDING_SPEC.subtitle,
+      team: 'allies',
+      faction: 'player',
+      x: playerHqPos.x,
+      y: playerHqPos.y,
+      sightRadius: HQ_BUILDING_SPEC.sightRadius,
+      hp: HQ_BUILDING_SPEC.maxHp,
+      maxHp: HQ_BUILDING_SPEC.maxHp,
+      radius: HQ_BUILDING_SPEC.radius,
+      rallyX: playerHqPos.x + 560,
+      rallyY: playerHqPos.y,
+      produces: [...HQ_BUILDING_SPEC.produces],
+      productionQueue: [],
+      productionProgress: 0,
+      isMainHQ: true,
+      alive: true,
+    });
+
+    const enemy1HqPos = this.map.hqs.enemy_1;
+    this.baseBuildings.push({
+      id: 'enemy_1_main_hq',
+      buildingType: 'hq_command',
+      name: 'QG Central Inimigo',
+      short: 'QG Inimigo',
+      subtitle: 'Centro de Comando da 1ª Divisão Inimiga',
+      team: 'enemies',
+      faction: 'enemy_1',
+      x: enemy1HqPos.x,
+      y: enemy1HqPos.y,
+      sightRadius: HQ_BUILDING_SPEC.sightRadius,
+      hp: HQ_BUILDING_SPEC.maxHp,
+      maxHp: HQ_BUILDING_SPEC.maxHp,
+      radius: HQ_BUILDING_SPEC.radius,
+      rallyX: enemy1HqPos.x - 560,
+      rallyY: enemy1HqPos.y,
+      produces: [...HQ_BUILDING_SPEC.produces],
+      productionQueue: [],
+      productionProgress: 0,
+      isMainHQ: true,
+      alive: true,
+    });
+
+    const specOpsSpec = BASE_BUILDING_BY_ID.spec_ops_center;
+    const motorPoolSpec = BASE_BUILDING_BY_ID.motor_pool;
+
+    this.baseBuildings.push({
+      id: 'enemy_base_spec_ops',
+      buildingType: 'spec_ops_center',
+      name: 'Quartel de Op. Especiais Inimigo',
+      short: 'Quartel Inimigo',
+      subtitle: specOpsSpec.subtitle,
+      team: 'enemies',
+      faction: 'enemy_1',
+      x: 8220,
+      y: 4460,
+      sightRadius: 520,
+      hp: specOpsSpec.maxHp || 1450,
+      maxHp: specOpsSpec.maxHp || 1450,
+      radius: specOpsSpec.radius || 82,
+      rallyX: 7780,
+      rallyY: 4460,
+      produces: [...(specOpsSpec.produces || [])],
+      productionQueue: [],
+      productionProgress: 0,
+      alive: true,
+    });
+    this.baseBuildings.push({
+      id: 'enemy_base_motor_pool',
+      buildingType: 'motor_pool',
+      name: 'Arsenal Blindado Inimigo',
+      short: 'Fábrica Inimiga',
+      subtitle: motorPoolSpec.subtitle,
+      team: 'enemies',
+      faction: 'enemy_1',
+      x: 8220,
+      y: 5140,
+      sightRadius: 520,
+      hp: motorPoolSpec.maxHp || 1700,
+      maxHp: motorPoolSpec.maxHp || 1700,
+      radius: motorPoolSpec.radius || 88,
+      rallyX: 7780,
+      rallyY: 5140,
+      produces: [...(motorPoolSpec.produces || [])],
+      productionQueue: [],
+      productionProgress: 0,
+      alive: true,
+    });
+
+    // Guaritas Blindadas (Watchtowers) protegendo a entrada da base inimiga
+    this.spawnUnit('enemy_1', 'watchtower_emplacement', 7820, 4560, Math.PI);
+    this.spawnUnit('enemy_1', 'watchtower_emplacement', 7820, 5040, Math.PI);
+
+    // 5. Tropas Iniciais do Jogador (1ª Divisão Aliada)
+    const p1 = this.spawnUnit('player', 'rifle_squad', 3540, 4760, 0);
+    p1.inTrench = true;
+    p1.inTrenchId = this.trenches[0].id;
+
+    const p2 = this.spawnUnit('player', 'assault_squad', 2160, 4820, 0);
+    const p3 = this.spawnUnit('player', 'humvee', 1840, 4980, 0);
+    p1.selected = true;
+    p2.selected = true;
+
+    // 6. Tropas Iniciais do Exército Inimigo 1 (ocultas na Névoa de Guerra)
+    const e1 = this.spawnUnit('enemy_1', 'rifle_squad', 6060, 4720, Math.PI);
+    e1.inTrench = true;
+    e1.inTrenchId = this.trenches[2].id;
+    this.spawnUnit('enemy_1', 'assault_squad', 6840, 4860, Math.PI);
+    this.spawnUnit('enemy_1', 'humvee', 7260, 4640, Math.PI);
+    this.spawnUnit('enemy_1', 'command_officer', 6580, 4520, Math.PI);
+    this.map.syncAllColliders?.(this.baseBuildings);
+
+    // 7. Modo 2 vs 2: Adiciona IA Aliada + 2º Exército Inimigo + QGs secundários
+    if (this.gameMode === '2v2') {
+      const allyAiHqPos = this.map.hqs.ally_ai;
+      const enemy2HqPos = this.map.hqs.enemy_2;
+      this.baseBuildings.push(
+        {
+          id: 'ally_ai_main_hq',
+          buildingType: 'hq_command',
+          name: 'QG 2ª Divisão Aliada',
+          short: 'QG Aliado (IA)',
+          subtitle: 'Centro de Comando da 2ª Divisão Aliada',
+          team: 'allies',
+          faction: 'ally_ai',
+          x: allyAiHqPos.x,
+          y: allyAiHqPos.y,
+          sightRadius: 720,
+          hp: 2600,
+          maxHp: 2600,
+          radius: 120,
+          rallyX: allyAiHqPos.x + 500,
+          rallyY: allyAiHqPos.y,
+          produces: [...HQ_BUILDING_SPEC.produces],
+          productionQueue: [],
+          productionProgress: 0,
+          isMainHQ: true,
+          alive: true,
+        },
+        {
+          id: 'enemy_2_main_hq',
+          buildingType: 'hq_command',
+          name: 'QG 2º Exército Inimigo',
+          short: 'QG Inimigo 2',
+          subtitle: 'Centro de Comando do 2º Exército Inimigo',
+          team: 'enemies',
+          faction: 'enemy_2',
+          x: enemy2HqPos.x,
+          y: enemy2HqPos.y,
+          sightRadius: 720,
+          hp: 2600,
+          maxHp: 2600,
+          radius: 120,
+          rallyX: enemy2HqPos.x - 500,
+          rallyY: enemy2HqPos.y,
+          produces: [...HQ_BUILDING_SPEC.produces],
+          productionQueue: [],
+          productionProgress: 0,
+          isMainHQ: true,
+          alive: true,
+        }
+      );
+
+      const a1 = this.spawnUnit('ally_ai', 'rifle_squad', 1850, 7320, 0);
+      const a2 = this.spawnUnit('ally_ai', 'assault_squad', 1960, 7480, 0);
+      const a3 = this.spawnUnit('ally_ai', 'humvee', 1650, 7400, 0);
+      a1.setMoveOrder(3600, 7400);
+      a2.setMoveOrder(3720, 7520);
+      a3.setMoveOrder(3440, 7320);
+
+      const e2_1 = this.spawnUnit('enemy_2', 'rifle_squad', 6060, 2140, Math.PI);
+      e2_1.inTrench = true;
+      e2_1.inTrenchId = this.trenches[3].id;
+      this.spawnUnit('enemy_2', 'assault_squad', 6920, 2220, Math.PI);
+      this.spawnUnit('enemy_2', 'humvee', 7360, 2400, Math.PI);
+    }
+
+    // Atualiza Névoa de Guerra e Linha de Frente inicial
+    this.map.updateFogOfWar(this.units, this.baseBuildings, 0.1);
+    this.map.updateFrontline(this.units, 1.0);
+    this.notify(
+      `OPERAÇÃO ${this.gameMode.toUpperCase()} — NÉVOA DE GUERRA ATIVA`,
+      'Clique nos Prédios da Base p/ produzir tropas • [TAB] abre o Quadro de Planejamento Tático',
+      '#c87d28'
+    );
+    this._emitHud();
+  }
+
+  spawnUnit(faction, unitType, x, y, angle = 0) {
+    const u = new SquadUnit({ x, y, faction, unitType, angle });
+    this.units.push(u);
+    return u;
+  }
+
+  selectBaseBuilding(buildingId) {
+    const bld = this.baseBuildings.find((b) => b.id === buildingId && b.team === 'allies' && b.alive !== false);
+    if (!bld) {
+      this.selectedBuildingId = null;
+    this.selectedStructureId = null;
+      this._emitHud();
+      return false;
+    }
+    for (const u of this.units) u.selected = false;
+    this.selectedBuildingId = bld.id;
+    this.audio.play('switch');
+    this._emitHud();
+    return true;
+  }
+
+  // Enfileira produção de unidade diretamente em um Prédio da Base (com barra de progresso e Ponto de Encontro)
+  queueUnitAtBuilding(buildingId, unitId) {
+    const bld =
+      this.baseBuildings.find((b) => b.id === buildingId && b.team === 'allies' && b.alive !== false) ||
+      this.baseBuildings.find(
+        (b) =>
+          b.team === 'allies' &&
+          b.alive !== false &&
+          b.produces &&
+          b.produces.includes(unitId)
+      );
+    const cmd = COMMAND_BY_ID[unitId];
+    if (!bld || !cmd) return false;
+    this.audio.resume();
+
+    const supCost = cmd.cost || 0;
+    const ammoCost = cmd.ammoCost || 0;
+    const fuelCost = cmd.fuelCost || 0;
+
+    if (this.supplies < supCost || this.ammo < ammoCost || this.fuel < fuelCost) {
+      this.notify(
+        'RECURSOS INSUFICIENTES',
+        `Necessário ${supCost} SUP${ammoCost ? `, ${ammoCost} MUN` : ''}${fuelCost ? `, ${fuelCost} COMB` : ''}.`,
+        '#c94a38'
+      );
+      this.audio.play('empty');
+      return false;
+    }
+
+    if ((bld.productionQueue?.length || 0) >= 5) {
+      this.notify('FILA DE PRODUÇÃO CHEIA', 'Aguarde as unidades atuais saírem da instalação.', '#d4a338');
+      this.audio.play('empty');
+      return false;
+    }
+
+    this.supplies -= supCost;
+    this.ammo -= ammoCost;
+    this.fuel -= fuelCost;
+
+    if (!bld.productionQueue) bld.productionQueue = [];
+    bld.productionQueue.push({
+      unitId: cmd.id,
+      name: cmd.name,
+      short: cmd.short,
+      duration: this.sandboxMode ? 0.05 : cmd.buildTime || 5.5,
+      elapsed: 0,
+    });
+
+    this.audio.play('cash');
+    this.spawnText(bld.x, bld.y - 32, `⚙ PRODUZINDO: ${cmd.short.toUpperCase()}`, '#7faed9');
+    this._emitHud();
+    return true;
+  }
+
+  cancelBuildingQueueItem(buildingId, queueIdx) {
+    const bld = this.baseBuildings.find(
+      (b) => b.id === buildingId && b.team === 'allies' && b.alive !== false
+    );
+    if (!bld || !Array.isArray(bld.productionQueue) || queueIdx < 0 || queueIdx >= bld.productionQueue.length) {
+      return false;
+    }
+    const [removed] = bld.productionQueue.splice(queueIdx, 1);
+    const cmd = COMMAND_BY_ID[removed.unitId];
+    if (cmd) {
+      this.supplies += cmd.cost || 0;
+      this.ammo += cmd.ammoCost || 0;
+      this.fuel += cmd.fuelCost || 0;
+    }
+    if (queueIdx === 0) {
+      bld.productionProgress = 0;
+    }
+    this.audio.play('switch');
+    this.notify('PRODUÇÃO CANCELADA', `${removed.short || removed.name} cancelado (100% reembolsado).`, '#c28e38');
+    this._emitHud();
+    return true;
+  }
+
+  _updateBuildingProduction(dt) {
+    for (const bld of this.baseBuildings) {
+      if (bld.alive === false || !bld.productionQueue || bld.productionQueue.length === 0) {
+        bld.productionProgress = 0;
+        continue;
+      }
+      const current = bld.productionQueue[0];
+      current.elapsed += dt;
+      bld.productionProgress = clamp((current.elapsed / current.duration) * 100, 0, 100);
+
+      if (current.elapsed >= current.duration) {
+        bld.productionQueue.shift();
+        bld.productionProgress = 0;
+
+        const cmd = COMMAND_BY_ID[current.unitId];
+        const jitterX = randInt(-36, 36);
+        const jitterY = randInt(-65, 65);
+        const spawnX = clamp(bld.x + 135 + jitterX, 100, BATTLEFIELD_SIZE - 100);
+        const spawnY = clamp(bld.y + jitterY, 100, BATTLEFIELD_SIZE - 100);
+        const u = this.spawnUnit(bld.faction || 'player', current.unitId, spawnX, spawnY, 0);
+
+        const rallyX = clamp((bld.rallyX || bld.x + 520) + jitterX, 120, BATTLEFIELD_SIZE - 120);
+        const rallyY = clamp((bld.rallyY || bld.y) + jitterY, 120, BATTLEFIELD_SIZE - 120);
+        u.setMoveOrder(rallyX, rallyY);
+
+        this.audio.play('pickup');
+        this.spawnText(u.x, u.y - 18, `✅ ${cmd ? cmd.short : current.short} PRONTO!`, '#a3be8c');
+        this.notify(
+          `${(cmd ? cmd.name : current.name).toUpperCase()} PRONTO!`,
+          `Unidade saiu de ${bld.short || 'Base'} marchando para o Ponto de Encontro.`,
+          '#a3be8c'
+        );
+        this._emitHud();
+      }
+    }
+  }
+
+  // Aplica dano a prédios de Base Militar e concede Pontos de Vitória + Recursos ao destruir instalações inimigas
+  damageBaseBuilding(bld, amount, attackerTeam) {
+    if (!bld || bld.alive === false) return;
+    bld.hp = Math.max(0, (bld.hp || 1500) - amount);
+
+    if (bld.hp <= 0) {
+      bld.alive = false;
+      bld.productionQueue = [];
+      bld.productionProgress = 0;
+      if (this.selectedBuildingId === bld.id) {
+        this.selectedBuildingId = null;
+    this.selectedStructureId = null;
+      }
+
+      this.spawnExplosionParticles(bld.x, bld.y, 55);
+      this.spawnExplosionParticles(bld.x + 45, bld.y - 35, 35);
+      this.spawnExplosionParticles(bld.x - 45, bld.y + 35, 35);
+      this.playSoundAt('explosion', bld.x, bld.y, 1.0);
+      this.camera.shake(26, 0.55);
+
+      // Adiciona cratera de escombros fumegantes
+      this.map.wrecks.push({
+        id: `wreck_bld_${bld.id}`,
+        type: 'DestroyedTank',
+        x: bld.x,
+        y: bld.y,
+        angle: 0.4,
+        coverRadius: 56,
+        smoke: true,
+      });
+
+      if (bld.team === 'enemies' && attackerTeam === 'allies') {
+        const ptsBonus = bld.isMainHQ ? 500 : 250;
+        const supBonus = bld.isMainHQ ? 450 : 250;
+        const ammoBonus = bld.isMainHQ ? 160 : 100;
+        const fuelBonus = bld.isMainHQ ? 110 : 50;
+
+        this.victoryPoints += ptsBonus;
+        this.supplies += supBonus;
+        this.ammo += ammoBonus;
+        this.fuel += fuelBonus;
+        this.addCommandPoints(100, 'Estrutura Destruída');
+
+        this.audio.play('win');
+        this.spawnText(
+          bld.x,
+          bld.y - 36,
+          `💥 BASE DESTRUÍDA! +${ptsBonus} PTS • +${supBonus} SUP / +${ammoBonus} MUN / +${fuelBonus} COMB`,
+          '#d4a338'
+        );
+
+        const anyEnemyMainHQLeft = this.baseBuildings.some(
+          (other) => other.team === 'enemies' && other.isMainHQ && other.alive !== false
+        );
+
+        if (bld.isMainHQ && !anyEnemyMainHQLeft) {
+          this._triggerGameOver(
+            'allies',
+            'VITÓRIA TOTAL ALIADA! QG INIMIGO DESTRUÍDO!',
+            `Você demoliu o Centro de Comando Inimigo! (+${ptsBonus} Pontos de Vitória)`
+          );
+        } else {
+          this.notify(
+            `INSTALAÇÃO INIMIGA DEMOLIDA: ${(bld.short || bld.name || 'BASE').toUpperCase()}`,
+            `Recompensa de Sabotagem: +${ptsBonus} PTS, +${supBonus} SUP, +${ammoBonus} MUN e +${fuelBonus} COMB!`,
+            '#d4a338'
+          );
+        }
+      } else if (bld.team === 'allies') {
+        if (bld.isMainHQ && bld.faction === 'player') {
+          this._triggerGameOver(
+            'enemies',
+            'DERROTA — QG PRINCIPAL DESTRUÍDO!',
+            'O Comando Central Aliado caiu sob fogo inimigo.'
+          );
+        } else {
+          this.notify(
+            `ALERTA CRÍTICO: ${(bld.short || bld.name || 'INSTALAÇÃO').toUpperCase()} DESTRUÍDO!`,
+            'O inimigo demoliu uma estrutura da nossa base!',
+            '#c94a38'
+          );
+        }
+      }
+
+      this._emitHud();
+    }
+  }
+
+  enableSandboxMode() {
+    this.sandboxMode = true;
+    this.supplies = 99999;
+    this.ammo = 99999;
+    this.fuel = 99999;
+    this.hqLevel = 3;
+    this.commandPoints = 999;
+    const hqBld = this.baseBuildings.find((b) => b.faction === 'player' && b.isMainHQ);
+    if (hqBld) hqBld.level = 3;
+    for (const n of TECH_NODES) {
+      if (!this.completedTechs.has(n.id)) {
+        this.completedTechs.add(n.id);
+        this._applyTechUpgradeEffects(n.id);
+      }
+    }
+    this.activeResearch = null;
+    for (const k of Object.keys(this.airCooldowns || {})) this.airCooldowns[k] = 0;
+    for (const u of this.units) {
+      if (u.faction === 'player') {
+        u.grenadeAbilityCooldown = 0;
+        u.suppressionCooldown = 0;
+        u.medkitCooldown = 0;
+      }
+    }
+    this.audio.play('win');
+    this.notify(
+      '🛠️ MODO CAIXA DE AREIA ATIVADO [F10]',
+      '99.999 Recursos • QG Nv. 3 • Todas Pesquisas • Produção Instantânea!',
+      '#c28e38'
+    );
+    this._emitHud();
+    return true;
+  }
+
+  toggleSandboxMode() {
+    if (this.sandboxMode) {
+      this.sandboxMode = false;
+      this.notify('🛠️ MODO SANDBOX DESATIVADO', 'Regras normais de produção restauradas.', '#8c948c');
+      this._emitHud();
+      return false;
+    }
+    return this.enableSandboxMode();
+  }
+
+  sandboxSpawnUnit(faction, unitType, options = {}) {
+    const sx = clamp(this.camera.x + randInt(-70, 70), 160, BATTLEFIELD_SIZE - 160);
+    const sy = clamp(this.camera.y + randInt(-70, 70), 160, BATTLEFIELD_SIZE - 160);
+    const u = this.spawnUnit(faction, unitType, sx, sy, faction === 'player' ? 0 : Math.PI);
+    if (options.surrendered) {
+      u.surrendered = true;
+      u.hp = Math.max(10, Math.ceil(u.maxHp * 0.3));
+    }
+    if (options.holdPosition) {
+      u.holdPosition = true;
+    }
+    this.audio.play('pickup');
+    this.spawnText(u.x, u.y - 20, `🛠️ +${u.short}`, '#c28e38');
+    this._emitHud();
+    return u;
+  }
+
+  sandboxToggleFog() {
+    this.sandboxFogDisabled = !this.sandboxFogDisabled;
+    this.intelRevealed = this.sandboxFogDisabled;
+    if (this.sandboxFogDisabled) {
+      this.map.fogGrid.fill(2);
+    } else {
+      this.map.resetFog();
+      this.map.updateFogOfWar(this.units, this.baseBuildings, 0.05);
+    }
+    this.audio.play('switch');
+    this.notify(
+      this.sandboxFogDisabled ? '👁️ NÉVOA DE GUERRA DESLIGADA' : '👁️ NÉVOA DE GUERRA ATIVA',
+      '',
+      '#c28e38'
+    );
+    this._emitHud();
+  }
+
+  sandboxToggleAi() {
+    this.sandboxAiPaused = !this.sandboxAiPaused;
+    this.audio.play('switch');
+    this.notify(
+      this.sandboxAiPaused ? '🤖 IA INIMIGA PAUSADA' : '🤖 IA INIMIGA ATIVA',
+      '',
+      '#c28e38'
+    );
+    this._emitHud();
+  }
+
+  sandboxHealAll() {
+    for (const u of this.units) {
+      if (!u.alive || u.team !== 'allies') continue;
+      u.hp = u.maxHp;
+      u.morale = 100;
+      u.suppressedTimer = 0;
+      for (const s of u.soldiers || []) {
+        s.alive = true;
+        s.hp = s.maxHp;
+      }
+      u.syncSquadHealthFromSoldiers?.();
+    }
+    for (const b of this.baseBuildings) {
+      if (b.alive !== false && b.team === 'allies') b.hp = b.maxHp;
+    }
+    this.audio.play('win');
+    this.notify('💚 TODAS AS TROPAS E PRÉDIOS CURADOS!', '', '#4ade80');
+    this._emitHud();
+  }
+
+  sandboxDestroySelected() {
+    let count = 0;
+    for (const u of this.units) {
+      if (u.alive && u.selected) {
+        u.takeDamage(99999, 'enemies', this, true, true, u.x, u.y);
+        count++;
+      }
+    }
+    if (count > 0) {
+      this.audio.play('explosion');
+      this._emitHud();
+    }
+  }
+
+  // Constrói instalações militares no QG do Jogador (Quartel Op. Especiais, Fábrica de Blindados, Comando Aéreo/Radar)
+  constructBaseBuilding(buildingId) {
+    const spec = BASE_BUILDING_BY_ID[buildingId];
+    if (!spec) return false;
+    this.audio.resume();
+
+    const alreadyBuilt = this.baseBuildings.some(
+      (b) => b.team === 'allies' && b.buildingType === buildingId && b.alive !== false
+    );
+    if (alreadyBuilt) {
+      const existing = this.baseBuildings.find(
+        (b) => b.team === 'allies' && b.buildingType === buildingId && b.alive !== false
+      );
+      if (existing) this.selectBaseBuilding(existing.id);
+      this.notify('INSTALAÇÃO JÁ CONSTRUÍDA', `${spec.name} selecionada para produção.`, '#d4a338');
+      return false;
+    }
+
+    const supCost = spec.cost || 0;
+    const fuelCost = spec.fuelCost || 0;
+    if (this.supplies < supCost || this.fuel < fuelCost) {
+      this.notify(
+        'RECURSOS INSUFICIENTES',
+        `Necessário ${supCost} SUP e ${fuelCost} COMB para ${spec.short}.`,
+        '#c94a38'
+      );
+      this.audio.play('empty');
+      return false;
+    }
+
+    this.supplies -= supCost;
+    this.fuel -= fuelCost;
+
+    const hq = this.map.hqs.player;
+    const offsets = {
+      spec_ops_center: { dx: -160, dy: -410 },
+      motor_pool: { dx: -160, dy: 410 },
+      air_command: { dx: -510, dy: -270 },
+      pow_camp: { dx: -510, dy: 270 },
+    };
+    const off = offsets[buildingId] || { dx: -480, dy: 310 };
+    let bx = clamp(hq.x + off.dx, 260, this.map.size - 260);
+    let by = clamp(hq.y + off.dy, 260, this.map.size - 260);
+
+    // Regra de Posicionamento Anti-Colisão (>= 14m = 140u entre bordas) e fora das estradas principais
+    const myRad = spec.radius || 90;
+    const others = this.baseBuildings.filter((b) => b.alive !== false && b.team === 'allies');
+    for (let attempt = 0; attempt < 24; attempt++) {
+      const onRoad = this.map.isOnRoad?.(bx, by, myRad + 28);
+      const overlaps = others.some(
+        (b) => dist(bx, by, b.x, b.y) < myRad + (b.radius || 95) + 140
+      );
+      if (!onRoad && !overlaps) break;
+      const stepDir = off.dy >= 0 ? 1 : -1;
+      by = clamp(by + stepDir * 85, 260, this.map.size - 260);
+      if (attempt % 4 === 3) {
+        bx = clamp(bx - 90, 260, this.map.size - 260);
+      }
+    }
+
+    const newBld = {
+      id: `ally_base_${buildingId}_${Date.now()}`,
+      buildingType: buildingId,
+      name: spec.name,
+      short: spec.short,
+      subtitle: spec.subtitle,
+      team: 'allies',
+      faction: 'player',
+      x: bx,
+      y: by,
+      sightRadius: spec.sightRadius || 620,
+      hp: spec.maxHp || 1500,
+      maxHp: spec.maxHp || 1500,
+      radius: spec.radius || 84,
+      rallyX: bx + 560,
+      rallyY: by,
+      produces: [...(spec.produces || [])],
+      productionQueue: [],
+      productionProgress: 0,
+      alive: true,
+    };
+
+    this.baseBuildings.push(newBld);
+    this.map.clearFoliageAndFlattenUnderBuilding?.(bx, by, myRad + 35);
+    this.map.syncAllColliders?.(this.baseBuildings);
+    this.selectedBuildingId = newBld.id;
+
+    this.audio.play('win');
+    this.spawnText(bx, by - 28, `🏗 ${spec.short.toUpperCase()} OPERACIONAL`, '#a3be8c');
+    this.notify(
+      `${spec.name.toUpperCase()} CONSTRUÍDO!`,
+      'Clique no prédio 3D (ou use o painel da instalação) para produzir unidades e definir Ponto de Encontro.',
+      '#a3be8c'
+    );
+    this.map.updateFogOfWar(this.units, this.baseBuildings, 0.05);
+    this._emitHud();
+    return true;
+  }
+
+  addCommandPoints(amount, reason = '') {
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    this.commandPoints = (this.commandPoints || 0) + Math.round(amount);
+    if (reason) {
+      this.spawnText(this.camera.x, this.camera.y - 40, `+${Math.round(amount)} CP (${reason})`, '#facc15');
+    }
+  }
+
+  upgradeHq() {
+    if (this.hqLevel >= 3) {
+      this.notify('QG NO NÍVEL MÁXIMO', 'Seu Quartel-General já atingiu o Nível 3.', '#9a9484');
+      return false;
+    }
+    const nextLevel = this.hqLevel + 1;
+    const spec = HQ_UPGRADES[nextLevel];
+    if (!spec) return false;
+
+    if (this.commandPoints < (spec.requiredCp || 0)) {
+      this.audio.play('empty');
+      this.notify(
+        'PONTOS DE COMANDO INSUFICIENTES',
+        `QG Nível ${nextLevel} requer ${spec.requiredCp} CP (atual: ${this.commandPoints} CP).`,
+        '#c94a38'
+      );
+      return false;
+    }
+
+    if (
+      this.supplies < (spec.supplyCost || 0) ||
+      this.fuel < (spec.fuelCost || 0) ||
+      this.ammo < (spec.ammoCost || 0)
+    ) {
+      this.audio.play('empty');
+      this.notify(
+        'RECURSOS INSUFICIENTES',
+        `QG Nível ${nextLevel} custa ${spec.supplyCost} SUP, ${spec.fuelCost} COMB${spec.ammoCost ? `, ${spec.ammoCost} MUN` : ''}.`,
+        '#c94a38'
+      );
+      return false;
+    }
+
+    this.supplies -= spec.supplyCost || 0;
+    this.fuel -= spec.fuelCost || 0;
+    this.ammo -= spec.ammoCost || 0;
+    this.hqLevel = nextLevel;
+
+    const hqBld = this.baseBuildings.find((b) => b.faction === 'player' && b.isMainHQ && b.alive !== false);
+    if (hqBld) {
+      hqBld.level = nextLevel;
+      hqBld.maxHp = (hqBld.maxHp || 2600) + 650;
+      hqBld.hp = Math.min(hqBld.maxHp, (hqBld.hp || 2600) + 650);
+      this.spawnText(hqBld.x, hqBld.y - 45, `⭐ QG EVOLUÍDO PARA NÍVEL ${nextLevel}!`, '#facc15');
+    }
+
+    this.audio.play('research_done');
+    this.notify(
+      `⭐ ${spec.name.toUpperCase()}`,
+      `Desbloqueado: ${spec.unlocks}`,
+      '#4ade80'
+    );
+    this._emitHud();
+    return true;
+  }
+
+  // Recruta qualquer unidade imediatamente (usado pelos atalhos rápidos 1-3 e catálogo) saindo do prédio correspondente
+  recruitUnitById(unitId) {
+    const cmd = COMMAND_BY_ID[unitId];
+    if (!cmd) return false;
+    this.audio.resume();
+
+    if ((cmd.requiredHqLevel || 1) > this.hqLevel) {
+      this.notify(
+        `🔒 REQUER QG NÍVEL ${cmd.requiredHqLevel}`,
+        `${cmd.short} exige evoluir o Quartel-General para o Nível ${cmd.requiredHqLevel}.`,
+        '#c94a38'
+      );
+      this.audio.play('empty');
+      return false;
+    }
+
+    if (cmd.requiresBuilding) {
+      const hasBld = this.baseBuildings.some(
+        (b) => b.team === 'allies' && b.buildingType === cmd.requiresBuilding && b.alive !== false
+      );
+      if (!hasBld) {
+        const reqSpec = BASE_BUILDING_BY_ID[cmd.requiresBuilding];
+        this.notify(
+          'REQUER INSTALAÇÃO MILITAR',
+          `Construa ${reqSpec ? reqSpec.short : cmd.requiresBuilding} no QG primeiro.`,
+          '#c94a38'
+        );
+        this.audio.play('empty');
+        return false;
+      }
+    }
+
+    const supCost = cmd.cost || 0;
+    const ammoCost = cmd.ammoCost || 0;
+    const fuelCost = cmd.fuelCost || 0;
+
+    if (this.supplies < supCost || this.ammo < ammoCost || this.fuel < fuelCost) {
+      this.notify(
+        'RECURSOS INSUFICIENTES',
+        `Necessário ${supCost} SUP${ammoCost ? `, ${ammoCost} MUN` : ''}${fuelCost ? `, ${fuelCost} COMB` : ''}.`,
+        '#c94a38'
+      );
+      this.audio.play('empty');
+      return false;
+    }
+
+    this.supplies -= supCost;
+    this.ammo -= ammoCost;
+    this.fuel -= fuelCost;
+
+    const producerBld =
+      this.baseBuildings.find(
+        (b) =>
+          b.team === 'allies' &&
+          b.alive !== false &&
+          b.buildingType === (cmd.requiresBuilding || 'hq_command')
+      ) || this.map.hqs.player;
+
+    const jitterX = randInt(-45, 45);
+    const jitterY = randInt(-95, 95);
+    const u = this.spawnUnit('player', cmd.id, producerBld.x + 145 + jitterX, producerBld.y + jitterY, 0);
+
+    const destX = producerBld.rallyX
+      ? clamp(producerBld.rallyX + jitterX, 160, BATTLEFIELD_SIZE - 160)
+      : clamp(this.camera.x, 1200, BATTLEFIELD_SIZE - 1200);
+    const destY = producerBld.rallyY
+      ? clamp(producerBld.rallyY + jitterY, 160, BATTLEFIELD_SIZE - 160)
+      : clamp(this.camera.y + jitterY, 450, BATTLEFIELD_SIZE - 450);
+    u.setMoveOrder(destX, destY);
+
+    for (const other of this.units) other.selected = false;
+    u.selected = true;
+
+    this.audio.play('cash');
+    this.spawnText(u.x, u.y, `${cmd.short}`, '#7faed9');
+    this.notify('UNIDADE MOBILIZADA NA BASE', `${cmd.name} marchando para o Ponto de Encontro.`, '#c87d28');
+    this._emitHud();
+    return true;
+  }
+
+  // Ativa Habilidade de Suporte Aéreo do Centro de Comando Aéreo / Radar
+  triggerAirDoctrine(doctrineId) {
+    const doc = AIR_DOCTRINE_BY_ID[doctrineId];
+    if (!doc) return false;
+    this.audio.resume();
+
+    if ((doc.requiredHqLevel || 1) > this.hqLevel) {
+      this.notify(
+        `🔒 REQUER QG NÍVEL ${doc.requiredHqLevel}`,
+        `${doc.short} exige Quartel-General Nível ${doc.requiredHqLevel}.`,
+        '#c94a38'
+      );
+      this.audio.play('empty');
+      return false;
+    }
+
+    const hasAirCommand = this.baseBuildings.some(
+      (b) => b.team === 'allies' && b.buildingType === 'air_command' && b.alive !== false
+    );
+    if (!hasAirCommand) {
+      this.notify(
+        'COMANDO AÉREO NÃO CONSTRUÍDO',
+        'Construa o Comando Aéreo & Radar no QG para habilitar suporte aéreo.',
+        '#c94a38'
+      );
+      this.audio.play('empty');
+      return false;
+    }
+
+    const cd = this.airCooldowns[doctrineId] || 0;
+    if (cd > 0) {
+      this.notify('SUPORTE AÉREO EM RECARGA', `Aguarde ${Math.ceil(cd)}s para ${doc.short}.`, '#d4a338');
+      this.audio.play('empty');
+      return false;
+    }
+
+    if (this.supplies < (doc.cost || 0) || this.ammo < (doc.ammoCost || 0)) {
+      this.notify(
+        'RECURSOS INSUFICIENTES P/ SUPORTE AÉREO',
+        `Necessário ${doc.cost} SUP e ${doc.ammoCost} MUN.`,
+        '#c94a38'
+      );
+      this.audio.play('empty');
+      return false;
+    }
+
+    if (this.activeAirStrikeMode === doctrineId) {
+      this.activeAirStrikeMode = null;
+      this.notify('SUPORTE AÉREO CANCELADO', '', '#9a9484');
+    } else {
+      this.activeAirStrikeMode = doctrineId;
+      this.activeCommandMode = null;
+      this.trenchPreview = null;
+      this.notify(
+        `ALVO AÉREO: ${doc.name.toUpperCase()}`,
+        'Clique Esquerdo em qualquer ponto do mapa (ou minimapa) • Botão Direito cancela',
+        '#38bdf8'
+      );
+      this.audio.play('switch');
+    }
+    this._emitHud();
+    return true;
+  }
+
+  _executeAirDoctrineAt(doctrineId, targetX, targetY) {
+    const doc = AIR_DOCTRINE_BY_ID[doctrineId];
+    if (!doc) return;
+
+    this.supplies -= doc.cost || 0;
+    this.ammo -= doc.ammoCost || 0;
+    this.airCooldowns[doctrineId] = doc.cooldown || 45;
+    this.activeAirStrikeMode = null;
+
+    const tx = clamp(targetX, 180, BATTLEFIELD_SIZE - 180);
+    const ty = clamp(targetY, 180, BATTLEFIELD_SIZE - 180);
+
+    // Cria aeronave 3D sobrevoando de Oeste para Leste passando pelo alvo
+    this.aircrafts.push({
+      id: `air_${doctrineId}_${Date.now()}`,
+      type: doctrineId,
+      x: tx - 1400,
+      y: ty,
+      targetX: tx,
+      targetY: ty,
+      vx: 760,
+      vy: 0,
+      angle: 0,
+      altitude: doctrineId === 'recon_drone' ? 210 : 195,
+      payloadDropped: false,
+      life: 4.2,
+    });
+
+    if (doctrineId === 'recon_drone') {
+      // Abre a Névoa de Guerra por 30 segundos na área escolhida e revela minas/trincheiras
+      this.map.addTemporaryVision(tx, ty, doc.radius || 920, doc.duration || 30);
+      for (const m of this.mines) {
+        if (dist(m.x, m.y, tx, ty) <= (doc.radius || 920)) {
+          m.revealed = true;
+        }
+      }
+      for (const tr of this.trenches) {
+        const c = tr.getCenter();
+        if (dist(c.x, c.y, tx, ty) <= (doc.radius || 920)) {
+          tr.revealed = true;
+        }
+      }
+      this.audio.play('star');
+      this.spawnText(tx, ty - 24, '🛩 RECONHECIMENTO AÉREO ATIVO (30s)', '#38bdf8');
+      this.notify(
+        'VOO DE RECONHECIMENTO EM CURSO',
+        'Névoa de Guerra aberta por 30s na zona designada e minas/trincheiras reveladas!',
+        '#38bdf8'
+      );
+    } else if (doctrineId === 'a10_strafe') {
+      this.audio.play('rifle');
+      this.spawnText(tx, ty - 24, '✈ RASANTE A-10 (30MM) EM CAMINHO!', '#f59e0b');
+      this.notify('ATAQUE RASANTE A-10 DESIGNADO!', 'Canhão rotativo 30mm varrendo a linha alvo.', '#f59e0b');
+    } else if (doctrineId === 'precision_bomb') {
+      this.audio.play('reload');
+      this.spawnText(tx, ty - 24, '💣 BOMBARDEIO TÁTICO GUIADO!', '#ef4444');
+      this.notify('BOMBARDEIO DE PRECISÃO AUTORIZADO!', 'Bomba guiada a caminho das fortificações inimigas.', '#ef4444');
+    }
+
+    this._emitHud();
+  }
+
+  // Alterna a Aba/Categoria da Barra Inferior ([F1] Infantaria, [F2] Veículos, [F3] Engenharia, [F4] Defesas, [F5] Todos)
+  setBottomCategory(categoryId) {
+    const valid = ['infantry', 'vehicles', 'engineering', 'defenses', 'all'];
+    if (!valid.includes(categoryId)) return false;
+    this.activeBottomCategory = categoryId;
+    this.audio.play('switch');
+    this._emitHud();
+    return true;
+  }
+
+  // Aciona qualquer botão da Barra Inferior pelo ID da ação (Unidades, Veículos, Engenharia ou Defesas)
+  triggerActionById(actionId) {
+    const cmd = COMMAND_BY_ID[actionId];
+    if (!cmd) return false;
+    this.audio.resume();
+
+    if ((cmd.requiredHqLevel || 1) > this.hqLevel) {
+      this.notify(
+        `🔒 REQUER QG NÍVEL ${cmd.requiredHqLevel}`,
+        `${cmd.short} exige evoluir o Quartel-General para o Nível ${cmd.requiredHqLevel}.`,
+        '#c94a38'
+      );
+      this.audio.play('empty');
+      return false;
+    }
+
+    const slotIdx = COMMAND_ACTIONS.findIndex((c) => c.id === actionId);
+    if (slotIdx >= 0) this.activeCommandSlot = slotIdx;
+
+    if (cmd.category === 'unit') {
+      this.activeCommandMode = null;
+      this.activeEngineeringActionId = null;
+      this.activeAirStrikeMode = null;
+      this.trenchPreview = null;
+      return this.recruitUnitById(cmd.id);
+    }
+
+    this.activeAirStrikeMode = null;
+    if (this.activeCommandMode === cmd.category && this.activeEngineeringActionId === cmd.id) {
+      this.activeCommandMode = null;
+      this.activeEngineeringActionId = null;
+      this.trenchPreview = null;
+      this.notify('ORDEM DE ENGENHARIA CANCELADA', '', '#9a9484');
+    } else {
+      this.activeCommandMode = cmd.category;
+      this.activeEngineeringActionId = cmd.id;
+      const isDragMode =
+        cmd.category === 'build_trench' ||
+        cmd.category === 'build_barricade' ||
+        cmd.category === 'build_wall' ||
+        cmd.category === 'build_wire';
+      this.notify(
+        `ENGENHARIA: ${cmd.name.toUpperCase()}`,
+        isDragMode
+          ? 'Clique e arraste no mapa para traçar a linha • Botão Direito cancela'
+          : `Clique no terreno para construir (${cmd.cost} SUP) • Botão Direito cancela`,
+        '#d4a338'
+      );
+      this.audio.play('switch');
+    }
+    this._emitHud();
+    return true;
+  }
+
+  // Altera a Formação Tática dos esquadrões selecionados (line | column | wedge | spread)
+  setSelectedFormation(formationId) {
+    const fSpec = SQUAD_FORMATION_BY_ID[formationId];
+    if (!fSpec) return;
+    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected);
+    if (selected.length === 0) return;
+
+    for (const u of selected) {
+      u.setFormation(formationId);
+    }
+    this.audio.play('switch');
+    this.spawnText(selected[0].x, selected[0].y - 20, `FORMAÇÃO: ${fSpec.name.toUpperCase()}`, '#7faed9');
+    this.notify(`FORMAÇÃO TÁTICA: ${fSpec.name.toUpperCase()}`, fSpec.desc, '#7faed9');
+    this._emitHud();
+  }
+
+  // Controle de Distanciamento / Espaçamento entre Soldados (1.0m a 8.0m) no COMANDO DE ESQUADRÃO
+  setSelectedSpacing(meters) {
+    const clamped = clamp(Number(meters) || 3.0, 1.0, 8.0);
+    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected);
+    if (selected.length === 0) return false;
+
+    for (const u of selected) {
+      if (typeof u.setSpacing === 'function') {
+        u.setSpacing(clamped);
+      } else {
+        u.spacingMeters = clamped;
+      }
+    }
+    this.audio.play('switch');
+    this.spawnText(
+      selected[0].x,
+      selected[0].y - 18,
+      `↔ ESPAÇAMENTO: ${clamped.toFixed(1)}m`,
+      '#7faed9'
+    );
+    this._emitHud();
+    return true;
+  }
+
+  // Habilidades Táticas do Esquadrão ([G] Granada, [F] Supressão, [C] Kit Médico, Postura e Foco)
+  focusSelectedUnit(unitId) {
+    this.focusedUnitId = unitId;
+    this.audio.play('switch');
+    this._emitHud();
+  }
+
+  throwSelectedGrenade() {
+    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry');
+    if (selected.length === 0) return false;
+    const lead = selected[0];
+    if ((lead.grenadeAbilityCooldown || 0) > 0) {
+      this.audio.play('empty');
+      this.notify('GRANADA EM RECARGA', `Aguarde ${Math.ceil(lead.grenadeAbilityCooldown)}s.`, '#d4a338');
+      return false;
+    }
+    if (this.ammo < 15) {
+      this.audio.play('empty');
+      this.notify('MUNIÇÃO INSUFICIENTE', 'Granada tática requer 15 MUN.', '#c94a38');
+      return false;
+    }
+    const target = this._findUnitNearWorld(lead.x, lead.y, 260, (e) => e.team === 'enemies' && !e.surrendered);
+    const gx = target ? target.x : lead.x + Math.cos(lead.angle) * 160;
+    const gy = target ? target.y : lead.y + Math.sin(lead.angle) * 160;
+    this.ammo -= 15;
+    for (const u of selected) u.grenadeAbilityCooldown = 12.0;
+
+    if (this.renderer?.vfx) {
+      const sy = getTerrainHeight(lead.x, lead.y, this.map) + 10;
+      const ty = getTerrainHeight(gx, gy, this.map) + 4;
+      this.renderer.vfx.spawnGrenadeArc(lead.x, sy, lead.y, gx, ty, gy, 0.55);
+    }
+    this.pendingGrenades.push({ x: gx, y: gy, team: 'allies', timer: 0.55 });
+    this.audio.play('switch');
+    this.spawnText(lead.x, lead.y - 16, '💣 GRANADA ARREMESSADA!', '#f97316');
+    this._emitHud();
+    return true;
+  }
+
+  toggleSelectedSuppression() {
+    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected);
+    if (selected.length === 0) return false;
+    const lead = selected[0];
+    if ((lead.suppressionCooldown || 0) > 0) {
+      this.audio.play('empty');
+      this.notify('SUPRESSÃO EM RECARGA', `Aguarde ${Math.ceil(lead.suppressionCooldown)}s.`, '#d4a338');
+      return false;
+    }
+    if (this.ammo < 10) {
+      this.audio.play('empty');
+      this.notify('MUNIÇÃO INSUFICIENTE', 'Fogo de Supressão requer 10 MUN.', '#c94a38');
+      return false;
+    }
+    this.ammo -= 10;
+    for (const u of selected) {
+      u.suppressionMode = true;
+      u.suppressionActiveTimer = 8.0;
+      u.suppressionCooldown = 15.0;
+    }
+    this.audio.play('switch');
+    this.spawnText(lead.x, lead.y - 18, '🔥 FOGO DE SUPRESSÃO (8s)!', '#fbbf24');
+    this._emitHud();
+    return true;
+  }
+
+  useSelectedMedkit() {
+    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry');
+    if (selected.length === 0) return false;
+    const lead = selected[0];
+    if ((lead.medkitCooldown || 0) > 0) {
+      this.audio.play('empty');
+      this.notify('KIT MÉDICO EM RECARGA', `Aguarde ${Math.ceil(lead.medkitCooldown)}s.`, '#d4a338');
+      return false;
+    }
+    if (this.supplies < 20) {
+      this.audio.play('empty');
+      this.notify('SUPRIMENTOS INSUFICIENTES', 'Kit Médico requer 20 SUP.', '#c94a38');
+      return false;
+    }
+    this.supplies -= 20;
+    for (const u of selected) {
+      u.medkitHealTimer = 5.0; // Cura +45 HP ao longo de 5 segundos (+9 HP/s)
+      u.medkitCooldown = 20.0;
+    }
+    this.audio.play('pickup');
+    this.spawnText(lead.x, lead.y - 18, '✚ KIT MÉDICO ATIVO (+45 HP / 5s)', '#4ade80');
+    this._emitHud();
+    return true;
+  }
+
+  setSelectedStance(stance) {
+    const valid = stance === 'crouch' || stance === 'prone' ? stance : 'stand';
+    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry');
+    if (selected.length === 0) return false;
+    for (const u of selected) {
+      u.stance = valid;
+      u.crouchedInCover = valid !== 'stand' || u.inHeavyCover || u.inTrench;
+    }
+    this.audio.play('switch');
+    this._emitHud();
+    return true;
+  }
+
+  // [Tecla B / R]: Retornar à Base para Reparo (Veículos) ou Recuar para o QG (Infantaria)
+  returnSelectedToBase() {
+    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected && !u.embarkedInId);
+    if (selected.length === 0) return false;
+
+    const hqBld =
+      this.baseBuildings.find((b) => b.faction === 'player' && b.isMainHQ && b.alive !== false) ||
+      this.map.hqs.player;
+    const motorBld = this.baseBuildings.find(
+      (b) => b.faction === 'player' && b.buildingType === 'motor_pool' && b.alive !== false
+    );
+
+    for (const u of selected) {
+      if (u.garrisonedBuildingId) {
+        const st = this.map.structures.find((s) => s.id === u.garrisonedBuildingId);
+        if (st) {
+          st.garrisonUnitId = null;
+          st.garrisonTeam = null;
+        }
+        u.garrisonedBuildingId = null;
+      }
+      u.coverSnap = null;
+      u.snappedToCover = false;
+      u.holdPosition = false;
+
+      const isVeh = u.spec.type === 'vehicle';
+      const targetBld =
+        isVeh && motorBld && dist(u.x, u.y, motorBld.x, motorBld.y) < dist(u.x, u.y, hqBld.x, hqBld.y)
+          ? motorBld
+          : hqBld;
+      const destX = clamp((targetBld?.x || 1150) + 145, 120, BATTLEFIELD_SIZE - 120);
+      const destY = clamp((targetBld?.y || 4800) + (Math.random() - 0.5) * 90, 120, BATTLEFIELD_SIZE - 120);
+
+      u.retreating = !isVeh;
+      u.order = {
+        type: 'rtb',
+        targetX: destX,
+        targetY: destY,
+        targetUnitId: null,
+        targetTrenchId: null,
+        targetBuildingId: null,
+        targetTransportId: null,
+        facingAngle: 0,
+      };
+      u.waypoints = this.map.computeObstacleDetourPath(
+        u.x,
+        u.y,
+        destX,
+        destY,
+        u.radius,
+        this.fortifiedWalls,
+        this.barricades
+      );
+    }
+
+    this.audio.play('switch');
+    const anyVeh = selected.some((u) => u.spec.type === 'vehicle');
+    this.spawnText(
+      selected[0].x,
+      selected[0].y - 20,
+      anyVeh ? '🏠 RETORNANDO À BASE P/ REPARO' : '🏃 RECUANDO PARA O QG!',
+      '#38bdf8'
+    );
+    this._emitHud();
+    return true;
+  }
+
+  // Seleciona / Desmarca um Soldado Individual no COMANDO DE ESQUADRÃO ou com Shift+Clique no mapa 3D
+  toggleSelectSoldierInUnit(unitId, soldierId, exclusive = false) {
+    const u =
+      (unitId && this.units.find((unit) => unit.id === unitId && unit.alive)) ||
+      this.units.find((unit) => unit.alive && unit.faction === 'player' && unit.selected);
+    if (!u || !u.soldiers || u.soldiers.length === 0) return false;
+
+    u.toggleSelectSoldier(soldierId, exclusive);
+    this.audio.play('switch');
+    this._emitHud();
+    return true;
+  }
+
+  // [Separar Soldado - Tecla K]: Destaca 1 ou mais soldados selecionados como um novo Esquadrão Independente (Batedor)
+  splitSelectedSoldiers(unitId = null) {
+    const u =
+      (unitId && this.units.find((unit) => unit.id === unitId && unit.alive && unit.faction === 'player')) ||
+      this.units.find(
+        (unit) => unit.alive && unit.faction === 'player' && unit.selected && unit.spec.type === 'infantry'
+      );
+
+    if (!u || u.spec.type !== 'infantry') {
+      this.notify('SELECIONE UM ESQUADRÃO DE INFANTARIA', 'Apenas esquadrões de infantaria podem destacar soldados.', '#d4a338');
+      return null;
+    }
+
+    const living = u.soldiers.filter((s) => s.alive);
+    if (living.length < 2) {
+      this.notify('EFETIVO MÍNIMO ATINGIDO', 'É necessário pelo menos 2 soldados vivos no esquadrão para separar.', '#c94a38');
+      this.audio.play('empty');
+      return null;
+    }
+
+    let chosen = u.getSelectedSoldiers();
+    if (chosen.length === 0) {
+      // Se nenhum soldado estiver marcado individualmente, destaca 1 batedor (o último soldado vivo da lista)
+      chosen = [living[living.length - 1]];
+    } else if (chosen.length >= living.length) {
+      // Mantém pelo menos 1 soldado no esquadrão original
+      chosen = chosen.slice(0, living.length - 1);
+    }
+
+    const detachedSoldiers = u.removeSoldiersByIds(chosen.map((s) => s.id));
+    if (detachedSoldiers.length === 0) return null;
+
+    const offsetAngle = (u.angle || 0) + 0.35;
+    const spawnX = clamp(u.x + Math.cos(offsetAngle) * 34, 90, BATTLEFIELD_SIZE - 90);
+    const spawnY = clamp(u.y + Math.sin(offsetAngle) * 34, 90, BATTLEFIELD_SIZE - 90);
+
+    const newSquad = new SquadUnit({
+      x: spawnX,
+      y: spawnY,
+      faction: u.faction,
+      unitType: u.unitType,
+      angle: u.angle || 0,
+      customSoldiers: detachedSoldiers,
+      spacingMeters: u.spacingMeters || 3.0,
+    });
+    newSquad.setFormation(u.formation || 'line');
+
+    const destX = clamp(u.x + Math.cos(u.angle || 0) * 68 + 26, 90, BATTLEFIELD_SIZE - 90);
+    const destY = clamp(u.y + Math.sin(u.angle || 0) * 68 + 26, 90, BATTLEFIELD_SIZE - 90);
+    newSquad.setMoveOrder(destX, destY);
+
+    this.units.push(newSquad);
+
+    for (const other of this.units) other.selected = false;
+    newSquad.selected = true;
+
+    this.audio.play('pickup');
+    const names = detachedSoldiers.map((s) => s.name).join(', ');
+    this.spawnText(
+      newSquad.x,
+      newSquad.y - 20,
+      `✂ DESTACAMENTO: ${detachedSoldiers.length} SOLDADO(S)`,
+      '#a3be8c'
+    );
+    this.notify(
+      'SOLDADO(S) DESTACADO(S) [TECLA K]',
+      `${names} agora formam um esquadrão independente sob seu comando.`,
+      '#a3be8c'
+    );
+    this._emitHud();
+    return newSquad;
+  }
+
+  // [Transferir ➡️]: Transfere soldados selecionados (ou 1 soldado) de um esquadrão para outro esquadrão aliado
+  transferSoldiersToSquad(sourceUnitId = null, targetUnitId = null, soldierIds = null) {
+    const sourceUnit =
+      (sourceUnitId && this.units.find((u) => u.id === sourceUnitId && u.alive && u.faction === 'player')) ||
+      this.units.find(
+        (u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry'
+      );
+
+    if (!sourceUnit || sourceUnit.spec.type !== 'infantry') {
+      this.notify('SELECIONE INFANTARIA', 'Selecione um esquadrão de infantaria para transferir soldados.', '#d4a338');
+      return false;
+    }
+
+    let targetUnit = targetUnitId
+      ? this.units.find((u) => u.id === targetUnitId && u.alive && u.faction === 'player' && u.spec.type === 'infantry')
+      : null;
+
+    if (!targetUnit) {
+      // Se 2 esquadrões estiverem selecionados, transfere do 2º para o 1º (ou do 1º para o 2º)
+      const selectedInf = this.units.filter(
+        (u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry'
+      );
+      if (selectedInf.length >= 2) {
+        targetUnit = selectedInf.find((u) => u.id !== sourceUnit.id) || selectedInf[0];
+      } else {
+        // Caso contrário, encontra o esquadrão aliado de infantaria mais próximo no campo
+        let bestD = Infinity;
+        for (const other of this.units) {
+          if (
+            !other.alive ||
+            other.id === sourceUnit.id ||
+            other.faction !== 'player' ||
+            other.spec.type !== 'infantry'
+          ) {
+            continue;
+          }
+          const d = dist(sourceUnit.x, sourceUnit.y, other.x, other.y);
+          if (d < bestD) {
+            bestD = d;
+            targetUnit = other;
+          }
+        }
+      }
+    }
+
+    if (!targetUnit || targetUnit.id === sourceUnit.id) {
+      this.notify(
+        'NENHUM ESQUADRÃO DESTINO DISPONÍVEL',
+        'Recrute ou posicione outro esquadrão de infantaria aliado para receber os soldados.',
+        '#c94a38'
+      );
+      this.audio.play('empty');
+      return false;
+    }
+
+    const living = sourceUnit.soldiers.filter((s) => s.alive);
+    if (living.length === 0) return false;
+
+    let idsToTransfer = [];
+    if (Array.isArray(soldierIds) && soldierIds.length > 0) {
+      idsToTransfer = soldierIds;
+    } else {
+      const checked = sourceUnit.getSelectedSoldiers();
+      if (checked.length > 0) {
+        idsToTransfer = checked.map((s) => s.id);
+      } else {
+        // Se nenhum soldado específico foi marcado, transfere 1 soldado vivo
+        idsToTransfer = [living[living.length - 1].id];
+      }
+    }
+
+    const transferred = sourceUnit.removeSoldiersByIds(idsToTransfer);
+    if (transferred.length === 0) return false;
+
+    targetUnit.addTransferredSoldiers(transferred);
+
+    this.audio.play('pickup');
+    this.spawnText(
+      targetUnit.x,
+      targetUnit.y - 22,
+      `⇄ +${transferred.length} SOLDADO(S) INTEGRADO(S)!`,
+      '#38bdf8'
+    );
+    const names = transferred.map((s) => s.name).join(', ');
+    this.notify(
+      'TRANSFERÊNCIA DE TROPAS CONCLUÍDA',
+      `${names} juntou-se a ${targetUnit.name} (${targetUnit.soldiersAlive}/${targetUnit.maxSoldiers} soldados).`,
+      '#38bdf8'
+    );
+    this._emitHud();
+    return true;
+  }
+
+  // Mescla dois ou mais esquadrões de infantaria selecionados em um único esquadrão reforçado
+  mergeSelectedSquads() {
+    const selectedInf = this.units.filter(
+      (u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry'
+    );
+    if (selectedInf.length < 2) {
+      return this.transferSoldiersToSquad();
+    }
+    const primary = selectedInf[0];
+    let totalMerged = 0;
+    for (let i = 1; i < selectedInf.length; i++) {
+      const donor = selectedInf[i];
+      const livingIds = donor.soldiers.filter((s) => s.alive).map((s) => s.id);
+      const removed = donor.removeSoldiersByIds(livingIds);
+      if (removed.length > 0) {
+        primary.addTransferredSoldiers(removed);
+        totalMerged += removed.length;
+      }
+    }
+    if (totalMerged > 0) {
+      this.audio.play('pickup');
+      this.spawnText(primary.x, primary.y - 24, `⇄ ESQUADRÕES MESCLADOS (+${totalMerged} SOLDADOS)`, '#a3be8c');
+      this.notify(
+        'ESQUADRÕES REORGANIZADOS',
+        `${totalMerged} soldado(s) integrados ao esquadrão principal (${primary.soldiersAlive} efetivos).`,
+        '#a3be8c'
+      );
+      this._emitHud();
+      return true;
+    }
+    return false;
+  }
+
+  // Tecla [H] ou botão na HUD: Trava/Destrava Posição (Hold Position)
+  toggleSelectedHoldPosition() {
+    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected);
+    if (selected.length === 0) return;
+
+    const targetState = !selected[0].holdPosition;
+    for (const u of selected) {
+      u.holdPosition = targetState;
+      if (targetState) {
+        u.vx = 0;
+        u.vy = 0;
+        u.order.type = 'hold';
+      }
+    }
+    this.audio.play('switch');
+    this.spawnText(
+      selected[0].x,
+      selected[0].y - 22,
+      targetState ? '🔒 POSIÇÃO TRAVADA [H]' : '🔓 MOVIMENTO LIVRE [H]',
+      targetState ? '#f59e0b' : '#a3be8c'
+    );
+    this._emitHud();
+  }
+
+  // Tecla [U] ou botão "Sair do Prédio" na HUD: Desocupa casas/prédios
+  ungarrisonSelected() {
+    const garrisoned = this.units.filter(
+      (u) => u.alive && u.faction === 'player' && u.selected && u.garrisonedBuildingId
+    );
+    if (garrisoned.length === 0) return;
+    for (const u of garrisoned) {
+      this._ungarrisonUnit(u);
+    }
+    this.audio.play('door');
+    this.spawnText(garrisoned[0].x, garrisoned[0].y - 18, '🚪 GUARNIÇÃO DESOCUPADA', '#d4a338');
+    this._emitHud();
+  }
+
+  start() {
+    this.resize();
+    this.lastTs = performance.now();
+    const tick = (ts) => {
+      const dt = Math.min(0.05, (ts - this.lastTs) / 1000);
+      this.lastTs = ts;
+      this.update(dt);
+      this.renderer?.render(this, dt);
+      this.input.endFrame();
+      this.rafId = requestAnimationFrame(tick);
+    };
+    this.rafId = requestAnimationFrame(tick);
+  }
+
+  resize() {
+    if (!this.canvas || !this.renderer) return;
+    const w = this.canvas.clientWidth || window.innerWidth;
+    const h = this.canvas.clientHeight || window.innerHeight;
+    this.renderer.resize(w, h);
+  }
+
+  setMenuActive(flag) {
+    this.menuActive = flag;
+    if (this.audio?.setMusicMode) {
+      this.audio.setMusicMode(flag ? 'menu' : this.paused ? 'paused' : 'battle');
+    }
+    this._emitHud();
+  }
+
+  setPaused(flag) {
+    this.paused = flag;
+    if (this.audio?.setMusicMode && !this.menuActive) {
+      this.audio.setMusicMode(flag ? 'paused' : 'battle');
+    }
+    this._emitHud();
+  }
+
+  _triggerGameOver(winnerTeam, title, subtitle) {
+    if (this.gameOver) return;
+    this.victoryState = winnerTeam;
+    this.gameOver = true;
+    this.activeCommandMode = null;
+    this.activeAirStrikeMode = null;
+    this.activeDroneLaunchMode = null;
+    this.techModalOpen = false;
+    this.tacticalMapOpen = false;
+    if (this.audio?.setMusicMode) this.audio.setMusicMode('paused');
+    this.audio.play(winnerTeam === 'allies' ? 'win' : 'defeat');
+    this.notify(title, subtitle, winnerTeam === 'allies' ? '#a3be8c' : '#c94a38');
+    this._emitHud();
+  }
+
+  // ============================================================================
+  // TRANSPORTE DE TROPAS (EMBARQUE / DESEMBARQUE TECLA [U])
+  // ============================================================================
+  disembarkAllFromTransport(transportId) {
+    const tr = this.units.find(
+      (u) => u.id === transportId && u.alive && u.spec.isTransport
+    );
+    if (!tr || !tr.cargoSquadIds || tr.cargoSquadIds.length === 0) return 0;
+
+    tr.rampOpenTimer = 1.8;
+    const disembarked = [];
+    const backAngle = tr.angle + Math.PI;
+    const candidateAngles = [0, -0.55, 0.55, -1.15, 1.15, -1.75, 1.75, Math.PI];
+
+    tr.cargoSquadIds.forEach((sid, idx) => {
+      const sq = this.units.find((u) => u.id === sid && u.alive);
+      if (!sq) return;
+
+      // Busca posição livre em arco atrás/ao redor do veículo (evitando paredes/muros)
+      let chosenX = clamp(tr.x + Math.cos(backAngle) * 58, 80, BATTLEFIELD_SIZE - 80);
+      let chosenY = clamp(tr.y + Math.sin(backAngle) * 58, 80, BATTLEFIELD_SIZE - 80);
+      for (let aIdx = 0; aIdx < candidateAngles.length; aIdx++) {
+        const ang = backAngle + candidateAngles[(aIdx + idx) % candidateAngles.length];
+        const distOut = 58 + idx * 16;
+        const tx = clamp(tr.x + Math.cos(ang) * distOut, 80, BATTLEFIELD_SIZE - 80);
+        const ty = clamp(tr.y + Math.sin(ang) * distOut, 80, BATTLEFIELD_SIZE - 80);
+        const resolved = this.map.resolveObstacleCollision(tx, ty, sq.radius || 22, null, this.fortifiedWalls);
+        if (Math.hypot(resolved.x - tx, resolved.y - ty) < 8) {
+          chosenX = resolved.x;
+          chosenY = resolved.y;
+          break;
+        }
+      }
+
+      sq.embarkedInId = null;
+      sq.inTransport = false;
+      sq.boardedVehicle = null;
+      sq.targetPos = null;
+      sq.transportGraceTimer = 1.5; // 1.5s de imunidade de colisão com o veículo ao desembarcar
+      sq.x = chosenX;
+      sq.y = chosenY;
+      sq.lastValidPos = { x: chosenX, y: chosenY };
+      sq.angle = tr.angle;
+      sq.facingAngle = tr.angle;
+      sq.vx = 0;
+      sq.vy = 0;
+      for (let i = 0; i < (sq.soldiers || []).length; i++) {
+        const s = sq.soldiers[i];
+        const off = sq.memberOffsets?.[i] || { ox: (i - 2) * 14, oy: 0 };
+        s.worldX = chosenX + off.ox;
+        s.worldY = chosenY + off.oy;
+        s.personalTarget = { x: s.worldX, y: s.worldY };
+        s.targetPos = null;
+        s.reactionTimer = 0;
+        s._autonomousInit = false;
+      }
+      sq.updateSoldierWorldPositions();
+      sq.setMoveOrder(
+        clamp(chosenX + Math.cos(backAngle) * 20, 80, BATTLEFIELD_SIZE - 80),
+        clamp(chosenY + Math.sin(backAngle) * 20, 80, BATTLEFIELD_SIZE - 80)
+      );
+      disembarked.push(sq);
+    });
+    tr.cargoSquadIds = [];
+    if (disembarked.length > 0) {
+      this.audio.play('embark');
+      this.spawnText(
+        tr.x,
+        tr.y - 24,
+        `🚪 ${disembarked.length} ESQUADRÃO(ÕES) DESEMBARCADO(S)!`,
+        '#4ade80'
+      );
+      this._emitHud();
+    }
+    return disembarked.length;
+  }
+
+  // ============================================================================
+  // ÁRVORE DE PESQUISA & DESENVOLVIMENTO MILITAR (TECH TREE % + DRONES 3D)
+  // ============================================================================
+  toggleTechModal(force) {
+    this.techModalOpen = typeof force === 'boolean' ? force : !this.techModalOpen;
+    this.audio.play('switch');
+    this._emitHud();
+  }
+
+  setTechBudgetPct(pct) {
+    this.selectedBudgetTier = clamp(Number(pct) || 0.25, 0.25, 0.75);
+    this.audio.play('switch');
+    this._emitHud();
+  }
+
+  startResearch(techId, budgetPct = this.selectedBudgetTier) {
+    const tech = TECH_NODE_BY_ID[techId];
+    if (!tech) return false;
+    if (this.completedTechs.has(techId)) {
+      this.notify('PESQUISA JÁ CONCLUÍDA', tech.name, '#9a9484');
+      return false;
+    }
+    if ((tech.requiredHqLevel || 1) > this.hqLevel) {
+      this.audio.play('empty');
+      this.notify(
+        `🔒 REQUER QG NÍVEL ${tech.requiredHqLevel}`,
+        `${tech.short} exige QG Nível ${tech.requiredHqLevel}.`,
+        '#c94a38'
+      );
+      return false;
+    }
+    if (this.commandPoints < (tech.requiredCp || 0)) {
+      this.audio.play('empty');
+      this.notify(
+        `🔒 REQUER ${tech.requiredCp} CP`,
+        `${tech.short} exige ${tech.requiredCp} Pontos de Comando (atual: ${this.commandPoints} CP).`,
+        '#c94a38'
+      );
+      return false;
+    }
+    if (tech.requiresTech && !this.completedTechs.has(tech.requiresTech)) {
+      const reqName = TECH_NODE_BY_ID[tech.requiresTech]?.short || tech.requiresTech;
+      this.audio.play('empty');
+      this.notify('🔒 REQUER PESQUISA ANTERIOR', `Conclua ${reqName} primeiro.`, '#c94a38');
+      return false;
+    }
+    if (this.activeResearch) {
+      this.notify(
+        'LABORATÓRIO OCUPADO',
+        `Aguarde concluir: ${TECH_NODE_BY_ID[this.activeResearch.techId]?.short || 'Pesquisa'}`,
+        '#d4a338'
+      );
+      return false;
+    }
+
+    const { supplyCost, ammoCost, fuelCost, duration, speedMult, pct } = computeTechResearchCost(
+      tech,
+      this.supplies,
+      this.fuel,
+      budgetPct,
+      this.ammo
+    );
+    if (this.supplies < supplyCost || this.ammo < ammoCost || this.fuel < fuelCost) {
+      this.audio.play('empty');
+      this.notify(
+        'ORÇAMENTO INSUFICIENTE',
+        `Necessário ${supplyCost} SUP${ammoCost ? `, ${ammoCost} MUN` : ''}${fuelCost ? ` e ${fuelCost} COMB` : ''}.`,
+        '#c94a38'
+      );
+      return false;
+    }
+
+    this.supplies -= supplyCost;
+    this.ammo -= ammoCost;
+    this.fuel -= fuelCost;
+    this.activeResearch = {
+      techId,
+      progress: 0,
+      duration,
+      speedMult,
+      pct,
+      supplyCost,
+      fuelCost,
+    };
+    this.audio.play('cash');
+    this.notify(
+      `🔬 PESQUISA INICIADA: ${tech.short.toUpperCase()}`,
+      `Investimento de ${Math.round(pct * 100)}% (${supplyCost} SUP) • Conclusão em ${duration}s`,
+      '#60a5fa'
+    );
+    this._emitHud();
+    return true;
+  }
+
+  _applyTechUpgradeEffects(techId) {
+    if (techId === 'kevlar_vests') {
+      for (const u of this.units) {
+        if (u.faction === 'player' && u.spec.type === 'infantry') {
+          for (const s of u.soldiers) {
+            if (!s.alive) continue;
+            s.maxHp = Math.round(s.maxHp * 1.25);
+            s.hp = Math.round(s.hp * 1.25);
+          }
+          u.syncSquadHealthFromSoldiers();
+        }
+      }
+    } else if (techId === 'reactive_armor') {
+      for (const u of this.units) {
+        if (u.faction === 'player' && u.spec.type === 'vehicle') {
+          u.maxHp = Math.round(u.maxHp * 1.35);
+          u.hp = Math.round(u.hp * 1.35);
+        }
+      }
+    }
+  }
+
+  _updateResearch(dt) {
+    // Interceptação de Rádio: revela periodicamente veículos inimigos no minimapa
+    if (this.completedTechs.has('radio_intercept')) {
+      this.radioInterceptTimer -= dt;
+      if (this.radioInterceptTimer <= 0) {
+        this.radioInterceptTimer = 6.0;
+        for (const u of this.units) {
+          if (u.alive && u.team === 'enemies' && u.spec.type === 'vehicle') {
+            this.map.revealFogArea(u.x, u.y, 190, 4.5);
+          }
+        }
+      }
+    }
+
+    if (!this.activeResearch) return;
+    this.activeResearch.progress += dt;
+    if (this.activeResearch.progress >= this.activeResearch.duration) {
+      const doneId = this.activeResearch.techId;
+      const tech = TECH_NODE_BY_ID[doneId];
+      this.completedTechs.add(doneId);
+      this.activeResearch = null;
+      this.matchStats.researchesCompleted = (this.matchStats.researchesCompleted || 0) + 1;
+      this._applyTechUpgradeEffects(doneId);
+      this.audio.play('research_done');
+      this.notify(
+        `✅ PESQUISA CONCLUÍDA: ${tech?.short.toUpperCase() || doneId}`,
+        tech?.effectText || 'Tecnologia militar aplicada ao batalhão!',
+        '#4ade80'
+      );
+      this._emitHud();
+    }
+  }
+
+  triggerDroneLaunchMode(droneType) {
+    if (this.hqLevel < 3) {
+      this.audio.play('empty');
+      this.notify('🔒 REQUER QG NÍVEL 3', 'Drones de Guerra exigem QG Nível 3.', '#c94a38');
+      return false;
+    }
+    if (!this.completedTechs.has(droneType)) {
+      this.audio.play('empty');
+      this.notify('TECNOLOGIA BLOQUEADA', 'Pesquise este Drone na Árvore de Pesquisa [T].', '#c94a38');
+      return false;
+    }
+    this.activeDroneLaunchMode = this.activeDroneLaunchMode === droneType ? null : droneType;
+    this.activeCommandMode = null;
+    this.activeAirStrikeMode = null;
+    this.audio.play('switch');
+    this._emitHud();
+    return true;
+  }
+
+  launchDrone(droneType, wx, wy) {
+    if (this.hqLevel < 3 || !this.completedTechs.has(droneType)) return false;
+    const isKamikaze = droneType === 'fpv_kamikaze';
+    const supCost = isKamikaze ? 500 : 350;
+    const ammoCost = isKamikaze ? 200 : 120;
+    if (this.supplies < supCost || this.ammo < ammoCost) {
+      this.audio.play('empty');
+      this.notify('RECURSOS INSUFICIENTES', `Necessário ${supCost} SUP e ${ammoCost} MUN.`, '#c94a38');
+      return false;
+    }
+    this.supplies -= supCost;
+    this.ammo -= ammoCost;
+
+    const hq = this.map.hqs.player || { x: 850, y: 4800 };
+    const ang = Math.atan2(wy - hq.y, wx - hq.x);
+    this.activeDrones.push({
+      id: `drn_${Date.now()}_${Math.floor(Math.random() * 9999)}`,
+      type: droneType,
+      x: hq.x,
+      y: hq.y,
+      z: isKamikaze ? 55 : 115,
+      targetX: clamp(wx, 100, BATTLEFIELD_SIZE - 100),
+      targetY: clamp(wy, 100, BATTLEFIELD_SIZE - 100),
+      angle: ang,
+      speed: isKamikaze ? 360 : 260,
+      life: isKamikaze ? 24 : 45,
+      orbitPhase: 0,
+      alive: true,
+    });
+    this.audio.play('drone_launch');
+    this.spawnText(
+      wx,
+      wy - 18,
+      isKamikaze ? '💥 DRONE KAMIKAZE FPV LANÇADO!' : '🛸 DRONE UAV RECON EM VOO!',
+      isKamikaze ? '#f97316' : '#38bdf8'
+    );
+    this._emitHud();
+    return true;
+  }
+
+  _updateDrones(dt) {
+    for (const dr of this.activeDrones) {
+      if (!dr.alive) continue;
+      dr.life -= dt;
+      if (dr.life <= 0) {
+        dr.alive = false;
+        continue;
+      }
+
+      if (dr.type === 'fpv_kamikaze') {
+        // Busca automaticamente tanque ou trincheira inimiga próxima do alvo
+        const lock = this._findUnitNearWorld(
+          dr.targetX,
+          dr.targetY,
+          260,
+          (u) => u.team === 'enemies' && !u.surrendered
+        );
+        const tx = lock ? lock.x : dr.targetX;
+        const ty = lock ? lock.y : dr.targetY;
+        const dx = tx - dr.x;
+        const dy = ty - dr.y;
+        const d = Math.hypot(dx, dy);
+        dr.angle = Math.atan2(dy, dx);
+        if (d <= 28) {
+          // Detonação FPV sobre trincheira/tanque
+          dr.alive = false;
+          this.spawnExplosionParticles(tx, ty, 38);
+          this.playSoundAt('explosion', tx, ty, 0.9);
+          this.camera.shake(16, 0.35);
+          this.spawnText(tx, ty - 16, '💥 IMPACTO DRONE FPV!', '#f97316');
+          for (const u of this.units) {
+            if (!u.alive || u.team !== 'enemies') continue;
+            const ud = dist(tx, ty, u.x, u.y);
+            if (ud <= 145) {
+              const dmg = (u.spec.type === 'vehicle' ? 320 : 185) * (1 - ud / 170);
+              u.takeDamage(dmg, 'allies', this, true, true, tx, ty);
+            }
+          }
+          for (const bld of this.baseBuildings) {
+            if (bld.alive !== false && bld.team === 'enemies' && dist(tx, ty, bld.x, bld.y) <= 165) {
+              this.damageBaseBuilding(bld, 240, 'allies');
+            }
+          }
+        } else if (d > 0.001) {
+          dr.x += (dx / d) * dr.speed * dt;
+          dr.y += (dy / d) * dr.speed * dt;
+          this.map.revealFogArea(dr.x, dr.y, 260, 1.5);
+        }
+      } else {
+        // UAV de Reconhecimento: voa até o setor e orbita revelando névoa e minas
+        const dx = dr.targetX - dr.x;
+        const dy = dr.targetY - dr.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 85) {
+          dr.angle = Math.atan2(dy, dx);
+          dr.x += (dx / d) * dr.speed * dt;
+          dr.y += (dy / d) * dr.speed * dt;
+        } else {
+          dr.orbitPhase += dt * 1.4;
+          dr.x = dr.targetX + Math.cos(dr.orbitPhase) * 95;
+          dr.y = dr.targetY + Math.sin(dr.orbitPhase) * 95;
+          dr.angle = dr.orbitPhase + Math.PI * 0.5;
+        }
+        this.map.revealFogArea(dr.x, dr.y, 640, 2.0);
+        for (const m of this.mines) {
+          if (m.active && m.team === 'enemies' && dist(dr.x, dr.y, m.x, m.y) <= 640) {
+            m.revealed = true;
+          }
+        }
+      }
+    }
+    this.activeDrones = this.activeDrones.filter((d) => d.alive);
+  }
+
+  setWheelOpen() {}
+
+  lockPointer() {
+    this.audio.resume();
+  }
+
+  updateSettings(partial) {
+    this.settings = { ...this.settings, ...partial };
+    if (typeof partial.volume === 'number') {
+      this.audio.setVolume(partial.volume);
+    }
+    this.renderer?.applySettings(this.settings);
+    this._emitHud();
+  }
+
+  setPlayerSkin(skinId) {
+    this.playerSkinId = skinId || 'olive_classic';
+    this.audio.play('switch');
+    this._emitHud();
+  }
+
+  restart(mode, startingResources, mapId) {
+    this.setupMatch(mode || this.gameMode, startingResources || this.startingResourcesPreset, mapId || this.mapId);
+  }
+
+  // ============================================================================
+  // SISTEMA DE SALVAR E CARREGAR BATALHA (SERIALIZAÇÃO COMPLETA + LOCALSTORAGE)
+  // ============================================================================
+  serializeBattleState(customTitle = null) {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const dateLabel = `${pad(now.getDate())}/${pad(now.getMonth() + 1)}/${now.getFullYear()} ${pad(
+      now.getHours()
+    )}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+    const allyCount = this.units.filter((u) => u.alive && u.team === 'allies').length;
+    const enemyCount = this.units.filter((u) => u.alive && u.team === 'enemies').length;
+
+    return {
+      version: 1,
+      id: `save_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+      title: customTitle || `Operação ${this.gameMode.toUpperCase()} — ${dateLabel}`,
+      savedAt: now.toISOString(),
+      dateLabel,
+      gameMode: this.gameMode,
+      mapId: this.mapId || 'normandy_fields',
+      aiDifficulty: this.aiDifficulty || 'medium',
+      hqLevel: this.hqLevel || 1,
+      commandPoints: this.commandPoints || 0,
+      aiHqLevels: { ...(this.aiHqLevels || { ally_ai: 1, enemy_1: 1, enemy_2: 1 }) },
+      startingResourcesPreset: this.startingResourcesPreset,
+      timeScale: this.timeScale || 1.0,
+      supplies: Math.floor(this.supplies),
+      ammo: Math.floor(this.ammo),
+      fuel: Math.floor(this.fuel),
+      hqLevel: this.hqLevel || 1,
+      commandPoints: this.commandPoints || 0,
+      aiDifficulty: this.aiDifficulty || 'medium',
+      playerSkinId: this.playerSkinId || 'olive_classic',
+      mapId: this.mapId,
+      allyAiSupplies: Math.floor(this.allyAiSupplies || 600),
+      enemySupplies: { ...(this.enemySupplies || { enemy_1: 600, enemy_2: 600 }) },
+      victoryPoints: this.victoryPoints || 0,
+      victoryState: this.victoryState || null,
+      intelRevealed: Boolean(this.intelRevealed),
+      supplyIncomeTimer: Number((this.supplyIncomeTimer || 6.0).toFixed(2)),
+      aiWaveTimer: Number((this.aiWaveTimer || 38.0).toFixed(2)),
+      activeBottomCategory: this.activeBottomCategory || 'infantry',
+      trenchShapeL: Boolean(this.trenchShapeL),
+      allyUnitsCount: allyCount,
+      enemyUnitsCount: enemyCount,
+      camera: {
+        x: Math.round(this.camera.x),
+        y: Math.round(this.camera.y),
+        zoom: Math.round(this.camera.zoom),
+      },
+      sectors: this.map.sectors.map((s) => ({
+        id: s.id,
+        owner: s.owner,
+        captureProgress: Number((s.captureProgress || 0).toFixed(2)),
+      })),
+      exploredGrid: this.map.exploredGrid ? Array.from(this.map.exploredGrid) : [],
+      tacticalArrows: (this.tacticalArrows || []).map((a) => ({ ...a })),
+      tacticalPings: (this.tacticalPings || []).map((p) => ({ ...p })),
+      baseBuildings: (this.baseBuildings || []).map((b) => ({
+        id: b.id,
+        buildingType: b.buildingType,
+        name: b.name,
+        short: b.short,
+        subtitle: b.subtitle,
+        team: b.team,
+        faction: b.faction,
+        x: b.x,
+        y: b.y,
+        sightRadius: b.sightRadius,
+        hp: b.hp,
+        maxHp: b.maxHp,
+        radius: b.radius,
+        rallyX: b.rallyX,
+        rallyY: b.rallyY,
+        produces: [...(b.produces || [])],
+        productionQueue: (b.productionQueue || []).map((q) => ({ ...q })),
+        productionProgress: b.productionProgress || 0,
+        isMainHQ: Boolean(b.isMainHQ),
+        alive: b.alive !== false,
+      })),
+      units: (this.units || [])
+        .filter((u) => u.alive)
+        .map((u) => ({
+          id: u.id,
+          faction: u.faction,
+          unitType: u.unitType,
+          x: Number(u.x.toFixed(2)),
+          y: Number(u.y.toFixed(2)),
+          angle: Number((u.angle || 0).toFixed(3)),
+          hp: Number(u.hp.toFixed(2)),
+          maxHp: u.maxHp,
+          morale: Number((u.morale || 100).toFixed(2)),
+          formation: u.formation || 'line',
+          spacingMeters: Number((u.spacingMeters || 3.0).toFixed(2)),
+          holdPosition: Boolean(u.holdPosition),
+          selected: Boolean(u.selected),
+          surrendered: Boolean(u.surrendered),
+          captured: Boolean(u.captured),
+          inTrench: Boolean(u.inTrench),
+          inTrenchId: u.inTrenchId || null,
+          garrisonedBuildingId: u.garrisonedBuildingId || null,
+          order: u.order ? { ...u.order } : { type: 'hold', x: u.x, y: u.y, targetUnitId: null },
+          soldiers: (u.soldiers || []).map((s) => ({
+            id: s.id,
+            index: s.index,
+            name: s.name,
+            rank: s.rank,
+            weapon: s.weapon,
+            weaponIcon: s.weaponIcon,
+            hp: Number(s.hp.toFixed(2)),
+            maxHp: s.maxHp || 100,
+            alive: Boolean(s.alive),
+            selected: Boolean(s.selected),
+            x: Number((s.x || u.x).toFixed(2)),
+            y: Number((s.y || u.y).toFixed(2)),
+          })),
+        })),
+      trenches: (this.trenches || []).map((tr) => ({
+        id: tr.id,
+        points: (tr.points || []).map((p) => ({ x: p.x, y: p.y })),
+        team: tr.team,
+        isLShape: Boolean(tr.isLShape),
+        revealed: Boolean(tr.revealed),
+      })),
+      barricades: (this.barricades || []).map((b) => ({
+        id: b.id,
+        x1: b.x1,
+        y1: b.y1,
+        x2: b.x2,
+        y2: b.y2,
+        team: b.team,
+      })),
+      fortifiedWalls: (this.fortifiedWalls || []).map((w) => ({
+        id: w.id,
+        x1: w.x1,
+        y1: w.y1,
+        x2: w.x2,
+        y2: w.y2,
+        team: w.team,
+      })),
+      barbedWires: (this.barbedWires || []).map((w) => ({
+        id: w.id,
+        x1: w.x1,
+        y1: w.y1,
+        x2: w.x2,
+        y2: w.y2,
+        team: w.team,
+      })),
+      mines: (this.mines || [])
+        .filter((m) => m.active !== false)
+        .map((m) => ({
+          id: m.id,
+          x: m.x,
+          y: m.y,
+          team: m.team,
+          faction: m.faction,
+          revealed: Boolean(m.revealed),
+        })),
+    };
+  }
+
+  loadBattleState(state) {
+    if (!state || typeof state !== 'object' || !Array.isArray(state.units)) {
+      this.notify('ARQUIVO DE BATALHA INVÁLIDO', 'Não foi possível restaurar os dados da operação.', '#c94a38');
+      return false;
+    }
+
+    this.gameMode = state.gameMode === '2v2' ? '2v2' : '1v1';
+    this.aiDifficulty = state.aiDifficulty || 'medium';
+    this.hqLevel = clamp(state.hqLevel || 1, 1, 3);
+    this.commandPoints = Math.max(0, state.commandPoints || 0);
+    this.aiHqLevels = state.aiHqLevels ? { ...state.aiHqLevels } : { ally_ai: 1, enemy_1: 1, enemy_2: 1 };
+    const savedMapId = state.mapId || 'normandy_fields';
+    if (savedMapId !== this.mapId) {
+      this.mapId = savedMapId;
+      this.map = new BattlefieldMap({ seed: 1944, mapId: this.mapId });
+      this.renderer?.buildWorld(this.map);
+    }
+    this.startingResourcesPreset = state.startingResourcesPreset || 600;
+    this.timeScale = typeof state.timeScale === 'number' ? state.timeScale : 1.0;
+    this.supplies = typeof state.supplies === 'number' ? state.supplies : 600;
+    this.ammo = typeof state.ammo === 'number' ? state.ammo : 140;
+    this.fuel = typeof state.fuel === 'number' ? state.fuel : 95;
+    this.allyAiSupplies = typeof state.allyAiSupplies === 'number' ? state.allyAiSupplies : 600;
+    this.enemySupplies = state.enemySupplies
+      ? { ...state.enemySupplies }
+      : { enemy_1: 600, enemy_2: 600 };
+    this.victoryPoints = state.victoryPoints || 0;
+    this.victoryState = state.victoryState || null;
+    this.intelRevealed = Boolean(state.intelRevealed);
+    this.supplyIncomeTimer = state.supplyIncomeTimer || 6.0;
+    this.aiWaveTimer = state.aiWaveTimer || 38.0;
+    this.activeBottomCategory = state.activeBottomCategory || 'infantry';
+    this.trenchShapeL = Boolean(state.trenchShapeL);
+
+    this.activeCommandMode = null;
+    this.activeEngineeringActionId = null;
+    this.activeAirStrikeMode = null;
+    this.trenchPreview = null;
+    this.orientationPreview = null;
+    this.rightOrderStartWorld = null;
+    this.selectionBox = null;
+    this.selectedBuildingId = null;
+    this.selectedStructureId = null;
+    this.aircrafts = [];
+    this.bullets = [];
+    this.pendingGrenades = [];
+    this.repairSparkTimer = 0;
+    this.particles = [];
+    this.texts = [];
+
+    if (state.camera) {
+      this.camera.x = clamp(state.camera.x || 2400, 240, BATTLEFIELD_SIZE - 240);
+      this.camera.y = clamp(state.camera.y || 4800, 240, BATTLEFIELD_SIZE - 240);
+      this.camera.zoom = clamp(state.camera.zoom || 920, 290, 2400);
+    }
+
+    // Restaura setores de suprimento
+    if (Array.isArray(state.sectors)) {
+      for (const savedSec of state.sectors) {
+        const sec = this.map.sectors.find((s) => s.id === savedSec.id);
+        if (sec) {
+          sec.owner = savedSec.owner || 'neutral';
+          sec.captureProgress = typeof savedSec.captureProgress === 'number' ? savedSec.captureProgress : 0;
+        }
+      }
+    }
+
+    // Restaura grade de Névoa de Guerra explorada
+    this.map.resetFog();
+    if (Array.isArray(state.exploredGrid) && this.map.exploredGrid) {
+      const len = Math.min(state.exploredGrid.length, this.map.exploredGrid.length);
+      for (let i = 0; i < len; i++) {
+        this.map.exploredGrid[i] = state.exploredGrid[i];
+        if (state.exploredGrid[i] > 0) {
+          this.map.fogGrid[i] = 1;
+        }
+      }
+    }
+
+    this.tacticalArrows = Array.isArray(state.tacticalArrows)
+      ? state.tacticalArrows.map((a) => ({ ...a }))
+      : [];
+    this.tacticalPings = Array.isArray(state.tacticalPings)
+      ? state.tacticalPings.map((p) => ({ ...p }))
+      : [];
+
+    // Restaura Prédios da Base
+    this.baseBuildings = Array.isArray(state.baseBuildings)
+      ? state.baseBuildings.map((b) => ({
+          ...b,
+          produces: [...(b.produces || [])],
+          productionQueue: (b.productionQueue || []).map((q) => ({ ...q })),
+          alive: b.alive !== false,
+        }))
+      : [];
+
+    // Restaura Trincheiras, Barricadas, Muros, Arames e Minas
+    this.trenches = Array.isArray(state.trenches)
+      ? state.trenches.map((tr) => {
+          const seg = new TrenchSegment({
+            points: tr.points,
+            team: tr.team,
+            isLShape: tr.isLShape,
+            revealed: tr.revealed,
+          });
+          if (tr.id) seg.id = tr.id;
+          return seg;
+        })
+      : [];
+
+    this.barricades = Array.isArray(state.barricades)
+      ? state.barricades.map((b) => {
+          const bar = new BarricadeLine(b);
+          if (b.id) bar.id = b.id;
+          return bar;
+        })
+      : [];
+
+    this.fortifiedWalls = Array.isArray(state.fortifiedWalls)
+      ? state.fortifiedWalls.map((w) => {
+          const wall = new FortifiedWallLine(w);
+          if (w.id) wall.id = w.id;
+          return wall;
+        })
+      : [];
+
+    this.barbedWires = Array.isArray(state.barbedWires)
+      ? state.barbedWires.map((w) => {
+          const wire = new BarbedWireLine(w);
+          if (w.id) wire.id = w.id;
+          return wire;
+        })
+      : [];
+
+    this.mines = Array.isArray(state.mines)
+      ? state.mines.map((m) => {
+          const mine = new Landmine(m);
+          if (m.id) mine.id = m.id;
+          return mine;
+        })
+      : [];
+
+    // Limpa guarnições antigas das casas
+    for (const st of this.map.structures) {
+      st.garrisonUnitId = null;
+      st.garrisonTeam = null;
+    }
+
+    // Restaura Unidades e Soldados Individuais (com HP individual, espaçamento e ordens)
+    this.units = state.units.map((uData) => {
+      const hasCustomSoldiers = Array.isArray(uData.soldiers) && uData.soldiers.length > 0;
+      const u = new SquadUnit({
+        x: uData.x,
+        y: uData.y,
+        faction: uData.faction,
+        unitType: uData.unitType,
+        angle: uData.angle || 0,
+        customSoldiers: hasCustomSoldiers ? uData.soldiers : null,
+        spacingMeters: uData.spacingMeters || 3.0,
+      });
+      if (uData.id) u.id = uData.id;
+      u.hp = typeof uData.hp === 'number' ? uData.hp : u.maxHp;
+      u.morale = typeof uData.morale === 'number' ? uData.morale : 100;
+      u.formation = uData.formation || 'line';
+      u.spacingMeters = uData.spacingMeters || 3.0;
+      u.holdPosition = Boolean(uData.holdPosition);
+      u.selected = Boolean(uData.selected);
+      u.surrendered = Boolean(uData.surrendered);
+      u.captured = Boolean(uData.captured);
+      u.inTrench = Boolean(uData.inTrench);
+      u.inTrenchId = uData.inTrenchId || null;
+      u.garrisonedBuildingId = uData.garrisonedBuildingId || null;
+      if (uData.order) {
+        u.order = { ...uData.order };
+      }
+      if (hasCustomSoldiers) {
+        u.syncSquadHealthFromSoldiers();
+      }
+      if (u.garrisonedBuildingId) {
+        const st = this.map.structures.find((s) => s.id === u.garrisonedBuildingId);
+        if (st && !st.destroyed) {
+          st.garrisonUnitId = u.id;
+          st.garrisonTeam = u.team;
+        } else {
+          u.garrisonedBuildingId = null;
+        }
+      }
+      return u;
+    });
+
+    this.map.updateFogOfWar(this.units, this.baseBuildings, 0.1);
+    this.map.updateFrontline(this.units, 1.0);
+
+    this.audio.play('win');
+    this.notify(
+      '📂 BATALHA CARREGADA COM SUCESSO!',
+      `${state.title || 'Operação Restaurada'} (${this.units.length} unidades no teatro de operações)`,
+      '#a3be8c'
+    );
+    this._emitHud();
+    return true;
+  }
+
+  getSavedBattles() {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const raw = window.localStorage.getItem(this.saveStorageKey);
+        if (!raw) return this._memorySaves;
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // fallback para memória
+    }
+    return this._memorySaves;
+  }
+
+  _persistSavedBattles(list) {
+    this._memorySaves = list;
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(this.saveStorageKey, JSON.stringify(list));
+      }
+    } catch {
+      // ignora erro de quota
+    }
+  }
+
+  saveBattle(customTitle = null) {
+    const snap = this.serializeBattleState(customTitle);
+    const list = [...this.getSavedBattles()];
+    list.unshift(snap);
+    // Mantém até 8 salvamentos mais recentes
+    if (list.length > 8) list.length = 8;
+    this._persistSavedBattles(list);
+
+    this.audio.play('cash');
+    this.notify(
+      '💾 BATALHA SALVA COM SUCESSO!',
+      `${snap.title} • ${snap.supplies} SUP | ${snap.allyUnitsCount} Tropas Aliadas`,
+      '#a3be8c'
+    );
+    this._emitHud();
+    return snap;
+  }
+
+  loadSavedBattle(saveId = null) {
+    const list = this.getSavedBattles();
+    if (list.length === 0) {
+      this.notify('NENHUMA BATALHA SALVA', 'Salve uma operação primeiro usando [F9] ou o menu Salvar Batalha.', '#d4a338');
+      return false;
+    }
+    const target = saveId ? list.find((s) => s.id === saveId) : list[0];
+    if (!target) {
+      this.notify('SALVAMENTO NÃO ENCONTRADO', '', '#c94a38');
+      return false;
+    }
+    return this.loadBattleState(target);
+  }
+
+  deleteSavedBattle(saveId) {
+    const list = this.getSavedBattles().filter((s) => s.id !== saveId);
+    this._persistSavedBattles(list);
+    this.audio.play('switch');
+    this._emitHud();
+    return true;
+  }
+
+  notify(title, subtitle = '', color = '#c87d28') {
+    this.notifications.unshift({
+      id: Date.now() + Math.random(),
+      title,
+      subtitle,
+      color,
+      life: 4.8,
+    });
+    if (this.notifications.length > 3) this.notifications.length = 3;
+  }
+
+  spawnText(x, y, text, color = '#e5e0d0') {
+    this.texts.push(new FloatingText({ x, y, text, color }));
+  }
+
+  playSoundAt(name, x, y, maxVol = 1) {
+    const d = dist(x, y, this.camera.x, this.camera.y);
+    const vol = clamp(1 - d / 1900, 0, 1) * maxVol;
+    if (vol > 0.04) this.audio.play(name, vol);
+  }
+
+  countNearbyUnits(x, y, radius, team, excludeId = null) {
+    let c = 0;
+    for (const u of this.units) {
+      if (!u.alive || u.captured || u.surrendered || u.id === excludeId) continue;
+      if (team && u.team !== team) continue;
+      if (dist(x, y, u.x, u.y) <= radius) c++;
+    }
+    return c;
+  }
+
+  onEnemySquadSurrendered(unit) {
+    // Limpa imediatamente o alvo de todas as tropas/veículos que estavam atirando neste Comandante rendido
+    for (const other of this.units) {
+      if (other.order?.targetUnitId === unit.id) {
+        other.order.type = 'hold';
+        other.order.targetUnitId = null;
+      }
+    }
+    this.audio.play('star');
+    this.spawnText(unit.x, unit.y - 20, '★ COMANDANTE RENDIDO! CLIQUE P/ CAPTURAR', '#facc15');
+    this.notify(
+      '★ COMANDANTE INIMIGO RENDIDO!',
+      'Clique sobre o Comandante rendido (ou aproxime uma tropa) para transferi-lo ao Campo de Prisioneiros.',
+      '#d4a338'
+    );
+  }
+
+  onUnitDestroyed(unit, attackerTeam) {
+    for (const st of this.map.structures) {
+      if (st.garrisonUnitId === unit.id) {
+        st.garrisonUnitId = null;
+        st.garrisonTeam = null;
+      }
+    }
+    // Se um Transporte de Tropas for destruído com esquadrões dentro, ejeta sobreviventes com dano leve
+    if (unit.spec.isTransport && unit.cargoSquadIds && unit.cargoSquadIds.length > 0) {
+      this.disembarkAllFromTransport(unit.id);
+    }
+    this.spawnExplosionParticles(unit.x, unit.y, unit.spec.type === 'vehicle' ? 28 : 14);
+    this.playSoundAt(unit.spec.type === 'vehicle' ? 'explosion' : 'punch', unit.x, unit.y, 0.85);
+    if (attackerTeam === 'allies' && unit.team === 'enemies') {
+      this.matchStats.unitsEliminated = (this.matchStats.unitsEliminated || 0) + 1;
+      const reward =
+        unit.spec.type === 'vehicle' ? 75 : unit.spec.type === 'emplacement' ? 90 : 35;
+      const pts =
+        unit.spec.type === 'vehicle' ? 60 : unit.spec.type === 'emplacement' ? 85 : 25;
+      this.supplies += reward;
+      this.ammo += unit.spec.type === 'vehicle' ? 15 : 8;
+      this.victoryPoints += pts;
+      this.addCommandPoints(25);
+      this.spawnText(unit.x, unit.y, `+${reward} SUP • +${pts} PTS • +25 CP`, '#a3be8c');
+    }
+  }
+
+  spawnExplosionParticles(x, y, count = 20) {
+    if (count >= 16 && this.renderer?.vfx) {
+      const gy = getTerrainHeight(x, y, this.map);
+      this.renderer.vfx.spawnHeavyExplosion(x, gy, y, count >= 34 ? 1.25 : 0.9);
+    }
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 28 + Math.random() * 120;
+      const life = 0.4 + Math.random() * 0.6;
+      this.particles.push({
+        x,
+        y,
+        z: 4 + Math.random() * 14,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        radius: 3 + Math.random() * 5,
+        color: i % 3 === 0 ? '#c94a38' : i % 3 === 1 ? '#d97706' : '#4a453e',
+        life,
+        maxLife: life,
+      });
+    }
+  }
+
+  // Gera faíscas e poeira na parede quando um projétil é bloqueado fisicamente pelo muro/saco de areia/trincheira
+  spawnWallImpactParticles(x, y) {
+    if (this.renderer?.vfx) {
+      const gy = getTerrainHeight(x, y, this.map);
+      this.renderer.vfx.spawnImpact(x, gy + 6, y, true);
+    }
+    for (let i = 0; i < 8; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 18 + Math.random() * 55;
+      const life = 0.22 + Math.random() * 0.25;
+      this.particles.push({
+        x: x + (Math.random() - 0.5) * 6,
+        y: y + (Math.random() - 0.5) * 6,
+        z: 6 + Math.random() * 7,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        vz: 12 + Math.random() * 14,
+        radius: i % 2 === 0 ? 2.1 : 3.2,
+        color: i % 2 === 0 ? '#fbbf24' : '#9a9484',
+        life,
+        maxLife: life,
+      });
+    }
+  }
+
+  // Calcula a direção da ameaça inimiga mais próxima (ou o centro do território inimigo) para determinar o Lado Seguro do muro
+  _getThreatOriginFor(wx, wy, team = 'allies') {
+    let nearestEnemy = null;
+    let bestD = Infinity;
+    for (const u of this.units) {
+      if (!u.alive || u.captured || u.surrendered || u.team === team) continue;
+      const d = dist(wx, wy, u.x, u.y);
+      if (d < bestD) {
+        bestD = d;
+        nearestEnemy = u;
+      }
+    }
+    if (nearestEnemy && bestD < 2600) {
+      return { x: nearestEnemy.x, y: nearestEnemy.y };
+    }
+    const fallbackHq = team === 'allies' ? this.map.hqs.enemy_1 : this.map.hqs.player;
+    return { x: fallbackHq ? fallbackHq.x : 8450, y: fallbackHq ? fallbackHq.y : 4800 };
+  }
+
+  // Executado pelos botões da Barra Inferior (Slots 1 a 9)
+  triggerCommandSlot(slotIndex) {
+    const cmd = COMMAND_ACTIONS[slotIndex];
+    if (!cmd) return false;
+    this.audio.resume();
+    this.activeCommandSlot = slotIndex;
+
+    // Slots 1, 2 e 3 recrutam unidades móveis no QG Aliado
+    if (cmd.category === 'unit') {
+      this.activeCommandMode = null;
+      this.activeAirStrikeMode = null;
+      this.trenchPreview = null;
+      return this.recruitUnitById(cmd.id);
+    }
+
+    // Slots 4 a 9 ativam modos de Engenharia Militar no cursor
+    this.activeAirStrikeMode = null;
+    if (this.activeCommandMode === cmd.category) {
+      this.activeCommandMode = null;
+      this.trenchPreview = null;
+      this.notify('ORDEM DE ENGENHARIA CANCELADA', '', '#9a9484');
+    } else {
+      this.activeCommandMode = cmd.category;
+      const isDragMode =
+        cmd.category === 'build_trench' ||
+        cmd.category === 'build_barricade' ||
+        cmd.category === 'build_wall' ||
+        cmd.category === 'build_wire';
+      this.notify(
+        `ENGENHARIA: ${cmd.name.toUpperCase()}`,
+        isDragMode
+          ? 'Clique e arraste no mapa para traçar a linha • Botão Direito cancela'
+          : `Clique no terreno para construir (${cmd.cost} SUP) • Botão Direito cancela`,
+        '#d4a338'
+      );
+      this.audio.play('switch');
+    }
+    this._emitHud();
+    return true;
+  }
+
+  _createPrisonerDossier(unit) {
+    const ranks = ['Tenente', 'Capitão', 'Major', 'Sargento-Mor'];
+    const names = ['H. Weber', 'K. Richter', 'M. Vogel', 'F. Becker', 'E. Hartmann', 'L. Hoffmann'];
+    return {
+      id: unit.id,
+      name: unit.name,
+      officerName: names[Math.floor(Math.random() * names.length)],
+      rank: ranks[Math.floor(Math.random() * ranks.length)],
+      resistance: randInt(48, 86),
+      factionName: unit.factionMeta?.name || 'Forças do Eixo',
+      soldiersRemaining: unit.soldiersAlive || 1,
+      color: unit.factionMeta?.color || '#c94a38',
+      capturedAt: Math.round(this.matchStats?.elapsedSeconds || 0),
+    };
+  }
+
+  openPowInterrogation() {
+    const powCamp = this.baseBuildings.find(
+      (b) => b.faction === 'player' && b.buildingType === 'pow_camp' && b.alive !== false
+    );
+    if (!powCamp) {
+      this.audio.play('empty');
+      this.notify(
+        '⚠️ CAMPO DE DETENÇÃO NECESSÁRIO!',
+        'Construa um Campo de Detenção & Inteligência na sua Base para escoltar e interrogar prisioneiros!',
+        '#eab308'
+      );
+      return false;
+    }
+    if (!this.powPrisoners || this.powPrisoners.length === 0) {
+      this.audio.play('empty');
+      this.notify(
+        'CELA VAZIA',
+        'Capture inimigos rendidos (Bandeira Branca) no campo de batalha para trazê-los ao Campo POW.',
+        '#d4a338'
+      );
+      return false;
+    }
+    const prisoner = this.powPrisoners[0];
+    this.setPaused(true);
+    this.onInterrogate?.(prisoner);
+    return true;
+  }
+
+  // Mecânica Chave: Interrogatório de Prisioneiros exige Campo de Detenção (POW Camp) e oferece 4 ações estratégicas!
+  resolveInterrogation(method, targetUnitId) {
+    const unit = this.units.find((u) => u.id === targetUnitId);
+    if (unit) {
+      unit.captured = true;
+      unit.alive = false;
+      unit.selected = false;
+    }
+
+    const existingIdx = this.powPrisoners.findIndex((p) => p.id === targetUnitId);
+
+    if (method === 'labor') {
+      if (existingIdx === -1 && this.powPrisoners.length < 10) {
+        const dossier = unit
+          ? this._createPrisonerDossier(unit)
+          : {
+              id: targetUnitId || `pow_${Date.now()}`,
+              name: 'Esquadrão Inimigo',
+              officerName: 'K. Richter',
+              rank: 'Capitão',
+              resistance: 65,
+              factionName: 'Forças do Eixo',
+              soldiersRemaining: 1,
+              color: '#c94a38',
+            };
+        this.powPrisoners.push(dossier);
+      }
+      this.addCommandPoints(25, 'Trabalho no Campo POW');
+      this.audio.play('cash');
+      this.notify(
+        '🔄 PRISIONEIRO ALOCADO NO CAMPO POW',
+        `Gerando +5 SUP/s contínuos (${this.powPrisoners.length}/10 prisioneiros na cela).`,
+        '#a3be8c'
+      );
+      this._emitHud();
+      return;
+    }
+
+    // Para interrogatórios estratégicos (1, 2, 3), o prisioneiro é processado e removido da cela ativa
+    if (existingIdx !== -1) {
+      this.powPrisoners.splice(existingIdx, 1);
+    }
+    this.matchStats.prisonersInterrogated = (this.matchStats.prisonersInterrogated || 0) + 1;
+
+    if (method === 'maps' || method === 'press') {
+      this.intelRevealed = true;
+      this.addCommandPoints(60, 'Mapas de Defesa');
+      for (const m of this.mines) {
+        if (m.team === 'enemies') m.revealed = true;
+      }
+      for (const tr of this.trenches) {
+        if (tr.team === 'enemies') tr.revealed = true;
+      }
+      if (this.map.hqs.enemy_1) {
+        this.map.addTemporaryVision(this.map.hqs.enemy_1.x, this.map.hqs.enemy_1.y, 1350, 60);
+      }
+      if (this.gameMode === '2v2' && this.map.hqs.enemy_2) {
+        this.map.addTemporaryVision(this.map.hqs.enemy_2.x, this.map.hqs.enemy_2.y, 1350, 60);
+      }
+      for (const tr of this.trenches) {
+        if (tr.team === 'enemies') {
+          const c = tr.getCenter();
+          this.map.addTemporaryVision(c.x, c.y, 700, 60);
+        }
+      }
+      this.map.updateFogOfWar(this.units, this.baseBuildings, 0.05);
+      this.victoryPoints += 120;
+      this.audio.play('win');
+      this.spawnText(this.camera.x, this.camera.y, '🗺️ MAPAS DE DEFESA EXTRAÍDOS (60s)!', '#d4a338');
+      this.notify(
+        '🗺️ MAPAS DE DEFESA EXTRAÍDOS!',
+        'Névoa aberta sobre os QGs inimigos por 60s e todas as Minas e Trincheiras reveladas!',
+        '#a3be8c'
+      );
+    } else if (method === 'convoy' || method === 'negotiate') {
+      this.supplies += 350;
+      this.ammo += 180;
+      this.fuel += 120;
+      this.enemyProductionDebuffTimer = 45;
+      this.addCommandPoints(45, 'Rotas de Comboio');
+      this.victoryPoints += 100;
+      this.audio.play('cash');
+      this.spawnText(this.camera.x, this.camera.y, '+350 SUP +180 MUN +120 COMB!', '#4ade80');
+      this.notify(
+        '📦 COMBOIO INIMIGO CONFISCADO!',
+        '+350 SUP, +180 MUN, +120 COMB recebidos e produção inimiga reduzida em -30% por 45s!',
+        '#4ade80'
+      );
+    } else {
+      // 'sabotage' ou 'intimidate'
+      this.enemySabotageTimer = 40;
+      for (const u of this.units) {
+        if (u.alive && u.team === 'enemies') u.morale = Math.max(15, u.morale - 25);
+      }
+      let techMsg = '+120 CP ganhos';
+      if (this.activeResearch) {
+        this.activeResearch.progress = Math.min(
+          this.activeResearch.duration,
+          this.activeResearch.progress + this.activeResearch.duration * 0.4
+        );
+        techMsg = 'Pesquisa Tech avançou +40%';
+      } else {
+        this.addCommandPoints(120, 'Códigos de Rádio');
+      }
+      this.victoryPoints += 110;
+      this.audio.play('win');
+      this.spawnText(this.camera.x, this.camera.y, '📡 SABOTAGEM DE RÁDIO ATIVA (40s)!', '#38bdf8');
+      this.notify(
+        '📡 SABOTAGEM & CÓDIGOS DE RÁDIO!',
+        `Torres/Radares inimigos desativados (40s), Defesa/Moral -25% e ${techMsg}!`,
+        '#38bdf8'
+      );
+    }
+
+    this._emitHud();
+  }
+
+  _buildTrenchPoints(x1, y1, x2, y2, isLShape) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.hypot(dx, dy);
+    const clampedLen = clamp(len, 95, 360);
+    const ang = len > 1 ? Math.atan2(dy, dx) : 0;
+    const endX = x1 + Math.cos(ang) * clampedLen;
+    const endY = y1 + Math.sin(ang) * clampedLen;
+
+    if (!isLShape) {
+      return [
+        { x: x1, y: y1 },
+        { x: endX, y: endY },
+      ];
+    }
+
+    const perpAng = ang + Math.PI / 2;
+    const legLen = Math.max(80, clampedLen * 0.55);
+    const lEndX = endX + Math.cos(perpAng) * legLen;
+    const lEndY = endY + Math.sin(perpAng) * legLen;
+    return [
+      { x: x1, y: y1 },
+      { x: endX, y: endY },
+      { x: lEndX, y: lEndY },
+    ];
+  }
+
+  _findBaseBuildingNearWorld(wx, wy, maxDist = 130, predicate = null) {
+    let best = null;
+    let bestD = maxDist;
+    for (const b of this.baseBuildings) {
+      if (b.alive === false) continue;
+      if (predicate && !predicate(b)) continue;
+      const d = dist(wx, wy, b.x, b.y);
+      const effDist = Math.max(maxDist, (b.radius || 90) + 18);
+      if (d <= effDist && d < bestD) {
+        bestD = d;
+        best = b;
+      }
+    }
+    return best;
+  }
+
+  _handleRTSInput(realDt) {
+    const { input } = this;
+
+    // 1. Movimento da Câmera RTS (WASD / Setas / Arrastar Botão do Meio / Arrastar 2 Dedos no Touch / Modo Câmera 1 Dedo)
+    const camMoveSpeed = (680 + this.camera.zoom * 0.55) * (this.settings.camSpeed || 1);
+    let mx = 0;
+    let my = 0;
+    if (input.down('KeyW') || input.down('ArrowUp')) my -= 1;
+    if (input.down('KeyS') || input.down('ArrowDown')) my += 1;
+    if (input.down('KeyA') || input.down('ArrowLeft')) mx -= 1;
+    if (input.down('KeyD') || input.down('ArrowRight')) mx += 1;
+
+    if (mx !== 0 || my !== 0) {
+      const l = Math.hypot(mx, my);
+      this.camera.x = clamp(this.camera.x + (mx / l) * camMoveSpeed * realDt, 820, BATTLEFIELD_SIZE - 820);
+      this.camera.y = clamp(this.camera.y + (my / l) * camMoveSpeed * realDt, 820, BATTLEFIELD_SIZE - 820);
+    }
+
+    // Pan com 2 Dedos no Touch ou Botão do Meio do Mouse
+    if (input.touch && (input.touch.panDeltaX !== 0 || input.touch.panDeltaY !== 0)) {
+      const panFactor = (this.camera.zoom / 680) * 1.65 * (this.settings.camSpeed || 1);
+      this.camera.x = clamp(this.camera.x - input.touch.panDeltaX * panFactor, 820, BATTLEFIELD_SIZE - 820);
+      this.camera.y = clamp(this.camera.y - input.touch.panDeltaY * panFactor, 820, BATTLEFIELD_SIZE - 820);
+    }
+
+    // Pan com 1 Dedo quando o botão [✋ MODO CÂMERA] estiver ativo (e sem modo de construção ativo)
+    if (
+      this.touchControlMode === 'camera' &&
+      !this.activeCommandMode &&
+      !this.activeAirStrikeMode &&
+      input.touch &&
+      (input.touch.singleDragDeltaX || input.touch.singleDragDeltaY)
+    ) {
+      const panFactor = (this.camera.zoom / 680) * 1.65 * (this.settings.camSpeed || 1);
+      this.camera.x = clamp(
+        this.camera.x - (input.touch.singleDragDeltaX || 0) * panFactor,
+        820,
+        BATTLEFIELD_SIZE - 820
+      );
+      this.camera.y = clamp(
+        this.camera.y - (input.touch.singleDragDeltaY || 0) * panFactor,
+        820,
+        BATTLEFIELD_SIZE - 820
+      );
+    }
+
+    // 2. Scroll do Mouse e Pinça com 2 Dedos (Pinch-to-Zoom) — Mais próximo da ação, sem ver fim do mapa
+    if (input.wheel !== 0) {
+      this.camera.zoom = clamp(this.camera.zoom + input.wheel * 95, 340, 1020);
+    }
+    if (input.touch && input.touch.pinchDelta && Math.abs(input.touch.pinchDelta) > 0.2) {
+      this.camera.zoom = clamp(this.camera.zoom + input.touch.pinchDelta * 2.8, 340, 1020);
+    }
+
+    // 3. Tecla [TAB]: Abre/Fecha Quadro de Planejamento Tático Interativo
+    if (input.wasPressed('Tab')) {
+      this.toggleTacticalMap();
+      return;
+    }
+
+    // Tecla [Espaço]: Pausa Tática estilo Company of Heroes
+    if (input.wasPressed('Space')) {
+      this.toggleTacticalPause();
+    }
+
+    // Tecla [H]: Travar Posição (Hold Position)
+    if (input.wasPressed('KeyH')) {
+      this.toggleSelectedHoldPosition();
+    }
+
+    // Tecla [U]: Desembarcar Tropas do Transporte OU Sair do Prédio (Guarnição)
+    if (input.wasPressed('KeyU')) {
+      const selTransport = this.units.find(
+        (u) => u.selected && u.alive && u.spec.isTransport && u.cargoSquadIds?.length > 0
+      );
+      if (selTransport) {
+        this.disembarkAllFromTransport(selTransport.id);
+      } else {
+        this.ungarrisonSelected();
+      }
+    }
+
+    // Tecla [T]: Abrir / Fechar Árvore de Pesquisa & Tecnologia Militar
+    if (input.wasPressed('KeyT')) {
+      this.toggleTechModal();
+    }
+
+    // Tecla [K]: Separar Soldado(s) Selecionado(s) em um Novo Esquadrão Independente (Estilo Men of War)
+    if (input.wasPressed('KeyK')) {
+      this.splitSelectedSoldiers();
+    }
+
+    // Teclas [B] / [R]: Retornar à Base para Reparo (Veículos) ou Recuar para o QG (Infantaria)
+    if (input.wasPressed('KeyB') || input.wasPressed('KeyR')) {
+      this.returnSelectedToBase();
+    }
+
+    // Tecla [F10]: Alternar Modo Caixa de Areia (Sandbox)
+    if (input.wasPressed('F10')) {
+      this.toggleSandboxMode();
+    }
+
+    // Quando o Quadro de Operações Táticas [TAB] estiver aberto, bloqueia cliques no mundo 3D atrás do modal
+    if (this.tacticalMapOpen) {
+      if (input.wasPressed('Escape')) {
+        this.toggleTacticalMap(false);
+      }
+      return;
+    }
+    // Atalhos das Habilidades do Esquadrão: [G] Granada, [F] Supressão, [C] Kit Médico
+    if (input.wasPressed('KeyG')) this.throwSelectedGrenade();
+    if (input.wasPressed('KeyF')) this.toggleSelectedSuppression();
+    if (input.wasPressed('KeyC')) {
+      const hasInf = this.units.some((u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry');
+      if (hasInf) this.useSelectedMedkit();
+      else this.triggerAirDoctrine('precision_bomb');
+    }
+
+    // Atalhos das Abas da Barra Inferior: [F1] Infantaria, [F2] Veículos, [F3] Engenharia, [F4] Defesas, [F5] Todos
+    if (input.wasPressed('F1')) this.setBottomCategory('infantry');
+    if (input.wasPressed('F2')) this.setBottomCategory('vehicles');
+    if (input.wasPressed('F3')) this.setBottomCategory('engineering');
+    if (input.wasPressed('F4')) this.setBottomCategory('defenses');
+    if (input.wasPressed('F5')) this.setBottomCategory('all');
+
+    // Salvamento Rápido da Batalha [F9]
+    if (input.wasPressed('F9')) {
+      this.saveBattle('Salvamento Rápido [F9]');
+    }
+
+    // Atalhos de Suporte Aéreo: [Z] Drone Recon, [X] Rasante A-10, [C] Bombardeio
+    if (input.wasPressed('KeyZ')) this.triggerAirDoctrine('recon_drone');
+    if (input.wasPressed('KeyX')) this.triggerAirDoctrine('a10_strafe');
+    if (input.wasPressed('KeyC')) this.triggerAirDoctrine('precision_bomb');
+
+    if (input.wasPressed('KeyM')) {
+      const m = this.audio.toggleMute();
+      this.notify(m ? 'ÁUDIO SILENCIADO' : 'ÁUDIO ATIVADO', '', '#9a9484');
+    }
+
+    if (input.wasPressed('KeyR')) {
+      this.trenchShapeL = !this.trenchShapeL;
+      this.notify(
+        this.trenchShapeL ? 'TRINCHEIRA: FORMATO EM "L"' : 'TRINCHEIRA: LINHA RETA',
+        'Arraste com o mouse no modo Escavar Trincheira [4]',
+        '#d4a338'
+      );
+    }
+
+    if (input.wasPressed('KeyG')) {
+      const surrendered = this.units.find((u) => u.alive && u.surrendered && !u.captured);
+      if (surrendered) {
+        this._openInterrogationFor(surrendered);
+        return;
+      }
+      const garrisonedSelected = this.units.find((u) => u.alive && u.selected && u.garrisonedBuildingId);
+      if (garrisonedSelected) {
+        this.ungarrisonSelected();
+        return;
+      }
+    }
+
+    const slotKeys = [
+      'Digit1',
+      'Digit2',
+      'Digit3',
+      'Digit4',
+      'Digit5',
+      'Digit6',
+      'Digit7',
+      'Digit8',
+      'Digit9',
+    ];
+    for (let i = 0; i < slotKeys.length; i++) {
+      if (input.wasPressed(slotKeys[i])) {
+        const activeCatObj = BOTTOM_BAR_CATEGORIES.find((c) => c.id === this.activeBottomCategory);
+        if (activeCatObj && activeCatObj.actionIds && activeCatObj.actionIds[i]) {
+          this.triggerActionById(activeCatObj.actionIds[i]);
+        } else {
+          this.triggerCommandSlot(i);
+        }
+      }
+    }
+
+    if (this.renderer) {
+      this.worldMouse = this.renderer.screenToWorld(input.mouse.x, input.mouse.y);
+    }
+
+    // 4. Modo de Alvo de Suporte Aéreo (Drone Recon, Rasante A-10, Bombardeio)
+    if (this.activeAirStrikeMode) {
+      if (input.mouse.rightClicked) {
+        this.activeAirStrikeMode = null;
+        return;
+      }
+      if (input.mouse.clicked) {
+        this._executeAirDoctrineAt(this.activeAirStrikeMode, this.worldMouse.x, this.worldMouse.y);
+      }
+      return;
+    }
+
+    // 4b. Lançamento de Drone Tático 3D (UAV Recon / Drone Kamikaze FPV)
+    if (this.activeDroneLaunchMode) {
+      if (input.mouse.rightClicked) {
+        this.activeDroneLaunchMode = null;
+        this._emitHud();
+        return;
+      }
+      if (input.mouse.clicked) {
+        this.launchDrone(this.activeDroneLaunchMode, this.worldMouse.x, this.worldMouse.y);
+        this.activeDroneLaunchMode = null;
+        this._emitHud();
+      }
+      return;
+    }
+
+    // 5. Construção de Trincheira (Arrastar no mapa)
+    if (this.activeCommandMode === 'build_trench') {
+      if (input.mouse.rightClicked) {
+        this.activeCommandMode = null;
+        this.trenchPreview = null;
+        return;
+      }
+      if (input.mouse.clicked) {
+        this.trenchStartWorld = { ...this.worldMouse };
+      }
+      if (input.mouse.down && this.trenchStartWorld) {
+        const pts = this._buildTrenchPoints(
+          this.trenchStartWorld.x,
+          this.trenchStartWorld.y,
+          this.worldMouse.x,
+          this.worldMouse.y,
+          this.trenchShapeL
+        );
+        this.trenchPreview = { points: pts, isLShape: this.trenchShapeL };
+      }
+      if (input.mouse.released && this.trenchStartWorld) {
+        const cost = COMMAND_BY_ID.build_trench.cost;
+        if (this.supplies >= cost) {
+          const pts = this._buildTrenchPoints(
+            this.trenchStartWorld.x,
+            this.trenchStartWorld.y,
+            this.worldMouse.x,
+            this.worldMouse.y,
+            this.trenchShapeL
+          );
+          const crossesRoad = pts.some((p) => this.map.isOnRoad?.(p.x, p.y, 16));
+          if (crossesRoad) {
+            this.audio.play('empty');
+            this.notify(
+              '⚠️ ESTRADA BLOQUEADA',
+              'Não é permitido escavar trincheiras atravessando a estrada! Construa nas laterais ou campos.',
+              '#eab308'
+            );
+          } else {
+            this.supplies -= cost;
+            const tr = new TrenchSegment({
+              points: pts,
+              team: 'allies',
+              isLShape: this.trenchShapeL,
+              revealed: true,
+            });
+            this.trenches.push(tr);
+            this.matchStats.trenchesDug = (this.matchStats.trenchesDug || 0) + 1;
+            this.audio.play('door');
+            this.spawnText(pts[0].x, pts[0].y, 'VALA DE TRINCHEIRA ESCAVADA (+65% DEF)', '#d4a338');
+          }
+        } else {
+          this.notify('SUPRIMENTOS INSUFICIENTES', `Necessário ${cost} SUP.`, '#c94a38');
+        }
+        this.trenchStartWorld = null;
+        this.trenchPreview = null;
+        this.activeCommandMode = null;
+      }
+      return;
+    }
+
+    // 6. Construção por Clique e Arraste: Barricada, Muro de Concreto/Sacos de Areia ou Arame Farpado
+    if (
+      this.activeCommandMode === 'build_barricade' ||
+      this.activeCommandMode === 'build_wall' ||
+      this.activeCommandMode === 'build_wire'
+    ) {
+      if (input.mouse.rightClicked) {
+        this.activeCommandMode = null;
+        this.trenchPreview = null;
+        return;
+      }
+      if (input.mouse.clicked) {
+        this.trenchStartWorld = { ...this.worldMouse };
+      }
+      if (input.mouse.down && this.trenchStartWorld) {
+        const pts = this._buildTrenchPoints(
+          this.trenchStartWorld.x,
+          this.trenchStartWorld.y,
+          this.worldMouse.x,
+          this.worldMouse.y,
+          false
+        );
+        this.trenchPreview = { points: pts, isLShape: false, mode: this.activeCommandMode };
+      }
+      if (input.mouse.released && this.trenchStartWorld) {
+        const cmd = COMMAND_BY_ID[this.activeCommandMode];
+        const cost = cmd ? cmd.cost : 60;
+        if (this.supplies >= cost) {
+          const pts = this._buildTrenchPoints(
+            this.trenchStartWorld.x,
+            this.trenchStartWorld.y,
+            this.worldMouse.x,
+            this.worldMouse.y,
+            false
+          );
+          this.supplies -= cost;
+          if (this.activeCommandMode === 'build_wall') {
+            this.fortifiedWalls.push(
+              new FortifiedWallLine({
+                x1: pts[0].x,
+                y1: pts[0].y,
+                x2: pts[1].x,
+                y2: pts[1].y,
+                team: 'allies',
+              })
+            );
+            this.spawnText(pts[0].x, pts[0].y, '🧱 MURO FORTIFICADO (+75% COBERTURA PESADA)', '#a3be8c');
+          } else if (this.activeCommandMode === 'build_wire') {
+            this.barbedWires.push(
+              new BarbedWireLine({
+                x1: pts[0].x,
+                y1: pts[0].y,
+                x2: pts[1].x,
+                y2: pts[1].y,
+                team: 'allies',
+              })
+            );
+            this.spawnText(pts[0].x, pts[0].y, '⛓ ARAME FARPADO (-80% VEL. INFANTARIA)', '#d4a338');
+          } else {
+            this.barricades.push(
+              new BarricadeLine({
+                x1: pts[0].x,
+                y1: pts[0].y,
+                x2: pts[1].x,
+                y2: pts[1].y,
+                team: 'allies',
+              })
+            );
+            this.spawnText(pts[0].x, pts[0].y, 'DENTES DE DRAGÃO / BARRICADA (+45% DEF)', '#d4a338');
+          }
+          this.audio.play('door');
+        } else {
+          this.notify('SUPRIMENTOS INSUFICIENTES', `Necessário ${cost} SUP.`, '#c94a38');
+        }
+        this.trenchStartWorld = null;
+        this.trenchPreview = null;
+        this.activeCommandMode = null;
+      }
+      return;
+    }
+
+    // 7. Plantar Campo Minado
+    if (this.activeCommandMode === 'build_mine') {
+      if (input.mouse.rightClicked) {
+        this.activeCommandMode = null;
+        return;
+      }
+      if (input.mouse.clicked) {
+        const cost = COMMAND_BY_ID.plant_minefield.cost;
+        if (this.supplies >= cost) {
+          this.supplies -= cost;
+          const cx = clamp(this.worldMouse.x, 120, BATTLEFIELD_SIZE - 120);
+          const cy = clamp(this.worldMouse.y, 120, BATTLEFIELD_SIZE - 120);
+          const offsets = [
+            [0, 0],
+            [-28, -22],
+            [28, -22],
+            [-26, 24],
+            [26, 24],
+          ];
+          for (const [ox, oy] of offsets) {
+            this.mines.push(
+              new Landmine({
+                x: cx + ox,
+                y: cy + oy,
+                team: 'allies',
+                faction: 'player',
+                revealed: true,
+              })
+            );
+          }
+          this.audio.play('reload');
+          this.spawnText(cx, cy, 'CAMPO MINADO PLANTADO (5 MINAS)', '#d4a338');
+        } else {
+          this.notify('SUPRIMENTOS INSUFICIENTES', `Necessário ${cost} SUP.`, '#c94a38');
+        }
+        this.activeCommandMode = null;
+      }
+      return;
+    }
+
+    // 8. Construir Fortificações Fixas (Torre de Defesa / Guarita, Ninho MG/AT, Bunker de Concreto, Posto de Observação)
+    if (
+      this.activeCommandMode === 'build_watchtower' ||
+      this.activeCommandMode === 'build_emplacement' ||
+      this.activeCommandMode === 'build_bunker' ||
+      this.activeCommandMode === 'build_outpost'
+    ) {
+      if (input.mouse.rightClicked) {
+        this.activeCommandMode = null;
+        this.activeEngineeringActionId = null;
+        return;
+      }
+      if (input.mouse.clicked) {
+        const cmd =
+          (this.activeEngineeringActionId && COMMAND_BY_ID[this.activeEngineeringActionId]) ||
+          COMMAND_ACTIONS.find((c) => c.category === this.activeCommandMode) ||
+          COMMAND_BY_ID[this.activeCommandMode];
+        if (cmd && this.supplies >= cmd.cost) {
+          this.supplies -= cmd.cost;
+          const cx = clamp(this.worldMouse.x, 140, BATTLEFIELD_SIZE - 140);
+          const cy = clamp(this.worldMouse.y, 140, BATTLEFIELD_SIZE - 140);
+          const unitTypeId =
+            cmd.id === 'build_watchtower' ? 'watchtower_emplacement' : cmd.id;
+          this.spawnUnit('player', unitTypeId, cx, cy, 0);
+          this.audio.play('reload');
+          this.spawnText(cx, cy, `🗼 ${cmd.short.toUpperCase()} CONSTRUÍDA`, '#a3be8c');
+        } else if (cmd) {
+          this.notify('SUPRIMENTOS INSUFICIENTES', `Necessário ${cmd.cost} SUP.`, '#c94a38');
+        }
+        this.activeCommandMode = null;
+        this.activeEngineeringActionId = null;
+      }
+      return;
+    }
+
+    // 9. Seleção RTS com Botão Esquerdo ou Toque Simples no Touch (Unidades, Soldados Individuais com Shift+Clique ou Prédios da Base 3D)
+    if (input.mouse.clicked) {
+      const surrenderedHit = this._findUnitNearWorld(
+        this.worldMouse.x,
+        this.worldMouse.y,
+        56,
+        (u) => u.surrendered
+      );
+      if (surrenderedHit) {
+        this._openInterrogationFor(surrenderedHit);
+        return;
+      }
+    }
+
+    // No Modo Câmera [✋], arrastar 1 dedo move a câmera (não desenha caixa de seleção)
+    if (input.mouse.down && input.mouse.isDragging && this.touchControlMode !== 'camera') {
+      this.selectionBox = {
+        x1: input.mouse.dragStartX,
+        y1: input.mouse.dragStartY,
+        x2: input.mouse.x,
+        y2: input.mouse.y,
+      };
+    }
+
+    if (input.mouse.released) {
+      if (this.selectionBox && this.renderer) {
+        const minX = Math.min(this.selectionBox.x1, this.selectionBox.x2);
+        const maxX = Math.max(this.selectionBox.x1, this.selectionBox.x2);
+        const minY = Math.min(this.selectionBox.y1, this.selectionBox.y2);
+        const maxY = Math.max(this.selectionBox.y1, this.selectionBox.y2);
+
+        let anySelected = false;
+        for (const u of this.units) {
+          if (!u.alive || u.faction !== 'player' || u.embarkedInId) continue;
+          const sc = this.renderer.worldToScreen(u.x, u.y, 12);
+          const inside = sc.x >= minX && sc.x <= maxX && sc.y >= minY && sc.y <= maxY;
+          u.selected = inside;
+          if (inside) anySelected = true;
+        }
+        if (anySelected) {
+          this.selectedBuildingId = null;
+    this.selectedStructureId = null;
+          this.audio.play('switch');
+        }
+        this.selectionBox = null;
+      } else if (!input.touch?.moved) {
+        const additive = input.down('ShiftLeft') || input.down('ShiftRight');
+
+        // Shift + Clique diretamente em um boneco 3D no campo de batalha seleciona aquele Soldado Individual!
+        if (additive) {
+          const hitSoldier = this._findSoldierNearWorld(this.worldMouse.x, this.worldMouse.y, 26);
+          if (hitSoldier) {
+            hitSoldier.unit.selected = true;
+            hitSoldier.unit.toggleSelectSoldier(hitSoldier.soldier.id, false);
+            this.selectedBuildingId = null;
+    this.selectedStructureId = null;
+            this.audio.play('switch');
+            this.spawnText(
+              hitSoldier.soldier.worldX,
+              hitSoldier.soldier.worldY - 14,
+              `🎖 ${hitSoldier.soldier.name} (${Math.ceil(hitSoldier.soldier.hp)} HP)`,
+              '#38bdf8'
+            );
+            this._emitHud();
+            return;
+          }
+        }
+
+        const clickedUnit = this._findUnitNearWorld(
+          this.worldMouse.x,
+          this.worldMouse.y,
+          54,
+          (u) => u.faction === 'player'
+        );
+
+        // Verifica se clicou em um Prédio da Base Aliada no mundo 3D
+        const clickedAlliedBuilding = !clickedUnit
+          ? this._findBaseBuildingNearWorld(
+              this.worldMouse.x,
+              this.worldMouse.y,
+              135,
+              (b) => b.team === 'allies' && b.faction === 'player'
+            )
+          : null;
+
+        const clickedStructure =
+          !clickedUnit && !clickedAlliedBuilding
+            ? this.map.findStructureAt(this.worldMouse.x, this.worldMouse.y, 82)
+            : null;
+
+        const currentlySelected = this.units.filter(
+          (u) => u.alive && u.faction === 'player' && u.selected && !u.embarkedInId
+        );
+
+        // SUPORTE TOUCH SCREEN (CELULAR / TABLET):
+        // Se foi um Toque Simples (input.touch.tap) no chão, muro, trincheira ou inimigo COM tropa selecionada, emite a ordem!
+        if (
+          input.mouse.isTouchEvent &&
+          input.touch?.tap &&
+          !clickedUnit &&
+          !clickedAlliedBuilding &&
+          currentlySelected.length > 0
+        ) {
+          this._issueContextualOrderAtWorld(
+            this.worldMouse.x,
+            this.worldMouse.y,
+            currentlySelected,
+            null
+          );
+          return;
+        }
+
+        if (clickedStructure) {
+          this.selectedStructureId = clickedStructure.id;
+          this.selectedBuildingId = null;
+          this.audio.play('switch');
+          this._emitHud();
+          return;
+        }
+
+        if (!additive) {
+          for (const u of this.units) u.selected = false;
+        }
+        if (clickedUnit) {
+          clickedUnit.selected = true;
+          this.selectedBuildingId = null;
+    this.selectedStructureId = null;
+          this.audio.play('switch');
+        } else if (clickedAlliedBuilding) {
+          this.selectedBuildingId = clickedAlliedBuilding.id;
+          this.audio.play('switch');
+          this.spawnText(
+            clickedAlliedBuilding.x,
+            clickedAlliedBuilding.y - 30,
+            `🏭 ${(clickedAlliedBuilding.short || clickedAlliedBuilding.name).toUpperCase()} SELECIONADO`,
+            '#a3be8c'
+          );
+          this._emitHud();
+        } else if (!additive) {
+          this.selectedBuildingId = null;
+    this.selectedStructureId = null;
+        }
+      }
+    }
+
+    // 10. Se um Prédio da Base estiver selecionado (sem tropas selecionadas), Botão Direito define o Ponto de Encontro (Rally Point)
+    const selectedUnits = this.units.filter(
+      (u) => u.alive && u.faction === 'player' && u.selected && !u.embarkedInId
+    );
+    if (selectedUnits.length === 0) {
+      this.orientationPreview = null;
+      this.coverSnapPreview = null;
+      this.hoverPathPreview = null;
+      this.rightOrderStartWorld = null;
+      if (this.selectedBuildingId && input.mouse.rightClicked) {
+        const bld = this.baseBuildings.find(
+          (b) => b.id === this.selectedBuildingId && b.team === 'allies' && b.alive !== false
+        );
+        if (bld) {
+          bld.rallyX = clamp(this.worldMouse.x, 120, BATTLEFIELD_SIZE - 120);
+          bld.rallyY = clamp(this.worldMouse.y, 120, BATTLEFIELD_SIZE - 120);
+          this.audio.play('pickup');
+          this.spawnText(bld.rallyX, bld.rallyY, `🚩 PONTO DE ENCONTRO (${bld.short || 'BASE'})`, '#a3be8c');
+          this._emitHud();
+        }
+      }
+      return;
+    }
+
+    // 10b. Prévia Visual de Encaixe em Muros/Trincheiras + Linha de Trajetória Inteligente (Waypoints contornando objetos)
+    const leadInf = selectedUnits.find((u) => u.spec.type === 'infantry');
+    const leadAny = leadInf || selectedUnits[0];
+    if (leadInf && !this.orientationPreview && !this.activeCommandMode && !this.activeAirStrikeMode) {
+      const threat = this._getThreatOriginFor(this.worldMouse.x, this.worldMouse.y, 'allies');
+      this.coverSnapPreview = this.map.findNearestCoverSnap(
+        this.worldMouse.x,
+        this.worldMouse.y,
+        leadInf.soldiersAlive || 5,
+        threat.x,
+        threat.y,
+        this.trenches,
+        this.fortifiedWalls,
+        this.barricades,
+        95
+      );
+    } else {
+      this.coverSnapPreview = null;
+    }
+
+    if (
+      leadAny &&
+      (input.mouse.rightDown || this.rightOrderStartWorld) &&
+      !this.activeCommandMode &&
+      !this.activeAirStrikeMode &&
+      !this.activeDroneLaunchMode
+    ) {
+      const destX = this.coverSnapPreview ? this.coverSnapPreview.cx : this.worldMouse.x;
+      const destY = this.coverSnapPreview ? this.coverSnapPreview.cy : this.worldMouse.y;
+      this.hoverPathPreview = this.map.computeObstacleDetourPath(
+        leadAny.x,
+        leadAny.y,
+        destX,
+        destY,
+        leadAny.radius || 24,
+        this.fortifiedWalls,
+        this.barricades
+      );
+    } else {
+      this.hoverPathPreview = null;
+    }
+
+    // 11. Clique Direito + Arrastar (ou Toque Longo 0.4s + Arrastar no Mobile): Orientação Direcional de Formação e Ordens Táticas
+    if (input.mouse.rightClicked) {
+      this.rightOrderStartWorld = {
+        x: clamp(this.worldMouse.x, 90, BATTLEFIELD_SIZE - 90),
+        y: clamp(this.worldMouse.y, 90, BATTLEFIELD_SIZE - 90),
+      };
+    }
+
+    if (input.mouse.rightDown && input.mouse.isRightDragging && this.rightOrderStartWorld) {
+      const dx = this.worldMouse.x - this.rightOrderStartWorld.x;
+      const dy = this.worldMouse.y - this.rightOrderStartWorld.y;
+      const facingAngle = Math.hypot(dx, dy) > 8 ? Math.atan2(dy, dx) : 0;
+      const lead = selectedUnits[0];
+      const count = lead.spec.type === 'infantry' ? lead.soldiersAlive || 4 : selectedUnits.length;
+      const points = SquadUnit.computeFormationWorldPreview(
+        this.rightOrderStartWorld.x,
+        this.rightOrderStartWorld.y,
+        facingAngle,
+        lead.formation || 'line',
+        Math.max(3, count),
+        lead.spacingMeters || 3.0
+      );
+      this.orientationPreview = {
+        center: { ...this.rightOrderStartWorld },
+        facingAngle,
+        points,
+      };
+    }
+
+    if (input.mouse.rightReleased || (!input.mouse.rightDown && this.rightOrderStartWorld)) {
+      const startPt = this.rightOrderStartWorld || this.worldMouse;
+      const wx = clamp(startPt.x, 90, BATTLEFIELD_SIZE - 90);
+      const wy = clamp(startPt.y, 90, BATTLEFIELD_SIZE - 90);
+      const draggedAngle = this.orientationPreview ? this.orientationPreview.facingAngle : null;
+
+      this.orientationPreview = null;
+      this.rightOrderStartWorld = null;
+
+      this._issueContextualOrderAtWorld(wx, wy, selectedUnits, draggedAngle);
+    }
+  }
+
+  // Emite Ordem Contextual RTS (usada tanto pelo Clique Direito no PC quanto pelo Toque Simples no Mobile/Tablet)
+  _issueContextualOrderAtWorld(wx, wy, selectedUnits, draggedAngle = null) {
+    const cx = clamp(wx, 90, BATTLEFIELD_SIZE - 90);
+    const cy = clamp(wy, 90, BATTLEFIELD_SIZE - 90);
+
+    // Libera guarnição anterior se as tropas receberem nova ordem fora do prédio
+    for (const u of selectedUnits) {
+      if (u.garrisonedBuildingId) {
+        this._ungarrisonUnit(u);
+      }
+    }
+
+    const surrenderedEnemy = this._findUnitNearWorld(cx, cy, 56, (u) => u.surrendered);
+    if (surrenderedEnemy) {
+      this._openInterrogationFor(surrenderedEnemy);
+      return;
+    }
+
+    // 1. Verifica se clicou/tocou sobre uma Estrutura de Base Inimiga -> Ordem de Demolição de Base
+    const targetEnemyBuilding = this._findBaseBuildingNearWorld(
+      cx,
+      cy,
+      130,
+      (b) =>
+        b.team === 'enemies' &&
+        b.alive !== false &&
+        (this.intelRevealed || this.map.isPositionVisibleToAllies(b.x, b.y))
+    );
+    if (targetEnemyBuilding && draggedAngle === null) {
+      for (const u of selectedUnits) {
+        u.holdPosition = false;
+        u.setAttackBuildingOrder(targetEnemyBuilding);
+      }
+      this.audio.play('reload');
+      this.spawnText(
+        targetEnemyBuilding.x,
+        targetEnemyBuilding.y - 24,
+        `🎯 DEMOLIR ${(targetEnemyBuilding.short || 'BASE INIMIGA').toUpperCase()}`,
+        '#c94a38'
+      );
+      return;
+    }
+
+    // 2. Verifica se clicou/tocou sobre uma Unidade Inimiga -> Ordem de Ataque
+    const targetEnemy = this._findUnitNearWorld(
+      cx,
+      cy,
+      58,
+      (u) =>
+        u.team === 'enemies' &&
+        !u.surrendered &&
+        (this.intelRevealed || this.map.isPositionVisibleToAllies(u.x, u.y))
+    );
+    if (targetEnemy && draggedAngle === null) {
+      for (const u of selectedUnits) {
+        u.holdPosition = false;
+        u.setAttackOrder(targetEnemy);
+      }
+      this.audio.play('reload');
+      this.spawnText(targetEnemy.x, targetEnemy.y, '🎯 ALVO DESIGNADO', '#c94a38');
+      return;
+    }
+
+    // 3. Verifica se clicou/tocou sobre uma Construção Intacta -> Ordem de Guarnição (Garrison)
+    const targetBuilding = this.map.findStructureAt(cx, cy, 76);
+    if (
+      draggedAngle === null &&
+      targetBuilding &&
+      targetBuilding.garrisonable &&
+      (!targetBuilding.garrisonUnitId || targetBuilding.garrisonTeam === 'allies')
+    ) {
+      const infSquad = selectedUnits.find((u) => u.spec.type === 'infantry');
+      if (infSquad) {
+        infSquad.holdPosition = false;
+        infSquad.setGarrisonOrder(targetBuilding);
+        this.audio.play('pickup');
+        this.spawnText(
+          targetBuilding.x,
+          targetBuilding.y,
+          `🏠 OCUPAR ${targetBuilding.name.toUpperCase()}`,
+          '#d4a338'
+        );
+        return;
+      }
+    }
+
+    // 3b. Verifica se clicou/tocou em um Veículo de Transporte de Tropas Aliado -> Ordem de Embarque
+    const infToBoard = selectedUnits.filter((u) => u.spec.type === 'infantry');
+    if (infToBoard.length > 0 && draggedAngle === null) {
+      const targetTransport = this._findUnitNearWorld(
+        cx,
+        cy,
+        62,
+        (u) => u.team === 'allies' && u.spec.isTransport && u.alive
+      );
+      if (targetTransport) {
+        let queued = 0;
+        for (const inf of infToBoard) {
+          if (targetTransport.canBoardSquad(inf, this.units)) {
+            inf.holdPosition = false;
+            const path = this.map.computeObstacleDetourPath(
+              inf.x,
+              inf.y,
+              targetTransport.x,
+              targetTransport.y,
+              inf.radius || 22,
+              this.fortifiedWalls,
+              this.barricades
+            );
+            inf.setBoardTransportOrder(targetTransport, path);
+            queued++;
+          }
+        }
+        if (queued > 0) {
+          this.audio.play('pickup');
+          this.spawnText(targetTransport.x, targetTransport.y - 26, '🚛 EMBARCANDO NO TRANSPORTE', '#4ade80');
+          return;
+        }
+      }
+    }
+
+    // 4. SISTEMA DE ENCAIXE EM MUROS, SACOS DE AREIA, CARCAÇAS E TRINCHEIRAS ("COVER SNAPPING" ESTILO COH)
+    const infSquads = selectedUnits.filter((u) => u.spec.type === 'infantry');
+    if (infSquads.length > 0 && draggedAngle === null) {
+      const threat = this._getThreatOriginFor(cx, cy, 'allies');
+      const snap = this.map.findNearestCoverSnap(
+        cx,
+        cy,
+        infSquads[0].soldiersAlive || 5,
+        threat.x,
+        threat.y,
+        this.trenches,
+        this.fortifiedWalls,
+        this.barricades,
+        95
+      );
+      if (snap) {
+        selectedUnits.forEach((u, idx) => {
+          u.holdPosition = false;
+          if (u.spec.type === 'infantry') {
+            const unitSnap =
+              idx === 0
+                ? snap
+                : this.map.findNearestCoverSnap(
+                    cx + idx * 32,
+                    cy + idx * 24,
+                    u.soldiersAlive || 5,
+                    threat.x,
+                    threat.y,
+                    this.trenches,
+                    this.fortifiedWalls,
+                    this.barricades,
+                    135
+                  ) || snap;
+            const path = this.map.computeObstacleDetourPath(
+              u.x,
+              u.y,
+              unitSnap.cx,
+              unitSnap.cy,
+              u.radius || 22,
+              this.fortifiedWalls,
+              this.barricades
+            );
+            u.setCoverSnapOrder(unitSnap, path);
+          } else {
+            const path = this.map.computeObstacleDetourPath(
+              u.x,
+              u.y,
+              snap.cx - 45,
+              snap.cy,
+              u.radius || 32,
+              this.fortifiedWalls,
+              this.barricades
+            );
+            u.setMoveOrder(snap.cx - 45, snap.cy, null, snap.facingAngle, path);
+          }
+        });
+        this.audio.play('pickup');
+        this.spawnText(snap.cx, snap.cy - 18, `🛡 ${snap.label}`, '#4ade80');
+        return;
+      }
+    }
+
+    // 5. Ordem de Movimento em Formação (com Waypoints contornando obstáculos + orientação direcional)
+    const cols = Math.ceil(Math.sqrt(selectedUnits.length));
+    const spacing = 72;
+    selectedUnits.forEach((u, idx) => {
+      u.holdPosition = false;
+      const row = Math.floor(idx / cols);
+      const col = idx % cols;
+      const ox = (col - (cols - 1) * 0.5) * spacing;
+      const oy = (row - Math.floor((selectedUnits.length - 1) / cols) * 0.5) * spacing;
+      const destX = clamp(cx + ox, 90, BATTLEFIELD_SIZE - 90);
+      const destY = clamp(cy + oy, 90, BATTLEFIELD_SIZE - 90);
+      const path = this.map.computeObstacleDetourPath(
+        u.x,
+        u.y,
+        destX,
+        destY,
+        u.radius || 24,
+        this.fortifiedWalls,
+        this.barricades
+      );
+      u.setMoveOrder(destX, destY, null, draggedAngle, path);
+    });
+    this.audio.play('pickup');
+    this.texts = this.texts.filter((t) => !t.isOrderMarker);
+    this.texts.push(
+      Object.assign(
+        new FloatingText({
+          x: cx,
+          y: cy,
+          text: draggedAngle !== null ? '🧭 POSICIONAR FORMAÇÃO DIRECIONAL' : '▶ MOVER ESQUADRÃO',
+          color: '#7faed9',
+          life: 1.2,
+        }),
+        { isOrderMarker: true }
+      )
+    );
+  }
+
+  getSolidBuildingBoxes() {
+    return this.map?.getSolidBuildingBoxes(this.fortifiedWalls, this.barricades) || [];
+  }
+
+  pushPointOutsideAllBoxes(pos, currentSquad = null, solidBoxes = null) {
+    return this.map?.pushPointOutsideAllBoxes(pos, currentSquad, solidBoxes) || pos;
+  }
+
+  _ungarrisonUnit(unit) {
+    if (!unit.garrisonedBuildingId) return;
+    const st = this.map.structures.find((s) => s.id === unit.garrisonedBuildingId);
+    if (st) {
+      st.garrisonUnitId = null;
+      st.garrisonTeam = null;
+      st.garrisonedSquad = null;
+      unit.x = st.x + (unit.team === 'allies' ? -st.w * 0.68 : st.w * 0.68);
+      unit.y = st.y + st.d * 0.68;
+    }
+    unit.garrisonedBuildingId = null;
+    unit.garrisonedBuilding = null;
+  }
+
+  _getSquadForStructureOrder(st) {
+    const selectedInf = this.units.find(
+      (u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry' && !u.embarkedInId
+    );
+    if (selectedInf) return selectedInf;
+    let best = null;
+    let bestD = Infinity;
+    for (const u of this.units) {
+      if (!u.alive || u.faction !== 'player' || u.spec.type !== 'infantry' || u.embarkedInId || u.garrisonedBuildingId) continue;
+      const d = dist(u.x, u.y, st.x, st.y);
+      if (d < bestD) {
+        bestD = d;
+        best = u;
+      }
+    }
+    return best;
+  }
+
+  structureGarrisonOrder(structureId) {
+    const st = this.map.structures.find((s) => s.id === structureId && !s.destroyed);
+    if (!st || !st.garrisonable) return false;
+    const sq = this._getSquadForStructureOrder(st);
+    if (!sq) {
+      this.notify('SEM INFANTARIA DISPONÍVEL', 'Produza ou selecione um esquadrão de infantaria.', '#c94a38');
+      return false;
+    }
+    if (sq.garrisonedBuildingId) this._ungarrisonUnit(sq);
+    sq.holdPosition = false;
+    sq.setGarrisonOrder(st);
+    this.selectedStructureId = null;
+    this.audio.play('pickup');
+    this.spawnText(st.x, st.y - 20, `🏠 OCUPAR ${st.name.toUpperCase()}`, '#d4a338');
+    this._emitHud();
+    return true;
+  }
+
+  structureExternalCoverOrder(structureId) {
+    const st = this.map.structures.find((s) => s.id === structureId && !s.destroyed);
+    if (!st) return false;
+    const sq = this._getSquadForStructureOrder(st);
+    if (!sq) return false;
+    if (sq.garrisonedBuildingId) this._ungarrisonUnit(sq);
+    const fx = clamp(st.x - (st.w * 0.5 + 32), 90, BATTLEFIELD_SIZE - 90);
+    const fy = clamp(st.y, 90, BATTLEFIELD_SIZE - 90);
+    const path = this.map.buildPathAroundObstacles({ x: sq.x, y: sq.y }, { x: fx, y: fy }, 22, this.fortifiedWalls, this.barricades);
+    sq.setMoveOrder(fx, fy, null, 0, path);
+    this.selectedStructureId = null;
+    this.audio.play('pickup');
+    this.spawnText(fx, fy - 18, '🛡️ COBERTURA EXTERNA', '#4ade80');
+    this._emitHud();
+    return true;
+  }
+
+  structureUngarrisonOrder(structureId) {
+    const st = this.map.structures.find((s) => s.id === structureId);
+    if (!st || !st.garrisonUnitId) return false;
+    const u = this.units.find((un) => un.id === st.garrisonUnitId && un.alive);
+    if (u) this._ungarrisonUnit(u);
+    this.selectedStructureId = null;
+    this.audio.play('door');
+    this._emitHud();
+    return true;
+  }
+
+  structureSelectGarrisonedUnit(structureId) {
+    const st = this.map.structures.find((s) => s.id === structureId);
+    if (!st || !st.garrisonUnitId) return false;
+    const u = this.units.find((un) => un.id === st.garrisonUnitId && un.alive);
+    if (!u) return false;
+    for (const other of this.units) other.selected = false;
+    u.selected = true;
+    this.selectedStructureId = null;
+    this.audio.play('switch');
+    this._emitHud();
+    return true;
+  }
+
+  structureObservationPost(structureId) {
+    const st = this.map.structures.find((s) => s.id === structureId && !s.destroyed);
+    if (!st) return false;
+    st.observationBoosted = !st.observationBoosted;
+    if (st.observationBoosted) {
+      this.map.revealFogAt?.(st.x, st.y, 560);
+      this.spawnText(st.x, st.y - 24, '🔭 POSTO DE OBSERVAÇÃO ATIVO', '#38bdf8');
+    }
+    this.audio.play('star');
+    this._emitHud();
+    return true;
+  }
+
+  structureAssaultWithGrenades(structureId) {
+    const st = this.map.structures.find((s) => s.id === structureId && !s.destroyed);
+    if (!st) return false;
+    const sq = this._getSquadForStructureOrder(st);
+    if (!sq) return false;
+    const fx = clamp(st.x - (st.w * 0.5 + 48), 90, BATTLEFIELD_SIZE - 90);
+    const fy = clamp(st.y, 90, BATTLEFIELD_SIZE - 90);
+    const path = this.map.buildPathAroundObstacles({ x: sq.x, y: sq.y }, { x: fx, y: fy }, 22, this.fortifiedWalls, this.barricades);
+    sq.setMoveOrder(fx, fy, null, 0, path);
+    if (st.garrisonUnitId) {
+      const enemyInside = this.units.find((u) => u.id === st.garrisonUnitId && u.alive);
+      if (enemyInside) sq.setAttackOrder(enemyInside);
+    }
+    if (dist(sq.x, sq.y, st.x, st.y) <= 280) {
+      this.throwGrenadeAt?.(sq, st.x, st.y);
+    }
+    this.selectedStructureId = null;
+    this.audio.play('pickup');
+    this.spawnText(st.x, st.y - 22, '💣 ASSALTAR PRÉDIO!', '#ef4444');
+    this._emitHud();
+    return true;
+  }
+
+  structureDemolishOrder(structureId) {
+    const st = this.map.structures.find((s) => s.id === structureId && !s.destroyed);
+    if (!st) return false;
+    const attackers = this.units.filter(
+      (u) => u.alive && u.faction === 'player' && (u.selected || u.spec.type === 'vehicle' || u.unitType === 'engineers')
+    );
+    const sel = attackers.filter((u) => u.selected);
+    const list = sel.length > 0 ? sel : attackers.slice(0, 2);
+    list.forEach((u) => {
+      const fx = clamp(st.x - (st.w * 0.5 + 85), 90, BATTLEFIELD_SIZE - 90);
+      const fy = clamp(st.y, 90, BATTLEFIELD_SIZE - 90);
+      u.setMoveOrder(fx, fy);
+    });
+    st.hp = Math.max(0, (st.hp ?? 600) - 220);
+    this.spawnExplosionParticles?.(st.x, st.y, 24);
+    this.playSoundAt?.('explosion', st.x, st.y, 0.9);
+    if (st.hp <= 0) {
+      st.destroyed = true;
+      if (st.garrisonUnitId) {
+        const gUnit = this.units.find((u) => u.id === st.garrisonUnitId && u.alive);
+        if (gUnit) {
+          this._ungarrisonUnit(gUnit);
+          gUnit.takeDamage(120, 'allies', this, true, true, st.x, st.y);
+        }
+      }
+      this.spawnText(st.x, st.y - 24, '💥 ESTRUTURA DEMOLIDA!', '#f97316');
+    } else {
+      this.spawnText(st.x, st.y - 24, '💥 DEMOLINDO ESTRUTURA!', '#f97316');
+    }
+    this.selectedStructureId = null;
+    this._emitHud();
+    return true;
+  }
+
+  _findUnitNearWorld(wx, wy, maxDist, predicate) {
+    let best = null;
+    let bestD = maxDist;
+    for (const u of this.units) {
+      if (!u.alive || u.captured || u.embarkedInId) continue;
+      if (predicate && !predicate(u)) continue;
+      const d = dist(wx, wy, u.x, u.y);
+      if (d < bestD) {
+        bestD = d;
+        best = u;
+      }
+    }
+    return best;
+  }
+
+  _findSoldierNearWorld(wx, wy, maxDist = 24) {
+    let bestUnit = null;
+    let bestSoldier = null;
+    let bestD = maxDist;
+
+    for (const u of this.units) {
+      if (!u.alive || u.captured || u.faction !== 'player' || u.spec.type !== 'infantry' || !u.soldiers) {
+        continue;
+      }
+      u.updateSoldierWorldPositions();
+      for (const s of u.soldiers) {
+        if (!s.alive) continue;
+        const d = dist(wx, wy, s.worldX, s.worldY);
+        if (d < bestD) {
+          bestD = d;
+          bestUnit = u;
+          bestSoldier = s;
+        }
+      }
+    }
+
+    return bestUnit && bestSoldier ? { unit: bestUnit, soldier: bestSoldier } : null;
+  }
+
+  capturePrisoner(surrenderedUnit) {
+    try {
+      if (!surrenderedUnit || surrenderedUnit.captured) return false;
+      const powCamp = this.baseBuildings.find(
+        (b) => b.faction === 'player' && b.buildingType === 'pow_camp' && b.alive !== false
+      );
+      if (!powCamp) {
+        this.audio.play('empty');
+        this.notify(
+          '⚠️ CAMPO DE DETENÇÃO NECESSÁRIO!',
+          'Construa um Campo de Detenção & Inteligência na sua Base para capturar Comandantes inimigos!',
+          '#eab308'
+        );
+        return false;
+      }
+
+      const dossier = this._createPrisonerDossier(surrenderedUnit);
+      if (this.powPrisoners.length < 10 && !this.powPrisoners.some((p) => p.id === dossier.id)) {
+        this.powPrisoners.push(dossier);
+      }
+      surrenderedUnit.captured = true;
+      surrenderedUnit.alive = false;
+      surrenderedUnit.selected = false;
+      surrenderedUnit.order = { type: 'hold', targetX: surrenderedUnit.x, targetY: surrenderedUnit.y };
+
+      for (const other of this.units) {
+        if (other.order?.targetUnitId === surrenderedUnit.id) {
+          other.order.type = 'hold';
+          other.order.targetUnitId = null;
+        }
+      }
+
+      this.audio.play('pickup');
+      this.spawnText(surrenderedUnit.x, surrenderedUnit.y - 24, '★ COMANDANTE CAPTURADO!', '#facc15');
+      this.notify(
+        '★ COMANDANTE INIMIGO CAPTURADO!',
+        'Abra o Campo de Prisioneiros na Base para Interrogar e extrair inteligência.',
+        '#a3be8c'
+      );
+      this._emitHud();
+      return true;
+    } catch (err) {
+      console.warn('capturePrisoner error:', err);
+      return false;
+    }
+  }
+
+  _openInterrogationFor(surrenderedUnit) {
+    return this.capturePrisoner(surrenderedUnit);
+  }
+
+  update(realDt) {
+    for (const n of this.notifications) n.life -= realDt;
+    this.notifications = this.notifications.filter((n) => n.life > 0);
+
+    for (const p of this.tacticalPings) p.life -= realDt;
+    this.tacticalPings = this.tacticalPings.filter((p) => p.life > 0);
+
+    if (this.menuActive) {
+      this._updateWreckSmoke(realDt);
+      this._updateParticlesAndTexts(realDt);
+      this.hudSyncTimer -= realDt;
+      if (this.hudSyncTimer <= 0) {
+        this.hudSyncTimer = 0.25;
+        this._emitHud();
+      }
+      return;
+    }
+
+    if (this.paused || this.gameOver) {
+      this._updateParticlesAndTexts(realDt);
+      this.orientationPreview = null;
+      this.rightOrderStartWorld = null;
+      this.selectionBox = null;
+      if (this.audio?.updateContinuousVehiclesAndDrones) {
+        this.audio.updateContinuousVehiclesAndDrones({ paused: true });
+      }
+      this._emitHud();
+      return;
+    }
+
+    // Input da câmera e ordens funcionam mesmo com Pausa Tática (timeScale === 0)
+    this._handleRTSInput(realDt);
+
+    const safeDt = Math.min(realDt, 0.1);
+    const ts = Number.isFinite(this.timeScale) ? this.timeScale : 1.0;
+    const simDt = safeDt * ts;
+    if (simDt > 0) {
+      this.matchStats.elapsedSeconds = (this.matchStats.elapsedSeconds || 0) + simDt;
+      if (this.enemyProductionDebuffTimer > 0) {
+        this.enemyProductionDebuffTimer = Math.max(0, this.enemyProductionDebuffTimer - simDt);
+      }
+      if (this.enemySabotageTimer > 0) {
+        this.enemySabotageTimer = Math.max(0, this.enemySabotageTimer - simDt);
+      }
+      const hasPowCamp = this.baseBuildings.some(
+        (b) => b.faction === 'player' && b.buildingType === 'pow_camp' && b.alive !== false
+      );
+      if (hasPowCamp && this.powPrisoners && this.powPrisoners.length > 0) {
+        this.supplies += this.powPrisoners.length * 5 * simDt;
+      }
+      this._updateWreckSmoke(simDt);
+      this._updateBuildingProduction(simDt);
+      this._updateResearch(simDt);
+      this._updateDrones(simDt);
+      this._updateEconomyAndSectors(simDt);
+      this._updateAirDoctrinesAndAircrafts(simDt);
+      this._updateAICommanders(simDt);
+      this._updateUnitsAndCombat(simDt);
+      this._updateBulletsAndMines(simDt);
+      this.map.updateFogOfWar(
+        this.units,
+        this.baseBuildings.filter((b) => b.alive !== false),
+        simDt
+      );
+      this.map.updateFrontline(this.units, simDt);
+      this._updateParticlesAndTexts(simDt);
+
+      // Heartbeat de Estado Multiplayer (a cada 1.5s pelo Host)
+      if (this.isMultiplayer && this.localSlot === 1 && this.networkManager) {
+        this.mpHeartbeatTimer = (this.mpHeartbeatTimer || 0) - simDt;
+        if (this.mpHeartbeatTimer <= 0) {
+          this.mpHeartbeatTimer = 1.5;
+          this.networkManager.sendStateHeartbeat({
+            sectors: this.map.sectors.map((s) => ({
+              id: s.id,
+              owner: s.owner,
+              captureProgress: Math.round(s.captureProgress || 0),
+            })),
+            units: this.units
+              .filter((u) => u.alive)
+              .slice(0, 40)
+              .map((u) => ({
+                id: u.id,
+                hp: Math.round(u.hp),
+                x: Math.round(u.x),
+                y: Math.round(u.y),
+              })),
+            powCount: this.powPrisoners?.length || 0,
+          });
+        }
+      }
+
+      // Condição de vitória por 100% Pontos de Vitória (1000 PTS)
+      if (!this.gameOver && this.victoryPoints >= 1000) {
+        this._triggerGameOver(
+          'allies',
+          'VITÓRIA TOTAL — FRENTE CONQUISTADA!',
+          'Seu batalhão atingiu 100% dos Pontos de Vitória e dominou o teatro de operações!'
+        );
+      }
+    }
+
+    // Atualiza som contínuo de motores diesel/esteiras e drones conforme distância da câmera
+    if (this.audio?.updateContinuousVehiclesAndDrones) {
+      let movingVehicles = 0;
+      let maxSpeedRatio = 0;
+      let closestVehicleDist = 9999;
+      for (const u of this.units) {
+        if (!u.alive || u.spec.type !== 'vehicle') continue;
+        const spd = Math.hypot(u.vx || 0, u.vy || 0);
+        if (spd > 6) {
+          movingVehicles++;
+          maxSpeedRatio = Math.max(maxSpeedRatio, Math.min(1, spd / (u.spec.speed || 70)));
+          const d = dist(this.camera.x, this.camera.y, u.x, u.y);
+          if (d < closestVehicleDist) closestVehicleDist = d;
+        }
+      }
+      let closestDroneDist = 9999;
+      for (const dr of this.activeDrones) {
+        const d = dist(this.camera.x, this.camera.y, dr.x, dr.y);
+        if (d < closestDroneDist) closestDroneDist = d;
+      }
+      this.audio.updateContinuousVehiclesAndDrones({
+        movingVehicles,
+        maxSpeedRatio,
+        closestVehicleDist,
+        activeDrones: this.activeDrones.length,
+        closestDroneDist,
+        paused: this.timeScale === 0,
+      });
+    }
+
+    this.hudSyncTimer -= realDt;
+    if (this.hudSyncTimer <= 0) {
+      this.hudSyncTimer = 0.08;
+      this._emitHud();
+    }
+  }
+
+  _updateAirDoctrinesAndAircrafts(dt) {
+    for (const key of Object.keys(this.airCooldowns)) {
+      if (this.airCooldowns[key] > 0) {
+        this.airCooldowns[key] = Math.max(0, this.airCooldowns[key] - dt);
+      }
+    }
+
+    for (const ac of this.aircrafts) {
+      ac.life -= dt;
+      ac.x += ac.vx * dt;
+      ac.y += ac.vy * dt;
+
+      if (!ac.payloadDropped && Math.abs(ac.x - ac.targetX) <= 95) {
+        ac.payloadDropped = true;
+        if (ac.type === 'a10_strafe') {
+          // Rajada linear de canhão 30mm GAU-8
+          for (let i = -3; i <= 3; i++) {
+            const sx = ac.targetX + i * 55;
+            const sy = ac.targetY + (Math.random() - 0.5) * 45;
+            this.spawnExplosionParticles(sx, sy, 22);
+            for (const u of this.units) {
+              if (!u.alive || u.captured || u.team === 'allies') continue;
+              if (dist(sx, sy, u.x, u.y) <= 135) {
+                u.takeDamage(68, 'allies', this, true, true, sx, sy);
+              }
+            }
+            for (const bld of this.baseBuildings) {
+              if (bld.alive === false || bld.team === 'allies') continue;
+              if (dist(sx, sy, bld.x, bld.y) <= (bld.radius || 90) + 95) {
+                this.damageBaseBuilding(bld, 75, 'allies');
+              }
+            }
+          }
+          this.playSoundAt('explosion', ac.targetX, ac.targetY, 1.0);
+          this.camera.shake(14, 0.35);
+        } else if (ac.type === 'precision_bomb') {
+          // Bomba guiada de alta penetração (destrói trincheiras, bunkers, tanques e prédios de base)
+          const bx = ac.targetX;
+          const by = ac.targetY;
+          this.spawnExplosionParticles(bx, by, 42);
+          this.playSoundAt('explosion', bx, by, 1.0);
+          this.camera.shake(22, 0.48);
+          for (const u of this.units) {
+            if (!u.alive || u.captured || u.team === 'allies') continue;
+            const d = dist(bx, by, u.x, u.y);
+            if (d <= 220) {
+              u.takeDamage(340 * (1 - d / 260), 'allies', this, true);
+            }
+          }
+          for (const bld of this.baseBuildings) {
+            if (bld.alive === false || bld.team === 'allies') continue;
+            const d = dist(bx, by, bld.x, bld.y);
+            if (d <= (bld.radius || 90) + 190) {
+              this.damageBaseBuilding(bld, 480, 'allies');
+            }
+          }
+          // Destrói trincheiras e minas inimigas no raio da bomba
+          this.trenches = this.trenches.filter(
+            (tr) => tr.team === 'allies' || dist(tr.getCenter().x, tr.getCenter().y, bx, by) > 190
+          );
+          for (const m of this.mines) {
+            if (dist(m.x, m.y, bx, by) <= 210) m.active = false;
+          }
+        }
+      }
+    }
+
+    this.aircrafts = this.aircrafts.filter((a) => a.life > 0);
+  }
+
+  // Fumaça escura subindo continuamente dos caminhões militares queimados e tanques destruídos
+  _updateWreckSmoke(dt) {
+    this.wreckSmokeTimer -= dt;
+    if (this.wreckSmokeTimer > 0) return;
+    this.wreckSmokeTimer = 0.22;
+
+    for (const wrk of this.map.wrecks) {
+      if (!wrk.smoke) continue;
+      const life = 1.4 + Math.random() * 0.9;
+      this.particles.push({
+        x: wrk.x + (Math.random() - 0.5) * 14,
+        y: wrk.y + (Math.random() - 0.5) * 14,
+        z: 10 + Math.random() * 8,
+        vx: 8 + Math.random() * 10,
+        vy: -6 + (Math.random() - 0.5) * 6,
+        vz: 14 + Math.random() * 10,
+        radius: 4.5 + Math.random() * 4,
+        color: Math.random() < 0.25 ? '#3a3530' : '#242220',
+        life,
+        maxLife: life,
+      });
+    }
+
+    // Coluna fina de fumaça preta subindo continuamente das ruínas bombardeadas
+    for (const st of this.map.structures) {
+      if (st.type !== 'ruin' || Math.random() > 0.45) continue;
+      const life = 1.8 + Math.random() * 1.1;
+      this.particles.push({
+        x: st.x + (Math.random() - 0.5) * 22,
+        y: st.y + (Math.random() - 0.5) * 22,
+        z: 14 + Math.random() * 8,
+        vx: 6 + Math.random() * 8,
+        vy: -4 + (Math.random() - 0.5) * 6,
+        vz: 18 + Math.random() * 10,
+        radius: 5.5 + Math.random() * 4.5,
+        color: Math.random() < 0.3 ? '#3b3733' : '#1f1d1b',
+        life,
+        maxLife: life,
+      });
+    }
+  }
+
+  _updateEconomyAndSectors(dt) {
+    // Captura dos 8 Pontos Estratégicos de Suprimento, Munição e Combustível
+    for (const sec of this.map.sectors) {
+      let allyPower = 0;
+      let enemyPower = 0;
+      for (const u of this.units) {
+        if (!u.alive || u.surrendered || u.captured) continue;
+        if (dist(u.x, u.y, sec.x, sec.y) <= sec.radius + 30) {
+          if (u.team === 'allies') allyPower += u.spec.captureRate || 0.45;
+          else if (u.team === 'enemies') enemyPower += u.spec.captureRate || 0.45;
+        }
+      }
+
+      if (allyPower > enemyPower) {
+        const prevOwner = sec.owner;
+        sec.captureProgress = Math.min(100, sec.captureProgress + (allyPower - enemyPower) * 7.5 * dt);
+        if (sec.captureProgress >= 75 && prevOwner !== 'allies') {
+          sec.owner = 'allies';
+          this.victoryPoints += 40;
+          this.addCommandPoints(15, 'Setor Capturado');
+          this.audio.play('pickup');
+          this.notify(
+            `PONTO DE SUPRIMENTO CONQUISTADO!`,
+            `${sec.name} gerando +${sec.supplyBonus} SUP, +${sec.ammoBonus || 0} MUN, +${sec.fuelBonus || 0} COMB.`,
+            '#7faed9'
+          );
+        }
+      } else if (enemyPower > allyPower) {
+        const prevOwner = sec.owner;
+        sec.captureProgress = Math.max(-100, sec.captureProgress - (enemyPower - allyPower) * 7.5 * dt);
+        if (sec.captureProgress <= -75 && prevOwner !== 'enemies') {
+          sec.owner = 'enemies';
+          this.notify('ALERTA DE SETOR!', `O inimigo tomou ${sec.name}!`, '#c94a38');
+        }
+      }
+    }
+
+    // Geração periódica de Suprimentos, Munição e Combustível
+    this.supplyIncomeTimer -= dt;
+    if (this.supplyIncomeTimer <= 0) {
+      this.supplyIncomeTimer = 6.0;
+      let allySup = 24;
+      let allyAmmo = 8;
+      let allyFuel = 6;
+      let enemySup = 24;
+
+      for (const sec of this.map.sectors) {
+        if (sec.owner === 'allies') {
+          allySup += sec.supplyBonus || sec.incomeBonus || 12;
+          allyAmmo += sec.ammoBonus || 0;
+          allyFuel += sec.fuelBonus || 0;
+        } else if (sec.owner === 'enemies') {
+          enemySup += sec.supplyBonus || sec.incomeBonus || 12;
+        }
+      }
+      for (const u of this.units) {
+        if (u.alive && u.spec.supplyBonus) {
+          if (u.team === 'allies') allySup += u.spec.supplyBonus;
+          else enemySup += u.spec.supplyBonus;
+        }
+      }
+      this.supplies += allySup;
+      this.ammo += allyAmmo;
+      this.fuel += allyFuel;
+      this.allyAiSupplies += allySup;
+      const enemyIncomeMult = this.enemyProductionDebuffTimer > 0 ? 0.7 : 1.0;
+      this.enemySupplies.enemy_1 += Math.round(enemySup * enemyIncomeMult);
+      this.enemySupplies.enemy_2 += Math.round(enemySup * enemyIncomeMult);
+    }
+  }
+
+  // IA Inimiga e Aliada com 3 Níveis de Dificuldade (Fácil/Recruta, Médio/Veterano, Difícil/General)
+  _updateAICommanders(dt) {
+    if (this.sandboxAiPaused || this.isMultiplayer) return;
+    this.aiWaveTimer -= dt;
+    this.aiTacticalOrderTimer -= dt;
+
+    const diff = this.aiDifficulty || 'medium';
+    const activeFactions = this.gameMode === '2v2' ? ['ally_ai', 'enemy_1', 'enemy_2'] : ['enemy_1'];
+
+    if (this.aiWaveTimer <= 0) {
+      const baseWave = diff === 'easy' ? 48 : diff === 'hard' ? 28 : 38;
+      const debuffMult = this.enemyProductionDebuffTimer > 0 ? 1.3 : 1.0;
+      this.aiWaveTimer = (baseWave + Math.random() * 6) * debuffMult;
+
+      for (const fac of activeFactions) {
+        const hq = this.map.hqs[fac];
+        const hqBld = this.baseBuildings.find(
+          (b) => b.faction === fac && b.isMainHQ && b.alive !== false
+        );
+        if (!hq || !hqBld) continue;
+
+        const myUnits = this.units.filter((u) => u.alive && !u.surrendered && u.faction === fac);
+        let bank = fac === 'ally_ai' ? this.allyAiSupplies : this.enemySupplies[fac];
+        let aiLvl = this.aiHqLevels[fac] || 1;
+
+        // Evolução automática do QG da IA conforme dificuldade
+        if (diff === 'medium' && aiLvl < 2 && bank >= 650 && this.matchStats.elapsedSeconds > 110) {
+          bank -= 650;
+          aiLvl = 2;
+          this.aiHqLevels[fac] = 2;
+          hqBld.level = 2;
+        } else if (diff === 'hard') {
+          if (aiLvl < 2 && bank >= 550 && this.matchStats.elapsedSeconds > 75) {
+            bank -= 550;
+            aiLvl = 2;
+            this.aiHqLevels[fac] = 2;
+            hqBld.level = 2;
+          } else if (aiLvl < 3 && bank >= 1200 && this.matchStats.elapsedSeconds > 190) {
+            bank -= 1200;
+            aiLvl = 3;
+            this.aiHqLevels[fac] = 3;
+            hqBld.level = 3;
+          }
+        }
+
+        const unitCap = diff === 'easy' ? 5 : diff === 'hard' ? 9 : 7;
+        if (myUnits.length < unitCap && bank >= 180) {
+          let pool = ['rifle_squad', 'assault_squad'];
+          if (diff !== 'easy' && aiLvl >= 2) {
+            pool.push('humvee', 'sniper_squad', 'at_javelin_squad');
+            if (bank >= 650) pool.push('apc_stryker');
+          }
+          if (diff === 'hard' && aiLvl >= 3 && bank >= 1000) {
+            pool.push('mbt_tank', 'rocket_artillery');
+          }
+          const pick = pool[randInt(0, pool.length - 1)];
+          const cost = COMMAND_BY_ID[pick]?.cost || 180;
+          if (bank >= cost) {
+            bank -= cost;
+            if (fac === 'ally_ai') this.allyAiSupplies = bank;
+            else this.enemySupplies[fac] = bank;
+
+            const dir = hq.team === 'allies' ? 0 : Math.PI;
+            const spawnOffset = hq.team === 'allies' ? 140 : -140;
+            const u = this.spawnUnit(
+              fac,
+              pick,
+              hq.x + spawnOffset + randInt(-45, 45),
+              hq.y + randInt(-110, 110),
+              dir
+            );
+            const targetSec =
+              diff === 'easy'
+                ? this.map.sectors[Math.floor(this.map.sectors.length / 2)] || this.map.sectors[0]
+                : this.map.sectors[randInt(0, this.map.sectors.length - 1)];
+            const flankY = diff === 'hard' && Math.random() < 0.45 ? randInt(-360, 360) : randInt(-140, 140);
+            u.setMoveOrder(targetSec.x + randInt(-140, 140), targetSec.y + flankY);
+          }
+        }
+
+        // Médio/Difícil: planta minas ocasionais perto de setores controlados
+        if (diff !== 'easy' && this.mines.length < 48 && Math.random() < (diff === 'hard' ? 0.5 : 0.25)) {
+          const owned = this.map.sectors.find((s) => s.owner === hq.team);
+          if (owned) {
+            this.mines.push(new Landmine(owned.x + randInt(-180, 180), owned.y + randInt(-180, 180), hq.team));
+          }
+        }
+
+        // Difícil: lança Drone UAV inimigo se QG Nv. 3 após partida avançada
+        if (diff === 'hard' && aiLvl >= 3 && Math.random() < 0.3 && this.activeDrones.length < 4) {
+          this.activeDrones.push({
+            id: `drn_ai_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+            type: 'uav_recon',
+            x: hq.x,
+            y: hq.y,
+            z: 115,
+            targetX: 2400 + randInt(-600, 1400),
+            targetY: 4800 + randInt(-1800, 1800),
+            angle: Math.PI,
+            speed: 250,
+            life: 25,
+            orbitPhase: 0,
+            alive: true,
+          });
+        }
+      }
+    }
+
+    if (this.aiTacticalOrderTimer <= 0) {
+      this.aiTacticalOrderTimer = diff === 'hard' ? 4.5 : 6.0;
+      for (const fac of activeFactions) {
+        const myUnits = this.units.filter((u) => u.alive && !u.surrendered && u.faction === fac);
+        for (const u of myUnits) {
+          if (u.spec.speed <= 0 || u.inTrench || u.garrisonedBuildingId || u.holdPosition) continue;
+          if (u.order.type === 'hold') {
+            if (diff === 'easy') {
+              // Recruta: avança em linha reta sem usar cobertura
+              const targetSec = this.map.sectors[randInt(0, this.map.sectors.length - 1)];
+              u.setMoveOrder(targetSec.x + randInt(-100, 100), targetSec.y + randInt(-100, 100));
+              continue;
+            }
+            // Difícil: ocupa casas nos vilarejos se estiverem livres
+            if (diff === 'hard' && u.spec.type === 'infantry' && Math.random() < 0.35) {
+              const freeBld = this.map.structures.find(
+                (st) => st.garrisonable && !st.garrisonUnitId && dist(u.x, u.y, st.x, st.y) < 620
+              );
+              if (freeBld) {
+                u.setGarrisonOrder(freeBld);
+                continue;
+              }
+            }
+            const freeTrench = this.trenches.find(
+              (tr) =>
+                tr.team === u.team &&
+                dist(u.x, u.y, tr.getCenter().x, tr.getCenter().y) < 420 &&
+                !this.units.some((other) => other.alive && other.inTrenchId === tr.id)
+            );
+            if (freeTrench && u.spec.type === 'infantry' && Math.random() < 0.45) {
+              const c = freeTrench.getCenter();
+              u.setMoveOrder(c.x, c.y, freeTrench.id);
+            } else {
+              const targetSec =
+                this.map.sectors.find((s) => s.owner !== u.team) ||
+                this.map.sectors[randInt(0, this.map.sectors.length - 1)];
+              u.setMoveOrder(targetSec.x + randInt(-140, 140), targetSec.y + randInt(-140, 140));
+            }
+          }
+        }
+      }
+    }
+  }
+
+  _updateUnitsAndCombat(dt) {
+    this._frameSolidBoxes = this.getSolidBuildingBoxes();
+    this.vehicleExhaustTimer -= dt;
+    const emitVehicleExhaust = this.vehicleExhaustTimer <= 0;
+    if (emitVehicleExhaust) this.vehicleExhaustTimer = 0.14;
+
+    for (const u of this.units) {
+      if (!u.alive || u.captured) continue;
+      try {
+        u.sanitizePosition?.();
+
+      if (u.muzzleFlashTimer > 0) u.muzzleFlashTimer -= dt;
+      if (u.recoilTimer > 0) u.recoilTimer = Math.max(0, u.recoilTimer - dt);
+      if (u.rampOpenTimer > 0) u.rampOpenTimer = Math.max(0, u.rampOpenTimer - dt);
+      if (u.fireCooldown > 0) u.fireCooldown -= dt;
+      if (u.reloadTimer > 0) u.reloadTimer -= dt;
+      if (u.grenadeCooldown > 0) u.grenadeCooldown -= dt;
+      if (u.grenadeAbilityCooldown > 0) u.grenadeAbilityCooldown = Math.max(0, u.grenadeAbilityCooldown - dt);
+      if (u.suppressionCooldown > 0) u.suppressionCooldown = Math.max(0, u.suppressionCooldown - dt);
+      if (u.medkitCooldown > 0) u.medkitCooldown = Math.max(0, u.medkitCooldown - dt);
+      if (u.suppressedTimer > 0) u.suppressedTimer = Math.max(0, u.suppressedTimer - dt);
+      if (u.ambushRevealTimer > 0) u.ambushRevealTimer = Math.max(0, u.ambushRevealTimer - dt);
+      const forestZone = this.map.getForestZoneAt?.(u.x, u.y) || null;
+      if (u.spec.type === 'infantry' && !u.garrisonedBuildingId) {
+        u.inForestStealth = Boolean(forestZone);
+        u.camouflagedInForest = Boolean(forestZone && (u.ambushRevealTimer || 0) <= 0);
+      } else {
+        u.inForestStealth = false;
+        u.camouflagedInForest = false;
+      }
+      if (u.suppressionActiveTimer > 0) {
+        u.suppressionActiveTimer = Math.max(0, u.suppressionActiveTimer - dt);
+        if (u.suppressionActiveTimer <= 0) u.suppressionMode = false;
+      }
+      if (u.medkitHealTimer > 0) {
+        u.medkitHealTimer = Math.max(0, u.medkitHealTimer - dt);
+        if (u.spec.type === 'infantry' && u.soldiers) {
+          for (const s of u.soldiers) {
+            if (s.alive && s.hp < s.maxHp) s.hp = Math.min(s.maxHp, s.hp + 9 * dt);
+          }
+          u.syncSquadHealthFromSoldiers?.();
+        }
+        if (Math.random() < dt * 2.5) {
+          this.spawnText(u.x + (Math.random() - 0.5) * 20, u.y - 12, '✚', '#4ade80');
+        }
+      }
+
+      // Se o esquadrão estiver embarcado dentro de um Veículo de Transporte, acompanha o veículo e desativa colisão física
+      if (u.embarkedInId) {
+        const carrier = this.units.find((c) => c.id === u.embarkedInId && c.alive);
+        if (carrier) {
+          u.x = carrier.x;
+          u.y = carrier.y;
+          u.vx = 0;
+          u.vy = 0;
+          u.angle = carrier.angle;
+          if (u.soldiers) {
+            for (const s of u.soldiers) {
+              s.worldX = -9999;
+              s.worldY = -9999;
+            }
+          }
+          continue;
+        } else {
+          u.embarkedInId = null;
+        }
+      }
+
+      // 1. Atualiza status de Trincheira e Cobertura Direcional (Escudo Verde = Pesada +75% / Escudo Amarelo = Leve)
+      let insideTrench = null;
+      for (const tr of this.trenches) {
+        if (tr.containsPoint(u.x, u.y, 14)) {
+          insideTrench = tr;
+          break;
+        }
+      }
+      u.inTrench = Boolean(insideTrench && u.spec.type === 'infantry' && !u.garrisonedBuildingId);
+      u.inTrenchId = u.inTrench ? insideTrench.id : null;
+      u.inTreelineCover =
+        !u.inTrench && !u.garrisonedBuildingId && this.map.hasTreelineCover(u.x, u.y);
+
+      if (!u.inTrench && !u.garrisonedBuildingId) {
+        const cov = this.map.evaluateCoverAt(u.x, u.y, this.barricades, this.fortifiedWalls);
+        const isSnapped =
+          Boolean(u.coverSnap) && dist(u.x, u.y, u.coverSnap.cx, u.coverSnap.cy) <= 38;
+        const inBush = u.spec.type === 'infantry' && this.map.hasBushCover(u.x, u.y);
+        u.snappedToCover = isSnapped;
+        u.inHeavyCover =
+          cov.type === 'heavy' || (isSnapped && u.coverSnap.coverType === 'heavy');
+        u.inLightCover =
+          cov.type === 'light' || (isSnapped && u.coverSnap.coverType === 'light') || inBush;
+        u.camouflagedInBush = inBush && Math.hypot(u.vx, u.vy) < 4;
+        u.crouchedInCover =
+          u.spec.type === 'infantry' && (u.inHeavyCover || u.inLightCover || isSnapped);
+      } else {
+        u.camouflagedInBush = false;
+        u.snappedToCover = Boolean(u.inTrench && u.coverSnap);
+        u.inHeavyCover = false;
+        u.inLightCover = false;
+        u.crouchedInCover = Boolean(u.inTrench && u.spec.type === 'infantry');
+      }
+
+      if (u.surrendered) {
+        if (u.order?.type === 'escort_pow') {
+          const dx = u.order.targetX - u.x;
+          const dy = u.order.targetY - u.y;
+          const dCamp = Math.hypot(dx, dy);
+          if (dCamp <= 165) {
+            this._openInterrogationFor(u);
+            return;
+          }
+          const ang = Math.atan2(dy, dx);
+          const step = 68 * dt;
+          u.vx = Math.cos(ang) * 68;
+          u.vy = Math.sin(ang) * 68;
+          u.angle = ang;
+          const res = this.map.resolveObstacleCollision(
+            u.x + Math.cos(ang) * step,
+            u.y + Math.sin(ang) * step,
+            u.radius,
+            null,
+            this.fortifiedWalls
+          );
+          u.x = res.x;
+          u.y = res.y;
+        } else {
+          u.vx = 0;
+          u.vy = 0;
+          if (u.spec.type === 'infantry') u.stepAutonomousSoldiers?.(dt);
+        }
+        continue;
+      }
+
+      if (u.team === 'allies') {
+        const nearSurrendered = this._findUnitNearWorld(
+          u.x,
+          u.y,
+          58,
+          (other) => other.team === 'enemies' && other.surrendered && !other.captured
+        );
+        if (nearSurrendered && !this.paused) {
+          this._openInterrogationFor(nearSurrendered);
+          return;
+        }
+      }
+
+      // Verifica embarque no Veículo de Transporte de Tropas (Raio 5.5m = 55u)
+      if (u.transportGraceTimer > 0) {
+        u.transportGraceTimer = Math.max(0, u.transportGraceTimer - dt);
+      }
+      if (u.order.type === 'board_transport' && u.order.targetTransportId) {
+        const tr = this.units.find((c) => c.id === u.order.targetTransportId && c.alive && c.spec.isTransport);
+        if (!tr || !tr.canBoardSquad(u, this.units)) {
+          u.order.type = 'hold';
+        } else {
+          const rearX = tr.x - Math.cos(tr.angle) * 32;
+          const rearY = tr.y - Math.sin(tr.angle) * 32;
+          u.order.targetX = rearX;
+          u.order.targetY = rearY;
+          const centerDist = dist(u.x, u.y, tr.x, tr.y);
+          const anySoldierClose =
+            u.soldiers &&
+            u.soldiers.some((s) => s.alive && dist(s.worldX, s.worldY, tr.x, tr.y) <= 58);
+
+          if (centerDist <= 68 || anySoldierClose) {
+            u.embarkedInId = tr.id;
+            u.selected = false;
+            u.vx = 0;
+            u.vy = 0;
+            u.waypoints = [];
+            u.order.type = 'hold';
+            tr.cargoSquadIds.push(u.id);
+            tr.rampOpenTimer = 1.4;
+            this.audio.play('embark');
+            this.spawnText(tr.x, tr.y - 22, `🪖 +${u.soldiersAlive} EMBARCADO(S)`, '#4ade80');
+            continue;
+          } else if (centerDist > 110 && tr.order.type === 'hold') {
+            // Se o caminhão estiver parado, aproxima-se suavemente do esquadrão para facilitar o embarque
+            const approachAng = Math.atan2(u.y - tr.y, u.x - tr.x);
+            const stepX = tr.x + Math.cos(approachAng) * tr.spec.speed * 0.45 * dt;
+            const stepY = tr.y + Math.sin(approachAng) * tr.spec.speed * 0.45 * dt;
+            const resTr = this.map.resolveObstacleCollision(stepX, stepY, tr.radius, null, this.fortifiedWalls);
+            tr.x = resTr.x;
+            tr.y = resTr.y;
+          }
+        }
+      }
+
+      // Verifica entrada em Construção (Guarnição / Garrison)
+      if (u.order.type === 'garrison_building' && u.order.targetBuildingId) {
+        const bld = this.map.structures.find((s) => s.id === u.order.targetBuildingId);
+        const enterDist = bld
+          ? Math.max(85, Math.max(bld.w || 80, bld.d || 80) * 0.55 + 42)
+          : 85;
+        if (bld && dist(u.x, u.y, bld.x, bld.y) <= enterDist) {
+          if (!bld.garrisonUnitId || bld.garrisonUnitId === u.id) {
+            bld.garrisonUnitId = u.id;
+            bld.garrisonTeam = u.team;
+            bld.garrisonedSquad = u;
+            u.garrisonedBuildingId = bld.id;
+            u.garrisonedBuilding = bld;
+            u.x = bld.x;
+            u.y = bld.y;
+            u.vx = 0;
+            u.vy = 0;
+            u.order.type = 'hold';
+            this.audio.play('door');
+            this.spawnText(bld.x, bld.y - 18, '🏠 GUARNECIDO (+70% DEFESA)', '#d4a338');
+          } else {
+            u.order.type = 'hold';
+          }
+        }
+      }
+
+      // 2. Aquisição de Alvo (Unidades Inimigas ou Prédios de Base Inimiga)
+      let targetEnemy = null;
+      let targetEnemyBuilding = null;
+
+      if (u.order.type === 'attack_building' && u.order.targetBuildingId) {
+        const bld = this.baseBuildings.find(
+          (b) => b.id === u.order.targetBuildingId && b.alive !== false && b.team !== u.team
+        );
+        if (bld) {
+          targetEnemyBuilding = bld;
+          if (!u.holdPosition) {
+            u.order.targetX = bld.x;
+            u.order.targetY = bld.y;
+          }
+        } else {
+          u.order.type = 'hold';
+        }
+      } else if (u.order.type === 'attack_unit' && u.order.targetUnitId) {
+        const explicit = this.units.find((e) => e.id === u.order.targetUnitId);
+        const visibleOk =
+          u.team !== 'allies' ||
+          this.intelRevealed ||
+          this.map.isPositionVisibleToAllies(explicit?.x || 0, explicit?.y || 0);
+        if (explicit && explicit.alive && !explicit.captured && !explicit.surrendered && visibleOk) {
+          targetEnemy = explicit;
+          if (!u.holdPosition) {
+            u.order.targetX = explicit.x;
+            u.order.targetY = explicit.y;
+          }
+        } else {
+          u.order.type = 'hold';
+        }
+      }
+
+      const effectiveRange = u.garrisonedBuildingId ? u.spec.range * 1.25 : u.spec.range;
+      u.aimSwitchCooldown = Math.max(0, (u.aimSwitchCooldown || 0) - dt);
+      if (!targetEnemy && !targetEnemyBuilding && u.tacticalOrderMode !== 'MARCH') {
+        if (u.lastTargetId && u.aimSwitchCooldown > 0) {
+          const locked = this.units.find(
+            (e) =>
+              e.id === u.lastTargetId &&
+              e.alive &&
+              !e.captured &&
+              !e.surrendered &&
+              e.team !== u.team &&
+              dist(u.x, u.y, e.x, e.y) <= effectiveRange
+          );
+          if (locked) targetEnemy = locked;
+        }
+        if (!targetEnemy) {
+          targetEnemy = this._findUnitNearWorld(
+            u.x,
+            u.y,
+            effectiveRange,
+            (e) =>
+              e.team !== u.team &&
+              !e.surrendered &&
+              (!e.camouflagedInForest || dist(u.x, u.y, e.x, e.y) <= 80) &&
+              (!e.camouflagedInBush || dist(u.x, u.y, e.x, e.y) <= effectiveRange * 0.55) &&
+              (u.team !== 'allies' ||
+                this.intelRevealed ||
+                this.map.isPositionVisibleToAllies(e.x, e.y))
+          );
+          if (targetEnemy) {
+            u.lastTargetId = targetEnemy.id;
+            u.aimSwitchCooldown = 0.5;
+          }
+        }
+      }
+
+      if (!targetEnemy && !targetEnemyBuilding) {
+        targetEnemyBuilding = this._findBaseBuildingNearWorld(
+          u.x,
+          u.y,
+          effectiveRange + 60,
+          (b) =>
+            b.team !== u.team &&
+            b.alive !== false &&
+            (u.team !== 'allies' ||
+              this.intelRevealed ||
+              this.map.isPositionVisibleToAllies(b.x, b.y))
+        );
+      }
+
+      const activeTarget = u.order.type === 'rtb' ? null : targetEnemy || targetEnemyBuilding;
+      u.activeCombatTarget = activeTarget ? { x: activeTarget.x, y: activeTarget.y } : null;
+
+      // 2b. Chegada de RTB / Recuo à Base e Reparo/Cura Automática (+15 HP/s veículos, +12 HP/s infantaria)
+      if (u.order.type === 'rtb' && dist(u.x, u.y, u.order.targetX, u.order.targetY) <= 75) {
+        u.order.type = 'hold';
+        u.retreating = false;
+        u.waypoints = [];
+      }
+
+      if (u.team === 'allies') {
+        const nearRepairBase = this.baseBuildings.find(
+          (b) =>
+            b.team === 'allies' &&
+            b.alive !== false &&
+            (b.isMainHQ || b.buildingType === 'motor_pool') &&
+            dist(u.x, u.y, b.x, b.y) <= 220
+        );
+        if (nearRepairBase) {
+          if (u.spec.type === 'vehicle' && u.hp < u.maxHp) {
+            u.hp = Math.min(u.maxHp, u.hp + 15 * dt);
+            if (Math.random() < dt * 3.5 && this.renderer?.vfx) {
+              const gy = getTerrainHeight(u.x, u.y, this.map);
+              this.renderer.vfx.spawnImpact(u.x + (Math.random() - 0.5) * 18, gy + 10, u.y + (Math.random() - 0.5) * 18, true);
+            }
+          } else if (u.spec.type === 'infantry' && u.soldiers) {
+            let healedAny = false;
+            for (const s of u.soldiers) {
+              if (s.alive && s.hp < s.maxHp) {
+                s.hp = Math.min(s.maxHp, s.hp + 12 * dt);
+                healedAny = true;
+              }
+            }
+            if (healedAny) u.syncSquadHealthFromSoldiers?.();
+          }
+        }
+      }
+
+      // 2c. Pane Mecânica (<= 30% HP): fumaça preta + faíscas laranjas e bloqueio de movimento
+      if (u.spec.type === 'vehicle' && u.isBrokenDown) {
+        u.vx = 0;
+        u.vy = 0;
+        if (Math.random() < dt * 7) {
+          this.particles.push({
+            x: u.x + Math.cos(u.angle) * (u.radius * 0.4) + (Math.random() - 0.5) * 10,
+            y: u.y + Math.sin(u.angle) * (u.radius * 0.4) + (Math.random() - 0.5) * 10,
+            z: 10 + Math.random() * 4,
+            vx: (Math.random() - 0.5) * 12,
+            vy: (Math.random() - 0.5) * 12,
+            vz: 14 + Math.random() * 10,
+            radius: 4.5 + Math.random() * 3.5,
+            color: Math.random() < 0.25 ? '#f97316' : '#1f211e',
+            life: 0.75,
+            maxLife: 0.75,
+          });
+        }
+      }
+
+      // 2d. Reparo em Campo pelos Engenheiros (<= 6m / 90u de veículo danificado -> +40 HP/s grátis)
+      if (u.spec.type === 'infantry' && (u.spec.id === 'engineers' || u.spec.canBuild)) {
+        const injuredVeh = this.units.find(
+          (v) =>
+            v.alive &&
+            v.team === u.team &&
+            v.spec.type === 'vehicle' &&
+            v.hp > 0 &&
+            v.hp < v.maxHp &&
+            dist(u.x, u.y, v.x, v.y) <= 92
+        );
+        if (injuredVeh) {
+          injuredVeh.beingRepaired = true;
+          injuredVeh.hp = Math.min(injuredVeh.maxHp, injuredVeh.hp + 40 * dt);
+          injuredVeh.repairProgress = injuredVeh.hp / Math.max(1, injuredVeh.maxHp);
+          u.angle = Math.atan2(injuredVeh.y - u.y, injuredVeh.x - u.x);
+          if (Math.random() < dt * 10) {
+            this.particles.push({
+              x: injuredVeh.x + (Math.random() - 0.5) * 18,
+              y: injuredVeh.y + (Math.random() - 0.5) * 18,
+              z: 10 + Math.random() * 6,
+              vx: (Math.random() - 0.5) * 32,
+              vy: (Math.random() - 0.5) * 32,
+              vz: 18 + Math.random() * 14,
+              radius: 2.2 + Math.random() * 1.4,
+              color: Math.random() < 0.5 ? '#38bdf8' : '#e0f2fe',
+              life: 0.28,
+              maxLife: 0.28,
+            });
+          }
+          if (injuredVeh.isBrokenDown && injuredVeh.hp > injuredVeh.maxHp * 0.5) {
+            injuredVeh.isBrokenDown = false;
+            this.spawnText(injuredVeh.x, injuredVeh.y - 24, '🔧 MOTOR CONSERTADO!', '#4ade80');
+            this.audio.play('reload');
+          }
+        }
+      }
+
+      // 3. Movimento com Waypoints + Desvio Inteligente de Obstáculos (Steering & Avoidance Pathfinding)
+      const wantsMove =
+        !u.garrisonedBuildingId &&
+        !u.holdPosition &&
+        !u.isBrokenDown &&
+        u.spec.speed > 0 &&
+        (u.order.type === 'move' ||
+          u.order.type === 'rtb' ||
+          u.order.type === 'occupy_trench' ||
+          u.order.type === 'garrison_building' ||
+          u.order.type === 'board_transport' ||
+          ((u.order.type === 'attack_unit' || u.order.type === 'attack_building') &&
+            activeTarget &&
+            dist(u.x, u.y, activeTarget.x, activeTarget.y) > effectiveRange * 0.84));
+
+      if (wantsMove) {
+        // Avança pelos waypoints intermediários (sem nunca cancelar por stuckTimer)
+        while (
+          u.waypoints &&
+          u.waypoints.length > 0 &&
+          dist(u.x, u.y, u.waypoints[0].x, u.waypoints[0].y) < 18
+        ) {
+          u.waypoints.shift();
+        }
+        const finalDest = u.finalDestination || { x: u.order.targetX, y: u.order.targetY };
+        const hasWaypoints = Boolean(u.waypoints && u.waypoints.length > 0);
+        const activeDestX = hasWaypoints ? u.waypoints[0].x : finalDest.x;
+        const activeDestY = hasWaypoints ? u.waypoints[0].y : finalDest.y;
+        const dx = activeDestX - u.x;
+        const dy = activeDestY - u.y;
+        const d = Math.hypot(dx, dy);
+        const dFinal = Math.hypot(finalDest.x - u.x, finalDest.y - u.y);
+        if (hasWaypoints || dFinal > 12) {
+          let spd = u.spec.speed;
+          if (u.retreating) spd *= 1.35;
+          if (u.tacticalOrderMode === 'MARCH') spd *= 1.18;
+          if (u.suppressedTimer > 0) spd *= 0.4; // Suprimido: mantém no mínimo 40% da velocidade para recuar/mover
+          if (u.spec.type === 'vehicle' && forestZone) spd *= 0.7; // Veículos pesados 30% mais lentos em floresta densa
+          if (u.faction === 'player') {
+            if (u.spec.type === 'infantry' && this.completedTechs.has('forced_march')) spd *= 1.2;
+            if (u.spec.type === 'vehicle' && this.completedTechs.has('turbo_diesel')) spd *= 1.25;
+          }
+
+          // Barricadas de Dentes de Dragão bloqueiam/reduzem velocidade de veículos
+          if (
+            u.spec.type === 'vehicle' &&
+            this.barricades.some((b) => b.containsPoint(u.x, u.y, 26))
+          ) {
+            spd *= 0.22;
+          }
+
+          // Arame Farpado: Veículos esmagam; Infantaria inimiga reduz velocidade em 80% e sofre sangramento
+          for (const wire of this.barbedWires) {
+            if (!wire.active) continue;
+            if (wire.containsPoint(u.x, u.y, u.radius + 4)) {
+              if (u.spec.type === 'vehicle') {
+                wire.active = false;
+                this.spawnText(u.x, u.y, '⛓ ARAME FARPADO ESMAGADO!', '#9a9484');
+              } else if (u.team !== wire.team) {
+                spd *= 0.2; // Reduz velocidade em 80%
+                u.takeDamage(4.5 * dt, wire.team, this, false);
+              } else {
+                spd *= 0.65;
+              }
+            }
+          }
+
+          const ignoreBldId =
+            u.order.type === 'garrison_building' ? u.order.targetBuildingId : u.garrisonedBuildingId;
+
+          // Calcula vetor de Steering e Desvio Suave ao redor de casas, muros, árvores e carcaças
+          const steered = this.map.computeSteeringVelocity(
+            u.x,
+            u.y,
+            activeDestX,
+            activeDestY,
+            spd,
+            u.radius,
+            ignoreBldId,
+            this.fortifiedWalls
+          );
+
+          u.vx = Number.isFinite(steered.vx) ? steered.vx : 0;
+          u.vy = Number.isFinite(steered.vy) ? steered.vy : 0;
+
+          const nextX = clamp(u.x + u.vx * dt, 70, BATTLEFIELD_SIZE - 70);
+          const nextY = clamp(u.y + u.vy * dt, 70, BATTLEFIELD_SIZE - 70);
+
+          const resolved = this.map.resolveObstacleCollision(
+            nextX,
+            nextY,
+            u.radius,
+            ignoreBldId,
+            this.fortifiedWalls
+          );
+          if (Number.isFinite(resolved.x)) u.x = clamp(resolved.x, 70, BATTLEFIELD_SIZE - 70);
+          if (Number.isFinite(resolved.y)) u.y = clamp(resolved.y, 70, BATTLEFIELD_SIZE - 70);
+
+          // Giro suave do chassi para veículos blindados
+          if (u.spec.type === 'vehicle') {
+            let diff = steered.angle - u.angle;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            u.angle += diff * Math.min(1, dt * 5.2);
+          } else {
+            u.angle = steered.angle;
+          }
+          u.walkPhase += dt * 7.8;
+          if (u.spec.type === 'infantry') u.stepAutonomousSoldiers?.(dt);
+
+          // Fumaça de escapamento e poeira das rodas/esteiras para veículos em movimento
+          if (emitVehicleExhaust && u.spec.type === 'vehicle') {
+            const backX = u.x - Math.cos(u.angle) * (u.radius * 0.85);
+            const backY = u.y - Math.sin(u.angle) * (u.radius * 0.85);
+            this.particles.push({
+              x: backX + (Math.random() - 0.5) * 6,
+              y: backY + (Math.random() - 0.5) * 6,
+              z: 6 + Math.random() * 4,
+              vx: -Math.cos(u.angle) * 18 + (Math.random() - 0.5) * 8,
+              vy: -Math.sin(u.angle) * 18 + (Math.random() - 0.5) * 8,
+              vz: 10 + Math.random() * 6,
+              radius: 2.8 + Math.random() * 2.2,
+              color: '#47433e',
+              life: 0.55,
+              maxLife: 0.55,
+            });
+            this.particles.push({
+              x: backX + (Math.random() - 0.5) * 20,
+              y: backY + (Math.random() - 0.5) * 20,
+              z: 2 + Math.random() * 3,
+              vx: -Math.cos(u.angle) * 10 + (Math.random() - 0.5) * 10,
+              vy: -Math.sin(u.angle) * 10 + (Math.random() - 0.5) * 10,
+              vz: 4 + Math.random() * 4,
+              radius: 4.5 + Math.random() * 3.0,
+              color: '#8c7d65',
+              life: 0.65,
+              maxLife: 0.65,
+            });
+          }
+        } else {
+          u.vx = 0;
+          u.vy = 0;
+          u.wallStuckTimer = 0;
+          if (u.spec.type === 'infantry') u.stepAutonomousSoldiers?.(dt);
+          if (u.facingAngle !== null && u.facingAngle !== undefined) {
+            u.angle = u.facingAngle;
+          }
+          if (u.order.type === 'move' || u.order.type === 'occupy_trench') {
+            u.order.type = 'hold';
+            if (u.tacticalOrderMode === 'DEFEND') {
+              u.holdPosition = true;
+              u.tacticalTargetLabel = 'Defendendo Posição';
+              u.tacticalOrderMode = null;
+            } else {
+              u.tacticalOrderMode = null;
+              u.tacticalTargetLabel = null;
+            }
+          }
+        }
+      } else {
+        u.vx = 0;
+        u.vy = 0;
+      }
+
+      // Separação esférica suave entre esquadrões (pula parados, passageiros embarcados e transporte alvo)
+      const isMovingNow = Math.hypot(u.vx || 0, u.vy || 0) > 2;
+      if (isMovingNow && u.spec.speed > 0 && !u.garrisonedBuildingId && !u.holdPosition && !u.embarkedInId) {
+        for (const other of this.units) {
+          if (other.id === u.id || !other.alive || other.captured || other.garrisonedBuildingId || other.embarkedInId) continue;
+          if (u.order.type === 'board_transport' && u.order.targetTransportId === other.id) continue;
+          if (other.order.type === 'board_transport' && other.order.targetTransportId === u.id) continue;
+          if (u.transportGraceTimer > 0 && other.spec.isTransport) continue;
+          if (other.transportGraceTimer > 0 && u.spec.isTransport) continue;
+
+          const minSep = (u.radius + other.radius) * 0.78;
+          const dx = u.x - other.x;
+          const dy = u.y - other.y;
+          const d = Math.hypot(dx, dy);
+          if (d < 0.0001) continue;
+          if (d < minSep) {
+            const push = (minSep - d) * 0.35;
+            u.x = clamp(u.x + (dx / d) * push, 70, BATTLEFIELD_SIZE - 70);
+            u.y = clamp(u.y + (dy / d) * push, 70, BATTLEFIELD_SIZE - 70);
+          }
+        }
+      }
+
+      // Trava Física Final AABB no centro do esquadrão E em cada soldado individual (impede atravessar casas/muros)
+      if (!u.garrisonedBuildingId && !u.embarkedInId && this.map?.pushPointOutsideAllBoxes) {
+        const solidBoxes = this._frameSolidBoxes || (this._frameSolidBoxes = this.getSolidBuildingBoxes());
+        const centerPos = { x: u.x, z: u.y };
+        this.map.pushPointOutsideAllBoxes(centerPos, u, solidBoxes);
+        u.x = centerPos.x;
+        u.y = centerPos.z;
+        if (u.spec.type === 'infantry' && Array.isArray(u.soldiers)) {
+          for (const s of u.soldiers) {
+            if (!s.alive) continue;
+            const sPos = { x: s.worldX, z: s.worldY };
+            this.map.pushPointOutsideAllBoxes(sPos, u, solidBoxes);
+            s.worldX = sPos.x;
+            s.worldY = sPos.z;
+          }
+        }
+      }
+
+      // 4. Combate Cadenciado com Rajadas e Pausas de Recarga (contra Tropas ou Prédios de Base Inimiga)
+      if (activeTarget && u.damage !== 0) {
+        const targetRadius = targetEnemyBuilding ? targetEnemyBuilding.radius || 90 : 0;
+        const dToTarget = dist(u.x, u.y, activeTarget.x, activeTarget.y);
+        if (dToTarget <= effectiveRange + targetRadius) {
+          const aimAngle = Math.atan2(activeTarget.y - u.y, activeTarget.x - u.x);
+          u.turretAngle = aimAngle;
+          u.aimAngle = aimAngle;
+          if (Math.hypot(u.vx, u.vy) < 4) {
+            let diff = aimAngle - u.angle;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            u.angle += diff * Math.min(1, dt * 6);
+          }
+
+          // Bloqueio de Linha de Visão por Prédios/Casas (soldados não atiram varando paredes, exceto se guarnecidos dentro dela)
+          const losBlocked =
+            this.map.isLineBlockedByStructures?.(
+              u.x,
+              u.y,
+              activeTarget.x,
+              activeTarget.y,
+              u.garrisonedBuildingId || null
+            ) || false;
+
+          const isSabotagedTower =
+            u.team === 'enemies' &&
+            u.unitType === 'watchtower_emplacement' &&
+            this.enemySabotageTimer > 0;
+
+          // Metralhadora Coaxial Secundária do Tanque enquanto o canhão principal recarrega (4.0s)
+          if (u.cannonCooldown > 0) u.cannonCooldown = Math.max(0, u.cannonCooldown - dt);
+          if (u.coaxialCooldown > 0) u.coaxialCooldown = Math.max(0, u.coaxialCooldown - dt);
+          if (
+            !losBlocked &&
+            u.spec.weaponModel === 'tank_cannon' &&
+            u.cannonCooldown > 0 &&
+            u.coaxialCooldown <= 0 &&
+            targetEnemy &&
+            targetEnemy.spec.type === 'infantry' &&
+            dToTarget <= 280
+          ) {
+            u.coaxialCooldown = 0.24;
+            u.muzzleFlashTimer = 0.06;
+            const coaxAngle = aimAngle + (Math.random() - 0.5) * 0.09;
+            const cx = u.x + Math.cos(coaxAngle) * 20;
+            const cy = u.y + Math.sin(coaxAngle) * 20;
+            if (this.renderer?.vfx) {
+              const sy = getTerrainHeight(cx, cy, this.map) + 12;
+              const ty = getTerrainHeight(targetEnemy.x, targetEnemy.y, this.map) + 8;
+              this.renderer.vfx.spawnMuzzleFlash(cx, sy, cy, coaxAngle, false);
+              this.renderer.vfx.spawnTracer(cx, sy, cy, targetEnemy.x, ty, targetEnemy.y, false);
+            }
+            this.bullets.push({
+              x: cx,
+              y: cy,
+              prevX: cx,
+              prevY: cy,
+              startX: u.x,
+              startY: u.y,
+              vx: Math.cos(coaxAngle) * 680,
+              vy: Math.sin(coaxAngle) * 680,
+              angle: coaxAngle,
+              team: u.team,
+              damage: 14,
+              explosive: false,
+              life: 0.48,
+            });
+            this.playSoundAt('hmg', u.x, u.y, 0.35);
+          }
+
+          const isTankMainReady =
+            u.spec.weaponModel === 'tank_cannon' ? u.cannonCooldown <= 0 : true;
+
+          if (
+            !losBlocked &&
+            !isSabotagedTower &&
+            isTankMainReady &&
+            u.reloadTimer <= 0 &&
+            u.fireCooldown <= 0 &&
+            u.spec.damage > 0
+          ) {
+            const isTankCannon = u.spec.weaponModel === 'tank_cannon';
+            const autoloaderMult =
+              u.faction === 'player' && u.spec.type === 'vehicle' && this.completedTechs.has('autoloader')
+                ? 1.25
+                : 1.0;
+            const supRateMult = u.suppressionMode ? 2.0 : 1.0;
+            const brokenFireMult = u.isBrokenDown ? 0.5 : 1.0;
+            if (isTankCannon) {
+              u.cannonCooldown = (4.0 / autoloaderMult) / brokenFireMult;
+              u.fireCooldown = 0.35;
+              u.muzzleFlashTimer = 0.16;
+              u.recoilTimer = 0.38;
+            } else {
+              u.fireCooldown = 1 / (u.spec.fireRate * autoloaderMult * supRateMult * brokenFireMult);
+              u.muzzleFlashTimer = 0.08;
+              if (u.spec.type === 'vehicle') {
+                u.recoilTimer = 0.12;
+              }
+            }
+            u.burstRemaining -= 1;
+
+            if (u.burstRemaining <= 0) {
+              const reloadBase = u.spec.reloadPause || 2.0;
+              u.reloadTimer =
+                u.faction === 'player' && u.spec.type === 'vehicle' && this.completedTechs.has('autoloader')
+                  ? reloadBase * 0.7
+                  : reloadBase;
+              u.burstRemaining = u.spec.burstShots || 4;
+            }
+
+            let spread = (Math.random() - 0.5) * (u.spec.spread || 0.06);
+            if (u.stance === 'crouch') spread *= 0.85;
+            if (u.suppressedTimer > 0) spread *= 1.6;
+            const shotAngle = aimAngle + spread;
+            const bSpeed = 680;
+
+            let dmg = u.spec.damage;
+            if (u.inForestStealth) {
+              if ((u.ambushRevealTimer || 0) <= 0) {
+                dmg *= 1.35; // Bônus de Emboscada (+35% dano crítico)
+                this.spawnText(u.x, u.y - 18, '🌲 EMBOSCADA! +35% DANO', '#4ade80');
+              }
+              u.ambushRevealTimer = 5.0;
+              u.camouflagedInForest = false;
+            }
+            if (u.faction === 'player' && u.spec.type === 'infantry' && this.completedTechs.has('ap_ammo')) {
+              dmg *= 1.2;
+            }
+            if (targetEnemy) {
+              if (u.suppressionMode) {
+                targetEnemy.suppressedTimer = Math.min(
+                  5.0,
+                  Math.max(targetEnemy.suppressedTimer || 0, 4.0)
+                );
+              }
+              if (u.spec.closeRangeBonus && dToTarget <= 130) {
+                dmg *= u.spec.closeRangeBonus;
+              }
+              if (u.spec.trenchBonusAttack && targetEnemy.inTrench) {
+                dmg *= u.spec.trenchBonusAttack;
+              }
+              if (u.spec.antiArmorBonus && targetEnemy.spec.type === 'vehicle') {
+                dmg *= u.spec.antiArmorBonus;
+              }
+            } else if (targetEnemyBuilding && u.spec.antiArmorBonus) {
+              dmg *= 1.45;
+            }
+
+            // Granadas Automáticas do Esquadrão de Assalto contra inimigos em trincheiras, muros ou casas (até 15m)
+            if (
+              u.spec.autoGrenade &&
+              targetEnemy &&
+              u.grenadeCooldown <= 0 &&
+              dToTarget <= 155 &&
+              (targetEnemy.inTrench || targetEnemy.inHeavyCover || targetEnemy.garrisonedBuildingId)
+            ) {
+              u.grenadeCooldown = 8.5;
+              const gx = targetEnemy.x;
+              const gy = targetEnemy.y;
+              if (this.renderer?.vfx) {
+                const sy = getTerrainHeight(u.x, u.y, this.map) + 10;
+                const ty = getTerrainHeight(gx, gy, this.map) + 4;
+                this.renderer.vfx.spawnGrenadeArc(u.x, sy, u.y, gx, ty, gy, 0.55);
+              }
+              this.pendingGrenades.push({
+                x: gx,
+                y: gy,
+                team: u.team,
+                timer: 0.55,
+              });
+            }
+
+            const startX = u.x + Math.cos(shotAngle) * 18;
+            const startY = u.y + Math.sin(shotAngle) * 18;
+            if (this.renderer?.vfx && activeTarget) {
+              const isHeavyCannon =
+                u.spec.weaponModel === 'tank_cannon' || u.spec.weaponModel === 'rocket_pod';
+              const sy = getTerrainHeight(startX, startY, this.map) + (u.spec.type === 'vehicle' ? 14 : 9);
+              const ty = getTerrainHeight(activeTarget.x, activeTarget.y, this.map) + 8;
+              this.renderer.vfx.spawnMuzzleFlash(startX, sy, startY, shotAngle, isHeavyCannon);
+              this.renderer.vfx.spawnTracer(startX, sy, startY, activeTarget.x, ty, activeTarget.y, isHeavyCannon);
+            }
+            this.bullets.push({
+              x: startX,
+              y: startY,
+              prevX: startX,
+              prevY: startY,
+              startX: u.x,
+              startY: u.y,
+              vx: Math.cos(shotAngle) * bSpeed,
+              vy: Math.sin(shotAngle) * bSpeed,
+              angle: shotAngle,
+              team: u.team,
+              damage: u.spec.weaponModel === 'tank_cannon' ? dmg * 1.35 : dmg,
+              explosive: Boolean(u.spec.explosiveShots || u.spec.weaponModel === 'tank_cannon'),
+              isTankShell: u.spec.weaponModel === 'tank_cannon',
+              splashRadius: u.spec.weaponModel === 'tank_cannon' ? 45 : 0,
+              life: (effectiveRange + targetRadius + 75) / bSpeed,
+            });
+
+            const snd =
+              u.spec.weaponModel === 'tank_cannon' || u.spec.weaponModel === 'rocket_pod'
+                ? 'tank_cannon'
+                : u.spec.weaponModel === 'hmg' || u.spec.weaponModel === 'at_mg' || u.spec.weaponModel === 'autocannon'
+                ? 'hmg'
+                : u.spec.weaponModel === 'sniper'
+                ? 'sniper'
+                : u.spec.weaponModel === 'smg'
+                ? 'smg'
+                : 'rifle';
+            this.playSoundAt(snd, u.x, u.y, 0.5);
+          }
+
+          // Granadas de assalto contra trincheiras/guarnições/bases inimigas
+          if (targetEnemy && u.spec.grenadeChance && u.grenadeCooldown <= 0 && dToTarget < 195) {
+            u.grenadeCooldown = 10.5;
+            this.spawnExplosionParticles(targetEnemy.x, targetEnemy.y, 16);
+            this.playSoundAt('explosion', targetEnemy.x, targetEnemy.y, 0.65);
+            targetEnemy.takeDamage(32, u.team, this, true, true, targetEnemy.x, targetEnemy.y);
+            this.spawnText(targetEnemy.x, targetEnemy.y - 12, '💥 GRANADA DE ASSALTO', '#d97706');
+          }
+        }
+      }
+
+      if (typeof u.updateSoldierWorldPositions === 'function') {
+        u.updateSoldierWorldPositions();
+      }
+      u.sanitizePosition?.();
+      } catch (err) {
+        console.warn('Unit update error:', err);
+      }
+    }
+
+    this.barbedWires = this.barbedWires.filter((w) => w.active);
+  }
+
+  _detonateTankShell(b) {
+    const splashR = b.splashRadius || 45; // 4.5m de raio de dano explosivo
+    if (this.renderer?.vfx) {
+      const gy = getTerrainHeight(b.x, b.y, this.map) + 3;
+      this.renderer.vfx.spawnHeavyExplosion(b.x, gy, b.y, 1.35);
+    }
+    this.spawnExplosionParticles(b.x, b.y, 26);
+    this.playSoundAt('explosion', b.x, b.y, 0.85);
+
+    const dmgMult = this.enemySabotageTimer > 0 ? 1.25 : 1.0;
+    for (const u of this.units) {
+      if (!u.alive || u.captured || u.team === b.team) continue;
+      const d = dist(b.x, b.y, u.x, u.y);
+      if (d <= splashR + (u.radius || 20)) {
+        const falloff = clamp(1 - d / (splashR + 28), 0.35, 1.0);
+        const armorMult = u.spec.type === 'vehicle' ? 1.35 : 1.0;
+        const unitDmgMult = u.team === 'enemies' ? dmgMult : 1.0;
+        u.takeDamage(
+          b.damage * falloff * armorMult * unitDmgMult,
+          b.team,
+          this,
+          true,
+          true,
+          b.x,
+          b.y
+        );
+      }
+    }
+    // Destrói coberturas leves (arame farpado / barricadas próximas)
+    for (const wire of this.barbedWires) {
+      if (wire.active && wire.containsPoint(b.x, b.y, splashR)) {
+        wire.active = false;
+      }
+    }
+  }
+
+  _updateBulletsAndMines(dt) {
+    // Atualiza granadas em arco 3D lançadas automaticamente pelo Esquadrão de Assalto
+    for (let i = this.pendingGrenades.length - 1; i >= 0; i--) {
+      const g = this.pendingGrenades[i];
+      g.timer -= dt;
+      if (g.timer <= 0) {
+        this.pendingGrenades.splice(i, 1);
+        this.spawnExplosionParticles(g.x, g.y, 26);
+        this.playSoundAt('explosion', g.x, g.y, 0.78);
+        this.spawnText(g.x, g.y - 14, '💥 GRANADA DE ASSALTO!', '#f97316');
+        for (const u of this.units) {
+          if (!u.alive || u.team === g.team) continue;
+          const d = dist(g.x, g.y, u.x, u.y);
+          if (d <= 115) {
+            u.takeDamage(95 * (1 - d / 135), g.team, this, true, true, g.x, g.y);
+          }
+        }
+      }
+    }
+
+    for (const b of this.bullets) {
+      b.prevX = b.x;
+      b.prevY = b.y;
+      b.life -= dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+
+      let hitSomething = false;
+
+      // 1. BLOQUEIO FÍSICO REAL DE PROJÉTEIS POR MUROS, SACOS DE AREIA E TRINCHEIRAS (RAYCAST 2D)
+      // Se o tiro não for explosivo (morteiro/granada/artilharia) e já tiver saído de perto do próprio atirador,
+      // checa se bateu fisicamente em um muro, saco de areia ou borda de trincheira!
+      if (!b.explosive && dist(b.startX ?? b.prevX, b.startY ?? b.prevY, b.x, b.y) > 48) {
+        const barrierHit = this.map.checkProjectileCoverBlock(
+          b.prevX,
+          b.prevY,
+          b.x,
+          b.y,
+          this.fortifiedWalls,
+          this.barricades,
+          this.trenches
+        );
+        if (barrierHit && Math.random() < (barrierHit.blockChance || 0.86)) {
+          b.life = 0;
+          hitSomething = true;
+          this.spawnWallImpactParticles(barrierHit.hitX, barrierHit.hitY);
+          continue;
+        }
+      }
+
+      for (const u of this.units) {
+        if (!u.alive || u.captured || u.team === b.team) continue;
+        const hitRad =
+          u.spec.type === 'infantry'
+            ? Math.max(u.radius, (u.spacingMeters || 3) * 11)
+            : u.radius;
+        if (dist(b.x, b.y, u.x, u.y) <= hitRad) {
+          // 2. PROTEÇÃO FÍSICA REAL PARA SOLDADOS AGACHADOS ATRÁS DE MURO / TRINCHEIRA (85% A 90% DE BLOQUEIO FRONTAL)
+          // Se o esquadrão estiver agachado atrás de um muro ou dentro de uma trincheira e o tiro vier da frente
+          // (ou cruzar o muro entre o atirador e o soldado), o muro bloqueia fisicamente o tiro!
+          if (!b.explosive && u.spec.type === 'infantry' && (u.crouchedInCover || u.inTrench)) {
+            const rayHit = this.map.checkProjectileCoverBlock(
+              b.startX ?? b.prevX,
+              b.startY ?? b.prevY,
+              u.x,
+              u.y,
+              this.fortifiedWalls,
+              this.barricades,
+              this.trenches
+            );
+            // Verifica se o tiro não é de flanqueamento lateral/traseiro
+            let isFrontalCover = Boolean(rayHit);
+            if (!isFrontalCover && u.coverSnap && typeof u.coverSnap.facingAngle === 'number') {
+              const incomingFromX = (b.startX ?? b.prevX) - u.x;
+              const incomingFromY = (b.startY ?? b.prevY) - u.y;
+              const inLen = Math.hypot(incomingFromX, incomingFromY) || 1;
+              const faceCos = Math.cos(u.coverSnap.facingAngle);
+              const faceSin = Math.sin(u.coverSnap.facingAngle);
+              const dotFront = (incomingFromX / inLen) * faceCos + (incomingFromY / inLen) * faceSin;
+              if (dotFront > 0.25) isFrontalCover = true;
+            }
+            if (isFrontalCover && Math.random() < 0.86) {
+              b.life = 0;
+              hitSomething = true;
+              this.spawnWallImpactParticles(
+                rayHit ? rayHit.hitX : b.x,
+                rayHit ? rayHit.hitY : b.y
+              );
+              break;
+            }
+          }
+
+          if (b.isTankShell) {
+            this._detonateTankShell(b);
+          } else {
+            const dmgMult = u.team === 'enemies' && this.enemySabotageTimer > 0 ? 1.25 : 1.0;
+            u.takeDamage(b.damage * dmgMult, b.team, this, Boolean(b.explosive), Boolean(b.explosive), b.x, b.y);
+            if (b.explosive) {
+              this.spawnExplosionParticles(b.x, b.y, 14);
+            } else {
+              this.particles.push({
+                x: b.x,
+                y: b.y,
+                z: 8,
+                vx: (Math.random() - 0.5) * 35,
+                vy: (Math.random() - 0.5) * 35,
+                radius: 2.2,
+                color: '#d4a338',
+                life: 0.18,
+                maxLife: 0.18,
+              });
+            }
+          }
+          b.life = 0;
+          hitSomething = true;
+          break;
+        }
+      }
+
+      if (!hitSomething && b.life > 0) {
+        for (const bld of this.baseBuildings) {
+          if (bld.alive === false || bld.team === b.team) continue;
+          if (dist(b.x, b.y, bld.x, bld.y) <= (bld.radius || 85)) {
+            this.damageBaseBuilding(bld, b.damage, b.team);
+            if (b.isTankShell) {
+              this._detonateTankShell(b);
+            } else if (b.explosive) {
+              this.spawnExplosionParticles(b.x, b.y, 16);
+            }
+            b.life = 0;
+            if (!b.explosive) {
+              this.particles.push({
+                x: b.x,
+                y: b.y,
+                z: 14,
+                vx: (Math.random() - 0.5) * 40,
+                vy: (Math.random() - 0.5) * 40,
+                radius: 2.5,
+                color: '#f59e0b',
+                life: 0.2,
+                maxLife: 0.2,
+              });
+            }
+            break;
+          }
+        }
+      }
+
+      if (!hitSomething && b.isTankShell && b.life > 0) {
+        if (this.map.isLineBlockedByStructures?.(b.prevX, b.prevY, b.x, b.y)) {
+          this._detonateTankShell(b);
+          b.life = 0;
+          hitSomething = true;
+        }
+      }
+      if (!hitSomething && b.isTankShell && b.life <= 0) {
+        this._detonateTankShell(b);
+      }
+    }
+    this.bullets = this.bullets.filter((b) => b.life > 0);
+
+    for (const m of this.mines) {
+      if (!m.active) continue;
+
+      if (!m.revealed && m.team === 'enemies') {
+        const scout = this._findUnitNearWorld(
+          m.x,
+          m.y,
+          135,
+          (u) => u.team === 'allies'
+        );
+        if (scout) m.revealed = true;
+      }
+
+      const triggerUnit = this._findUnitNearWorld(
+        m.x,
+        m.y,
+        m.triggerRadius,
+        (u) => {
+          if (u.team === m.team || u.surrendered || u.garrisonedBuildingId) return false;
+          const effTrigger = u.formation === 'column' ? m.triggerRadius * 0.58 : m.triggerRadius;
+          return dist(m.x, m.y, u.x, u.y) <= effTrigger;
+        }
+      );
+
+      if (triggerUnit) {
+        m.active = false;
+        m.revealed = true;
+        this.spawnExplosionParticles(m.x, m.y, 30);
+        this.playSoundAt('explosion', m.x, m.y, 1.0);
+        this.camera.shake(14, 0.35);
+        this.spawnText(m.x, m.y - 16, '💥 MINA TERRESTRE DETONADA!', '#c94a38');
+
+        for (const u of this.units) {
+          if (!u.alive || u.captured) continue;
+          const d = dist(m.x, m.y, u.x, u.y);
+          if (d <= m.blastRadius) {
+            const falloff = 1 - (d / m.blastRadius) * 0.55;
+            u.takeDamage(m.damage * falloff, m.team, this, true, true, m.x, m.y);
+          }
+        }
+      }
+    }
+    this.mines = this.mines.filter((m) => m.active);
+  }
+
+  _updateParticlesAndTexts(dt) {
+    for (const pt of this.particles) {
+      pt.life -= dt;
+      pt.x += pt.vx * dt;
+      pt.y += pt.vy * dt;
+      if (pt.vz) {
+        pt.z = (pt.z || 6) + pt.vz * dt;
+      } else {
+        pt.vx *= Math.exp(-dt * 4);
+        pt.vy *= Math.exp(-dt * 4);
+      }
+    }
+    this.particles = this.particles.filter((p) => p.life > 0);
+
+    for (const t of this.texts) {
+      t.life -= dt;
+      t.y += t.vy * dt;
+    }
+    this.texts = this.texts.filter((t) => t.life > 0);
+  }
+
+  _computeContextPrompt() {
+    const surrendered = this.units.find((u) => u.alive && u.surrendered && !u.captured);
+    if (surrendered) {
+      return '🏳 Esquadrão Inimigo Rendido! Clique nele ou pressione [G] para interrogar e abrir a Névoa de Guerra na Base Inimiga';
+    }
+    if (this.activeAirStrikeMode) {
+      const doc = AIR_DOCTRINE_BY_ID[this.activeAirStrikeMode];
+      return `✈ SUPORTE AÉREO (${doc?.name || ''}): Clique Esquerdo no mapa para designar as coordenadas • Botão Direito cancela`;
+    }
+    if (this.activeCommandMode === 'build_trench') {
+      return `🛠 Escavar Trincheira (${this.trenchShapeL ? 'Formato em L' : 'Linha Reta'}): Clique e arraste no mapa • [R] Alternar Formato • Botão Direito cancela`;
+    }
+    if (this.activeCommandMode === 'build_wall') {
+      return '🧱 Construir Muro de Concreto / Sacos de Areia (+75% Cobertura Pesada): Clique e arraste no mapa • Botão Direito cancela';
+    }
+    if (this.activeCommandMode === 'build_wire') {
+      return '⛓ Construir Arame Farpado (-80% Velocidade Infantaria Inimiga): Clique e arraste no mapa • Botão Direito cancela';
+    }
+    if (this.activeCommandMode === 'build_barricade') {
+      return '🚧 Construir Barricada & Dentes de Dragão: Clique e arraste no mapa • Botão Direito cancela';
+    }
+    if (this.activeCommandMode === 'build_mine') {
+      return '💣 Plantar Campo Minado: Clique no terreno para espalhar 5 minas terrestres • Botão Direito cancela';
+    }
+    if (
+      this.activeCommandMode === 'build_watchtower' ||
+      this.activeCommandMode === 'build_emplacement' ||
+      this.activeCommandMode === 'build_bunker' ||
+      this.activeCommandMode === 'build_outpost'
+    ) {
+      return '🗼 Construir Torre de Defesa / Fortificação: Clique no terreno para posicionar • Botão Direito cancela';
+    }
+    if (this.selectedBuildingId) {
+      const bld = this.baseBuildings.find((b) => b.id === this.selectedBuildingId && b.alive !== false);
+      if (bld) {
+        return `🏭 ${bld.name} Selecionado: Clique nas unidades para produzir • Clique Direito no mapa define o Ponto de Encontro`;
+      }
+    }
+    const selCount = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected).length;
+    if (selCount > 0) {
+      return `${selCount} esquadrão(ões) selecionado(s) • Clique Direito p/ Mover, Ocupar Casa/Trincheira ou Demolir Base Inimiga • [TAB] Mapa Tático`;
+    }
+    return 'Clique Esquerdo em Tropas ou Prédios da Base • [TAB] Quadro de Planejamento Tático • [Espaço] Pausa Tática';
+  }
+
+  getHudSnapshot() {
+    const selectedUnits = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected);
+    const allyUnitsCount = this.units.filter((u) => u.alive && u.team === 'allies').length;
+    const visibleEnemiesCount = this.units.filter(
+      (u) =>
+        u.alive &&
+        u.team === 'enemies' &&
+        !u.surrendered &&
+        (this.intelRevealed || this.map.isPositionVisibleToAllies(u.x, u.y))
+    ).length;
+    const surrenderedUnits = this.units.filter((u) => u.alive && u.surrendered && !u.captured);
+
+    let allyIncome = 24;
+    let ammoIncome = 8;
+    let fuelIncome = 6;
+    for (const sec of this.map.sectors) {
+      if (sec.owner === 'allies') {
+        allyIncome += sec.supplyBonus || sec.incomeBonus || 12;
+        ammoIncome += sec.ammoBonus || 0;
+        fuelIncome += sec.fuelBonus || 0;
+      }
+    }
+    for (const u of this.units) {
+      if (u.alive && u.team === 'allies' && u.spec.supplyBonus) {
+        allyIncome += u.spec.supplyBonus;
+      }
+    }
+
+    const builtAlliedBuildings = this.baseBuildings
+      .filter((b) => b.team === 'allies' && b.alive !== false)
+      .map((b) => b.buildingType);
+
+    const selectedBldObj = this.selectedBuildingId
+      ? this.baseBuildings.find((b) => b.id === this.selectedBuildingId && b.alive !== false)
+      : null;
+    const selectedStructObj = this.selectedStructureId
+      ? this.map?.structures?.find((s) => s.id === this.selectedStructureId && !s.destroyed)
+      : null;
+    const garrisonedInStruct = selectedStructObj?.garrisonUnitId
+      ? this.units.find((u) => u.id === selectedStructObj.garrisonUnitId && u.alive)
+      : null;
+
+    return {
+      gameMode: this.gameMode,
+      mapId: this.mapId || 'normandy_fields',
+      aiDifficulty: this.aiDifficulty || 'medium',
+      hqLevel: this.hqLevel || 1,
+      commandPoints: this.commandPoints || 0,
+      aiHqLevels: { ...(this.aiHqLevels || { ally_ai: 1, enemy_1: 1, enemy_2: 1 }) },
+      startingResourcesPreset: this.startingResourcesPreset,
+      timeScale: this.timeScale,
+      supplies: Math.floor(this.supplies),
+      ammo: Math.floor(this.ammo),
+      fuel: Math.floor(this.fuel),
+      hqLevel: this.hqLevel || 1,
+      commandPoints: this.commandPoints || 0,
+      aiDifficulty: this.aiDifficulty || 'medium',
+      playerSkinId: this.playerSkinId || 'olive_classic',
+      mapId: this.mapId,
+      victoryPoints: this.victoryPoints,
+      victoryState: this.victoryState,
+      gameOver: Boolean(this.gameOver),
+      matchStats: { ...this.matchStats },
+      techModalOpen: Boolean(this.techModalOpen),
+      selectedBudgetTier: this.selectedBudgetTier,
+      completedTechs: Array.from(this.completedTechs),
+      activeResearch: this.activeResearch ? { ...this.activeResearch } : null,
+      activeDroneLaunchMode: this.activeDroneLaunchMode,
+      activeDronesCount: this.activeDrones.length,
+      supplyIncome: allyIncome,
+      ammoIncome,
+      fuelIncome,
+      supplyTimer: Math.ceil(this.supplyIncomeTimer),
+      aiWaveTimer: Math.ceil(this.aiWaveTimer),
+      intelRevealed: this.intelRevealed,
+      sandboxMode: Boolean(this.sandboxMode),
+      sandboxFogDisabled: Boolean(this.sandboxFogDisabled),
+      sandboxAiPaused: Boolean(this.sandboxAiPaused),
+      guidedTrainingTip: this._getGuidedTrainingTip(),
+      selectedStructure: selectedStructObj
+        ? {
+            id: selectedStructObj.id,
+            name: selectedStructObj.name || 'Construção',
+            hp: Math.round(selectedStructObj.hp ?? 600),
+            maxHp: Math.round(selectedStructObj.maxHp ?? 600),
+            garrisonable: Boolean(selectedStructObj.garrisonable),
+            garrisonUnitId: selectedStructObj.garrisonUnitId || null,
+            garrisonTeam: selectedStructObj.garrisonTeam || null,
+            garrisonUnitName: garrisonedInStruct ? garrisonedInStruct.name : null,
+            observationBoosted: Boolean(selectedStructObj.observationBoosted),
+          }
+        : null,
+      hasPowCamp: this.baseBuildings.some(
+        (b) => b.faction === 'player' && b.buildingType === 'pow_camp' && b.alive !== false
+      ),
+      powPrisonersCount: this.powPrisoners?.length || 0,
+      powPrisonersMax: 10,
+      powIncomePerSec: this.baseBuildings.some(
+        (b) => b.faction === 'player' && b.buildingType === 'pow_camp' && b.alive !== false
+      )
+        ? (this.powPrisoners?.length || 0) * 5
+        : 0,
+      enemyProductionDebuffTimer: Math.ceil(this.enemyProductionDebuffTimer || 0),
+      enemySabotageTimer: Math.ceil(this.enemySabotageTimer || 0),
+      tacticalMapOpen: this.tacticalMapOpen,
+      tacticalArrowsCount: this.tacticalArrows.length,
+      tacticalPingsCount: this.tacticalPings.length,
+      activeCommandSlot: this.activeCommandSlot,
+      activeBottomCategory: this.activeBottomCategory,
+      touchControlMode: this.touchControlMode || 'select',
+      activeCommandMode: this.activeCommandMode,
+      focusedUnitId: this.focusedUnitId || null,
+      activeEngineeringActionId: this.activeEngineeringActionId,
+      activeAirStrikeMode: this.activeAirStrikeMode,
+      airCooldowns: {
+        recon_drone: Math.ceil(this.airCooldowns.recon_drone || 0),
+        a10_strafe: Math.ceil(this.airCooldowns.a10_strafe || 0),
+        precision_bomb: Math.ceil(this.airCooldowns.precision_bomb || 0),
+      },
+      builtBuildings: builtAlliedBuildings,
+      alliedBaseBuildings: this.baseBuildings
+        .filter((b) => b.team === 'allies' && b.faction === 'player' && b.alive !== false)
+        .map((b) => ({
+          id: b.id,
+          buildingType: b.buildingType,
+          name: b.name,
+          short: b.short,
+          hp: Math.ceil(b.hp || 1500),
+          maxHp: b.maxHp || 1500,
+          queueLength: b.productionQueue?.length || 0,
+          progress: Math.round(b.productionProgress || 0),
+        })),
+      selectedBuilding: selectedBldObj
+        ? {
+            id: selectedBldObj.id,
+            buildingType: selectedBldObj.buildingType,
+            name: selectedBldObj.name,
+            short: selectedBldObj.short,
+            subtitle: selectedBldObj.subtitle,
+            hp: Math.ceil(selectedBldObj.hp || 1500),
+            maxHp: selectedBldObj.maxHp || 1500,
+            rallyX: Math.round(selectedBldObj.rallyX || selectedBldObj.x),
+            rallyY: Math.round(selectedBldObj.rallyY || selectedBldObj.y),
+            produces: selectedBldObj.produces || [],
+            productionProgress: Math.round(selectedBldObj.productionProgress || 0),
+            productionRemainingSec:
+              selectedBldObj.productionQueue?.length > 0
+                ? Math.ceil(
+                    Math.max(
+                      0,
+                      (selectedBldObj.productionQueue[0].duration || 6) -
+                        (selectedBldObj.productionQueue[0].elapsed || 0)
+                    )
+                  )
+                : 0,
+            productionQueue: (selectedBldObj.productionQueue || []).map((q, idx) => ({
+              idx,
+              unitId: q.unitId,
+              name: q.name,
+              short: q.short,
+              remainingSec: Math.ceil(Math.max(0, (q.duration || 6) - (q.elapsed || 0))),
+            })),
+          }
+        : null,
+      trenchShapeL: this.trenchShapeL,
+      allyUnitsCount,
+      enemyUnitsCount: visibleEnemiesCount,
+      surrenderedCount: surrenderedUnits.length,
+      selectedCount: selectedUnits.length,
+      selectedFormation: selectedUnits[0]?.formation || 'line',
+      selectedSpacing: Number((selectedUnits[0]?.spacingMeters || 3.0).toFixed(1)),
+      selectedHoldPosition: Boolean(selectedUnits[0]?.holdPosition),
+      anySelectedGarrisoned: selectedUnits.some((u) => Boolean(u.garrisonedBuildingId)),
+      anySelectedSnappedToCover: selectedUnits.some((u) => Boolean(u.snappedToCover)),
+      anySelectedCrouching: selectedUnits.some((u) => Boolean(u.crouchedInCover || u.inTrench)),
+      otherAlliedInfantrySquads: this.units
+        .filter(
+          (u) =>
+            u.alive &&
+            !u.captured &&
+            u.faction === 'player' &&
+            u.spec.type === 'infantry' &&
+            u.id !== selectedUnits[0]?.id
+        )
+        .map((u) => ({
+          id: u.id,
+          name: u.name,
+          short: u.short,
+          soldiersAlive: u.soldiersAlive,
+          maxSoldiers: u.maxSoldiers,
+        })),
+      selectedUnits: selectedUnits.map((u) => {
+        const cargoSquads = (u.cargoSquadIds || [])
+          .map((sid) => this.units.find((c) => c.id === sid && c.alive))
+          .filter(Boolean);
+        const cargoSoldiersCount = cargoSquads.reduce((acc, c) => acc + (c.soldiersAlive || 0), 0);
+        return {
+          id: u.id,
+          unitType: u.unitType,
+          isInfantry: u.spec.type === 'infantry',
+          isVehicle: u.spec.type === 'vehicle',
+          armorPct: Math.round((u.spec.armor || 0) * 100),
+          weaponLabel: u.spec.weaponModel || u.unitType,
+          isTransport: Boolean(u.spec.isTransport),
+          cargoSquadsCount: cargoSquads.length,
+          maxCargoSquads: u.maxCargoSquads || 2,
+          cargoSoldiersCount,
+          maxCargoSoldiers: u.maxCargoSoldiers || 12,
+          cargoNames: cargoSquads.map((c) => `${c.short} (${c.soldiersAlive})`),
+          name: u.name,
+          short: u.short,
+          hp: Math.ceil(u.hp),
+          maxHp: u.maxHp,
+          soldiersAlive: u.soldiersAlive,
+          maxSoldiers: u.maxSoldiers,
+          formation: u.formation || 'line',
+          spacingMeters: Number((u.spacingMeters || 3.0).toFixed(1)),
+          holdPosition: Boolean(u.holdPosition),
+          suppressionMode: Boolean(u.suppressionMode),
+          suppressed: (u.suppressedTimer || 0) > 0,
+          medkitHealing: (u.medkitHealTimer || 0) > 0,
+          abilityCooldowns: {
+            grenade: Math.ceil(u.grenadeAbilityCooldown || 0),
+            suppression: Math.ceil(u.suppressionCooldown || 0),
+            medkit: Math.ceil(u.medkitCooldown || 0),
+          },
+          stance: u.stance || (u.crouchedInCover ? 'crouch' : 'stand'),
+          inTrench: u.inTrench,
+          inTreelineCover: u.inTreelineCover,
+          inForestStealth: Boolean(u.inForestStealth),
+          camouflagedInForest: Boolean(u.camouflagedInForest),
+          inHeavyCover: u.inHeavyCover,
+          inLightCover: u.inLightCover,
+          garrisonedBuildingId: u.garrisonedBuildingId,
+          soldiers: (u.soldiers || [])
+            .filter((s) => s.alive)
+            .map((s) => ({
+              id: s.id,
+              name: s.name,
+              rank: s.rank,
+              weapon: s.weapon,
+              weaponIcon: s.weaponIcon,
+              hp: Math.ceil(s.hp),
+              maxHp: s.maxHp,
+              alive: s.alive,
+              selected: Boolean(s.selected),
+            })),
+        };
+      }),
+      sectors: this.map.sectors.map((s) => ({
+        id: s.id,
+        name: s.name,
+        shortName: s.shortName,
+        shortLabel: s.shortLabel,
+        type: s.type,
+        owner: s.owner,
+        x: s.x,
+        y: s.y,
+        captureProgress: Math.round(s.captureProgress),
+        incomeBonus: s.incomeBonus,
+        supplyBonus: s.supplyBonus,
+        ammoBonus: s.ammoBonus,
+        fuelBonus: s.fuelBonus,
+      })),
+      contextPrompt: this._computeContextPrompt(),
+      notifications: this.notifications.map((n) => ({ ...n })),
+      muted: this.audio.muted,
+      settings: { ...this.settings },
+      savedBattles: this.getSavedBattles().map((s) => ({
+        id: s.id,
+        title: s.title,
+        dateLabel: s.dateLabel,
+        savedAt: s.savedAt,
+        gameMode: s.gameMode,
+        supplies: s.supplies,
+        ammo: s.ammo,
+        fuel: s.fuel,
+        victoryPoints: s.victoryPoints || 0,
+        allyUnitsCount: s.allyUnitsCount || (s.units ? s.units.length : 0),
+        enemyUnitsCount: s.enemyUnitsCount || 0,
+      })),
+    };
+  }
+
+  _emitHud() {
+    this.onHudUpdate?.(this.getHudSnapshot());
+  }
+
+  destroy() {
+    if (this.rafId) cancelAnimationFrame(this.rafId);
+    this.input.destroy();
+    this.renderer?.destroy();
+    this.audio.close();
+  }
+}

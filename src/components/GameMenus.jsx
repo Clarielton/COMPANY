@@ -1,0 +1,888 @@
+import React, { useEffect, useRef, useState } from 'react';
+import TutorialModal from './TutorialModal.jsx';
+import MultiplayerLobby from './MultiplayerLobby.jsx';
+import { loadStoredFirebaseConfig, networkManager } from '../game/net/NetworkManager.js';
+import {
+  COMMAND_BY_ID,
+  BOTTOM_BAR_CATEGORIES,
+  ARMY_FACTIONS,
+  BATTLEFIELD_MAPS,
+  AI_DIFFICULTIES,
+  ARMY_SKINS,
+} from '../game/data/rtsData.js';
+
+function MapPreviewCanvas({ map }) {
+  const cRef = useRef(null);
+  useEffect(() => {
+    const c = cRef.current;
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    const w = c.width;
+    const h = c.height;
+    const isDesert = map.theme === 'desert';
+    const isWinter = map.theme === 'winter';
+
+    ctx.fillStyle = isDesert ? '#bfa06b' : isWinter ? '#dbe4ec' : '#43582c';
+    ctx.fillRect(0, 0, w, h);
+
+    // Zonas de terreno / lago / oásis
+    ctx.fillStyle = isDesert ? 'rgba(139,118,89,0.5)' : isWinter ? 'rgba(165,206,232,0.75)' : 'rgba(168,138,56,0.5)';
+    ctx.fillRect(w * 0.36, h * 0.32, w * 0.28, h * 0.36);
+
+    // Estradas
+    ctx.strokeStyle = isDesert ? '#8d714a' : isWinter ? '#6c7278' : '#7a6244';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(4, h * 0.5);
+    ctx.lineTo(w - 4, h * 0.5);
+    ctx.moveTo(w * 0.5, 4);
+    ctx.lineTo(w * 0.5, h - 4);
+    ctx.moveTo(4, h * 0.22);
+    ctx.lineTo(w - 4, h * 0.22);
+    ctx.moveTo(4, h * 0.78);
+    ctx.lineTo(w - 4, h * 0.78);
+    ctx.stroke();
+
+    // 12 Pontos de Setor
+    ctx.fillStyle = '#eab308';
+    const pts = [
+      [0.22, 0.2], [0.22, 0.8], [0.5, 0.2], [0.5, 0.5],
+      [0.5, 0.8], [0.37, 0.5], [0.7, 0.28], [0.7, 0.72],
+      [0.29, 0.28], [0.29, 0.72], [0.78, 0.2], [0.78, 0.8],
+    ];
+    pts.forEach(([px, py]) => {
+      ctx.beginPath();
+      ctx.arc(px * w, py * h, 2.6, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }, [map]);
+
+  return <canvas ref={cRef} width={170} height={84} className="map-preview-canvas" />;
+}
+
+export default function GameMenus({
+  gameState,
+  initialTab = 'skirmish',
+  hud,
+  interrogationTarget,
+  onPlayMode,
+  onPlaySandbox,
+  onStartOnlineMatch,
+  onResume,
+  onSaveBattle,
+  onLoadBattle,
+  onDeleteBattle,
+  onExportBattle,
+  onImportBattle,
+  onReturnMainMenu,
+  onRestart,
+  onUpdateSettings,
+  onSelectSkin,
+  canInstallPwa,
+  isInstalledPwa,
+  onInstallPwa,
+  onResolveInterrogation,
+}) {
+  const [subTab, setSubTab] = useState(initialTab || 'skirmish'); // 'skirmish' | 'skins' | 'config' | 'saves' | 'arsenal' | 'settings' | 'controls'
+  const [selectedMode, setSelectedMode] = useState(hud?.gameMode || '1v1');
+  const [selectedMapId, setSelectedMapId] = useState(hud?.mapId || 'normandy_fields');
+  const [selectedDifficulty, setSelectedDifficulty] = useState(hud?.aiDifficulty || 'medium');
+  const [startingResources, setStartingResources] = useState(
+    hud?.startingResourcesPreset || 600
+  );
+  const [saveTitleInput, setSaveTitleInput] = useState('');
+  const [fbModalOpen, setFbModalOpen] = useState(false);
+  const [fbConfigText, setFbConfigText] = useState(() => {
+    const cfg = loadStoredFirebaseConfig();
+    return cfg ? JSON.stringify(cfg, null, 2) : '';
+  });
+  const [fbError, setFbError] = useState('');
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (initialTab && (gameState === 'PAUSED' || gameState === 'MENU')) {
+      setSubTab(initialTab);
+    }
+  }, [initialTab, gameState]);
+
+  if (!hud) return null;
+
+  const savedBattles = hud.savedBattles || [];
+
+  const handleFileImport = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(String(ev.target?.result || '{}'));
+        onImportBattle?.(parsed);
+      } catch {
+        // arquivo inválido
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  // 0. TELA GRANDE DE FIM DE JOGO (VITÓRIA / DERROTA)
+  if (gameState === 'PLAYING' && hud.gameOver) {
+    const isVictory = hud.victoryState === 'allies';
+    const stats = hud.matchStats || {};
+    const totalSecs = Math.max(0, Math.floor(stats.elapsedSeconds || 0));
+    const mins = String(Math.floor(totalSecs / 60)).padStart(2, '0');
+    const secs = String(totalSecs % 60).padStart(2, '0');
+
+    return (
+      <div className={`gameover-overlay ${isVictory ? 'victory' : 'defeat'}`}>
+        <div className="gameover-card">
+          <div className="gameover-badge">
+            {isVictory ? '★ OPERAÇÃO CONCLUÍDA ★' : '✖ COMANDO DESTRUÍDO ✖'}
+          </div>
+          <h1 className="gameover-title">
+            {isVictory
+              ? 'VITÓRIA TOTAL — FRENTE CONQUISTADA'
+              : 'DERROTA — LINHA DE FRENTE PERDIDA'}
+          </h1>
+          <p className="gameover-sub">
+            {isVictory
+              ? 'As forças aliadas romperam as defesas do Eixo e assumiram o controle total do teatro de operações.'
+              : 'O Quartel-General aliado caiu e as forças inimigas tomaram o controle da linha de frente.'}
+          </p>
+
+          <div className="gameover-stats-grid">
+            <div className="gameover-stat-box">
+              <span>UNIDADES ELIMINADAS</span>
+              <strong>{stats.unitsEliminated || 0}</strong>
+            </div>
+            <div className="gameover-stat-box">
+              <span>PRISIONEIROS INTERROGADOS</span>
+              <strong>{stats.prisonersInterrogated || 0}</strong>
+            </div>
+            <div className="gameover-stat-box">
+              <span>TRINCHEIRAS ESCAVADAS</span>
+              <strong>{stats.trenchesDug || 0}</strong>
+            </div>
+            <div className="gameover-stat-box">
+              <span>PESQUISAS CONCLUÍDAS</span>
+              <strong>{stats.researchesCompleted || 0}</strong>
+            </div>
+            <div className="gameover-stat-box">
+              <span>TEMPO DE BATALHA</span>
+              <strong>
+                {mins}:{secs}
+              </strong>
+            </div>
+          </div>
+
+          <div className="gameover-actions">
+            <button
+              type="button"
+              className="gameover-btn primary"
+              onClick={() => onRestart?.(selectedMode, startingResources)}
+            >
+              ⚔ JOGAR NOVAMENTE
+            </button>
+            <button
+              type="button"
+              className="gameover-btn secondary"
+              onClick={() => onReturnMainMenu?.()}
+            >
+              🏛 VOLTAR AO MENU PRINCIPAL
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 1. SALA DE INTERROGATÓRIO MILITAR (Exige Campo de Detenção & Inteligência — 4 Protocolos Estratégicos)
+  if (gameState === 'INTERROGATION' && interrogationTarget) {
+    const resistance = interrogationTarget.resistance ?? 65;
+    return (
+      <div className="menu-overlay interrogation-bg">
+        <div className="menu-panel interrogation-panel" style={{ maxWidth: 680 }}>
+          <div className="menu-badge">🏕️ CAMPO DE DETENÇÃO & INTELIGÊNCIA — INTERROGATÓRIO</div>
+          <h2>SALA DE INTERROGATÓRIO MILITAR</h2>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr auto',
+              gap: 10,
+              padding: '10px 12px',
+              marginBottom: 12,
+              background: 'rgba(15, 23, 42, 0.72)',
+              border: '1px solid rgba(212, 163, 56, 0.35)',
+              borderRadius: 6,
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 12, color: '#94a3b8', letterSpacing: 0.6 }}>
+                DOSSIÊ DO PRISIONEIRO CAPTURADO
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#f8fafc', marginTop: 2 }}>
+                {interrogationTarget.rank || 'Capitão'} {interrogationTarget.officerName || 'K. Richter'} —{' '}
+                <span style={{ color: interrogationTarget.color }}>{interrogationTarget.factionName}</span>
+              </div>
+              <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 2 }}>
+                Unidade: <strong>{interrogationTarget.name}</strong> ({interrogationTarget.soldiersRemaining || 1}{' '}
+                sobrevivente(s)) • Duração dos efeitos: <strong>40s – 60s</strong>
+              </div>
+            </div>
+            <div style={{ minWidth: 155, textAlign: 'right' }}>
+              <div style={{ fontSize: 11, color: '#facc15', fontWeight: 700 }}>
+                RESISTÊNCIA PSICOLÓGICA: {resistance}%
+              </div>
+              <div
+                style={{
+                  height: 7,
+                  background: 'rgba(255,255,255,0.12)',
+                  borderRadius: 4,
+                  marginTop: 5,
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    width: `${resistance}%`,
+                    height: '100%',
+                    background: resistance > 70 ? '#ef4444' : '#eab308',
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="interrogation-options">
+            <button
+              type="button"
+              className="interrogate-btn intel"
+              onClick={() => onResolveInterrogation('maps')}
+            >
+              <strong>🗺️ 1. ARRANCAR MAPAS DE DEFESA</strong>
+              <span>
+                Abre a Névoa de Guerra sobre os QGs Inimigos por 60s e revela permanentemente todas as Minas Ocultas e Trincheiras no mapa.
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className="interrogate-btn cash"
+              onClick={() => onResolveInterrogation('convoy')}
+            >
+              <strong>📦 2. CONFISCAR ROTAS DE COMBOIO</strong>
+              <span>
+                Captura suprimentos imediatos (+350 SUP, +180 MUN, +120 COMB) e reduz a produção inimiga em -30% por 45s.
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className="interrogate-btn supplies"
+              onClick={() => onResolveInterrogation('sabotage')}
+            >
+              <strong>📡 3. SABOTAGEM & CÓDIGOS DE RÁDIO</strong>
+              <span>
+                Desativa Torres/Radares inimigos por 40s, reduz Defesa/Moral inimiga em -25% e avança a Pesquisa Tech atual em +40% (ou +120 CP).
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className="interrogate-btn"
+              style={{ borderColor: 'rgba(163, 190, 140, 0.55)' }}
+              onClick={() => onResolveInterrogation('labor')}
+            >
+              <strong>🔄 4. MANTER TRABALHANDO NO CAMPO DE DETENÇÃO</strong>
+              <span>
+                Mantém o prisioneiro na cela do Campo POW gerando renda contínua de +5 SUP/seg (máx. 10 prisioneiros).
+              </span>
+            </button>
+          </div>
+
+          <div className="menu-footer-row">
+            <button type="button" className="menu-secondary-btn" onClick={onResume}>
+              RETORNAR AO FRONT [ESC]
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (gameState !== 'MENU' && gameState !== 'PAUSED') return null;
+
+  const isPaused = gameState === 'PAUSED';
+  const s = hud.settings || { camSpeed: 1.0, volume: 0.35, highQuality: true };
+
+  const allySlots =
+    selectedMode === '2v2'
+      ? [ARMY_FACTIONS.player, ARMY_FACTIONS.ally_ai]
+      : [ARMY_FACTIONS.player];
+  const enemySlots =
+    selectedMode === '2v2'
+      ? [ARMY_FACTIONS.enemy_1, ARMY_FACTIONS.enemy_2]
+      : [ARMY_FACTIONS.enemy_1];
+
+  const activeTab =
+    subTab === 'multiplayer'
+      ? 'multiplayer'
+      : subTab === 'tutorial'
+      ? 'tutorial'
+      : subTab === 'skins' || subTab === 'arsenal'
+      ? 'skins'
+      : subTab === 'saves' || subTab === 'settings' || subTab === 'controls'
+      ? 'system'
+      : 'skirmish';
+
+  const systemSubTab =
+    subTab === 'settings' ? 'settings' : subTab === 'controls' ? 'controls' : 'saves';
+
+  const mapSubtitles = {
+    normandy_fields: 'Frente Rural Europeia • Campos e Vilarejos',
+    el_alamein_ridge: 'Frente Árida Norte da África • Dunas e Oásis',
+    bastogne_winter: 'Frente Congelada das Ardenas • Neve e Pinheiros',
+  };
+
+  return (
+    <div className="mil-menu-overlay">
+      <div className="mil-menu-panel">
+        {/* CABEÇALHO COMPACTO + 3 ABAS SUPERIORES */}
+        <header className="mil-menu-header">
+          <div className="mil-brand">
+            <span className="mil-brand-title">COMPANY OF FRONTLINE</span>
+            <span className="mil-brand-sub">
+              {isPaused ? `▪ OPERAÇÃO ${hud.gameMode.toUpperCase()} PAUSADA` : '▪ COMANDO TÁTICO RTS 3D'}
+            </span>
+          </div>
+
+          <nav className="mil-tabs" aria-label="Menu Principal">
+            <button
+              type="button"
+              className={`mil-tab-btn ${activeTab === 'skirmish' ? 'active' : ''}`}
+              onClick={() => setSubTab('skirmish')}
+            >
+              ⚔ COMBATE
+            </button>
+            <button
+              type="button"
+              className={`mil-tab-btn ${activeTab === 'skins' ? 'active' : ''}`}
+              onClick={() => setSubTab('skins')}
+            >
+              ✦ ARSENAL / SKINS
+            </button>
+            <button
+              type="button"
+              className={`mil-tab-btn ${activeTab === 'system' ? 'active' : ''}`}
+              onClick={() => setSubTab('saves')}
+            >
+              ⚙ SISTEMA
+            </button>
+            <button
+              type="button"
+              className={`mil-tab-btn ${activeTab === 'tutorial' ? 'active' : ''}`}
+              onClick={() => setSubTab('tutorial')}
+            >
+              📖 TUTORIAL
+            </button>
+            <button
+              type="button"
+              className={`mil-tab-btn ${activeTab === 'multiplayer' ? 'active' : ''}`}
+              onClick={() => setSubTab('multiplayer')}
+            >
+              🌐 MULTIPLAYER
+            </button>
+          </nav>
+        </header>
+
+        {/* CORPO ÚNICO DO PAINEL */}
+        <main className="mil-menu-body">
+          {activeTab === 'skirmish' && (
+            <div className="mil-combat-pane">
+              <div className="mil-section-label">▸ TEATRO DE OPERAÇÕES</div>
+              <div className="mil-map-list">
+                {BATTLEFIELD_MAPS.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    className={`mil-map-row ${selectedMapId === m.id ? 'active' : ''}`}
+                    onClick={() => setSelectedMapId(m.id)}
+                  >
+                    <MapPreviewCanvas map={m} />
+                    <div className="mil-map-meta">
+                      <strong>{m.name}</strong>
+                      <span>{mapSubtitles[m.id] || m.subtitle}</span>
+                    </div>
+                    <span className="mil-map-check">
+                      {selectedMapId === m.id ? '▪ ATIVO' : '▸'}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="mil-quick-config">
+                <div className="mil-cfg-group">
+                  <span className="mil-cfg-label">MODO</span>
+                  <div className="mil-cfg-pills">
+                    {['1v1', '2v2'].map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`mil-pill ${selectedMode === mode ? 'active' : ''}`}
+                        onClick={() => setSelectedMode(mode)}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mil-cfg-group">
+                  <span className="mil-cfg-label">DIFICULDADE IA</span>
+                  <div className="mil-cfg-pills">
+                    {[
+                      { id: 'easy', label: 'Recruta' },
+                      { id: 'medium', label: 'Veterano' },
+                      { id: 'hard', label: 'General' },
+                    ].map((d) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        className={`mil-pill ${selectedDifficulty === d.id ? 'active' : ''}`}
+                        onClick={() => setSelectedDifficulty(d.id)}
+                      >
+                        {d.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mil-cfg-group">
+                  <span className="mil-cfg-label">RECURSOS</span>
+                  <div className="mil-cfg-pills">
+                    {[450, 600, 1000].map((val) => (
+                      <button
+                        key={val}
+                        type="button"
+                        className={`mil-pill ${startingResources === val ? 'active' : ''}`}
+                        onClick={() => setStartingResources(val)}
+                      >
+                        {val}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <footer className="mil-combat-footer">
+                {isPaused && (
+                  <button type="button" className="mil-btn-secondary" onClick={onResume}>
+                    ▸ RETORNAR AO FRONT
+                  </button>
+                )}
+                {isPaused && (
+                  <button
+                    type="button"
+                    className="mil-btn-secondary"
+                    onClick={() => {
+                      setSubTab('skirmish');
+                      onReturnMainMenu();
+                    }}
+                  >
+                    ▪ MENU PRINCIPAL
+                  </button>
+                )}
+                {!isPaused && savedBattles.length > 0 && (
+                  <button
+                    type="button"
+                    className="mil-btn-secondary"
+                    onClick={() => onLoadBattle?.(savedBattles[0].id)}
+                  >
+                    ▸ CONTINUAR SALVA ({savedBattles[0].gameMode?.toUpperCase()})
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="mil-btn-secondary"
+                  style={{ borderColor: '#c28e38', color: '#c28e38' }}
+                  onClick={() => onPlaySandbox?.(selectedMode, selectedMapId)}
+                >
+                  🛠️ MODO CAIXA DE AREIA (TESTE LIVRE)
+                </button>
+                <button
+                  type="button"
+                  className="mil-btn-primary"
+                  onClick={() =>
+                    onPlayMode(selectedMode, startingResources, selectedMapId, selectedDifficulty)
+                  }
+                >
+                  ⚔ INICIAR OPERAÇÃO
+                </button>
+              </footer>
+            </div>
+          )}
+
+          {activeTab === 'multiplayer' && (
+            <div className="mil-subpane">
+              <MultiplayerLobby
+                onStartOnlineMatch={onStartOnlineMatch}
+                onOpenFirebaseConfig={() => {
+                  setFbError('');
+                  setFbModalOpen(true);
+                }}
+              />
+            </div>
+          )}
+
+          {activeTab === 'tutorial' && (
+            <div className="mil-subpane">
+              <TutorialModal
+                embedded
+                onStartGuided={() => {
+                  try {
+                    localStorage.setItem('frontline_start_guided', '1');
+                  } catch {
+                    // noop
+                  }
+                  if (isPaused) {
+                    onResume?.();
+                  } else {
+                    onPlayMode(selectedMode, startingResources, selectedMapId, selectedDifficulty);
+                  }
+                }}
+                onStartAssaultDrill={() => {
+                  if (isPaused) {
+                    if (typeof window !== 'undefined') {
+                      window.__frontlineGame?.startAssaultSandboxDrill?.();
+                    }
+                    onResume?.();
+                  } else {
+                    try {
+                      localStorage.setItem('frontline_assault_drill', '1');
+                    } catch {
+                      // noop
+                    }
+                    onPlaySandbox?.(selectedMode, selectedMapId);
+                  }
+                }}
+              />
+            </div>
+          )}
+
+          {activeTab === 'skins' && (
+            <div className="mil-subpane">
+              <div className="mil-subbar">
+                <button
+                  type="button"
+                  className={`mil-pill ${subTab === 'skins' ? 'active' : ''}`}
+                  onClick={() => setSubTab('skins')}
+                >
+                  ✦ UNIFORMES & CAMUFLAGEM
+                </button>
+                <button
+                  type="button"
+                  className={`mil-pill ${subTab === 'arsenal' ? 'active' : ''}`}
+                  onClick={() => setSubTab('arsenal')}
+                >
+                  ▪ CATÁLOGO F1–F4
+                </button>
+              </div>
+
+              {subTab !== 'arsenal' ? (
+                <div className="mil-skins-grid">
+                  {ARMY_SKINS.map((sk) => {
+                    const isActive = (hud.playerSkinId || 'olive_classic') === sk.id;
+                    return (
+                      <button
+                        key={sk.id}
+                        type="button"
+                        className={`mil-skin-card ${isActive ? 'active' : ''}`}
+                        onClick={() => onSelectSkin?.(sk.id)}
+                      >
+                        <div className="mil-skin-swatches">
+                          <span style={{ background: sk.uniform }} />
+                          <span style={{ background: sk.helmet }} />
+                          <span style={{ background: sk.vehicle }} />
+                        </div>
+                        <div className="mil-skin-info">
+                          <strong>{sk.name}</strong>
+                          <span>{sk.subtitle}</span>
+                        </div>
+                        <span className="mil-map-check">{isActive ? '▪ ATIVA' : '▸'}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mil-controls-grid">
+                  {BOTTOM_BAR_CATEGORIES.map((cat) =>
+                    cat.actionIds.map((actId, idx) => {
+                      const cmd = COMMAND_BY_ID[actId];
+                      if (!cmd) return null;
+                      return (
+                        <div key={cmd.id} className="mil-ctrl-item">
+                          <kbd>[{cat.hotkey || cat.key}] › [{idx + 1}]</kbd>
+                          <div>
+                            <strong>{cmd.name} ({cmd.cost} SUP)</strong>
+                            <span>{cmd.subtitle}</span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'system' && (
+            <div className="mil-subpane">
+              <div className="mil-subbar">
+                <button
+                  type="button"
+                  className={`mil-pill ${systemSubTab === 'saves' ? 'active' : ''}`}
+                  onClick={() => setSubTab('saves')}
+                >
+                  ▪ SALVAR / CARREGAR
+                </button>
+                <button
+                  type="button"
+                  className={`mil-pill ${systemSubTab === 'settings' ? 'active' : ''}`}
+                  onClick={() => setSubTab('settings')}
+                >
+                  ⚙ ÁUDIO & VÍDEO
+                </button>
+                <button
+                  type="button"
+                  className={`mil-pill ${systemSubTab === 'controls' ? 'active' : ''}`}
+                  onClick={() => setSubTab('controls')}
+                >
+                  ▸ MANUAL DE CAMPO
+                </button>
+                {!isInstalledPwa && (
+                  <button
+                    type="button"
+                    className="mil-pill"
+                    onClick={() => onInstallPwa?.()}
+                  >
+                    ▸ INSTALAR APP
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="mil-pill"
+                  onClick={() => {
+                    setFbError('');
+                    setFbModalOpen(true);
+                  }}
+                >
+                  ⚙️ Configurar Chaves Firebase
+                </button>
+              </div>
+
+              {systemSubTab === 'saves' && (
+                <div>
+                  <div className="mil-save-bar">
+                    <input
+                      type="text"
+                      className="mil-input"
+                      placeholder={`Nome da Operação (${hud.gameMode.toUpperCase()})`}
+                      value={saveTitleInput}
+                      onChange={(e) => setSaveTitleInput(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="mil-btn-primary"
+                      style={{ minHeight: 44, padding: '0 14px' }}
+                      onClick={() => {
+                        onSaveBattle?.(saveTitleInput.trim() || null);
+                        setSaveTitleInput('');
+                      }}
+                    >
+                      ▪ SALVAR
+                    </button>
+                    <button
+                      type="button"
+                      className="mil-btn-secondary"
+                      onClick={() => onExportBattle?.(null)}
+                    >
+                      ▸ EXPORTAR .JSON
+                    </button>
+                    <button
+                      type="button"
+                      className="mil-btn-secondary"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      ▸ IMPORTAR .JSON
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".json,application/json"
+                      style={{ display: 'none' }}
+                      onChange={handleFileImport}
+                    />
+                  </div>
+
+                  {savedBattles.length === 0 ? (
+                    <div className="mil-empty-box">
+                      Nenhuma batalha salva. Clique em SALVAR ou pressione [F9] durante a partida.
+                    </div>
+                  ) : (
+                    <div className="mil-saves-list">
+                      {savedBattles.map((save, idx) => (
+                        <div key={save.id} className="mil-save-row">
+                          <div>
+                            <strong>#{idx + 1} {save.title}</strong>
+                            <span>
+                              {(save.gameMode || '1v1').toUpperCase()} • {save.supplies} SUP • {save.allyUnitsCount || 0} Tropas
+                            </span>
+                          </div>
+                          <div className="mil-save-actions">
+                            <button
+                              type="button"
+                              className="mil-pill active"
+                              onClick={() => onLoadBattle?.(save.id)}
+                            >
+                              ▸ CARREGAR
+                            </button>
+                            <button
+                              type="button"
+                              className="mil-pill"
+                              onClick={() => onDeleteBattle?.(save.id)}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {systemSubTab === 'settings' && (
+                <div className="mil-settings-list">
+                  <label className="mil-setting-row">
+                    <div>
+                      <strong>Velocidade da Câmera</strong>
+                      <span>{(s.camSpeed || 1).toFixed(1)}x</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="2.2"
+                      step="0.1"
+                      value={s.camSpeed || 1}
+                      onChange={(e) => onUpdateSettings({ camSpeed: parseFloat(e.target.value) })}
+                    />
+                  </label>
+
+                  <label className="mil-setting-row">
+                    <div>
+                      <strong>Volume Geral</strong>
+                      <span>{Math.round((s.volume ?? 0.35) * 100)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={s.volume ?? 0.35}
+                      onChange={(e) => onUpdateSettings({ volume: parseFloat(e.target.value) })}
+                    />
+                  </label>
+
+                  <div className="mil-setting-row">
+                    <div>
+                      <strong>Sombras Solares (PCF)</strong>
+                      <span>{s.highQuality ? 'Ativadas' : 'Desempenho'}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className={`mil-pill ${s.highQuality ? 'active' : ''}`}
+                      onClick={() => onUpdateSettings({ highQuality: !s.highQuality })}
+                    >
+                      {s.highQuality ? '▪ ATIVADAS' : '▸ DESATIVADAS'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {systemSubTab === 'controls' && (
+                <div className="mil-controls-grid">
+                  <div className="mil-ctrl-item"><kbd>W A S D</kbd><div><strong>Câmera</strong><span>Mover pelo campo</span></div></div>
+                  <div className="mil-ctrl-item"><kbd>Scroll</kbd><div><strong>Zoom</strong><span>Estratégico ↔ Tático</span></div></div>
+                  <div className="mil-ctrl-item"><kbd>Espaço</kbd><div><strong>Pausa Tática</strong><span>Dar ordens em pausa</span></div></div>
+                  <div className="mil-ctrl-item"><kbd>Clique Dir.</kbd><div><strong>Mover / Atacar</strong><span>Ocupar casas e trincheiras</span></div></div>
+                  <div className="mil-ctrl-item"><kbd>F1 – F5</kbd><div><strong>Abas</strong><span>Infantaria, Veículos, Eng., Defesas</span></div></div>
+                  <div className="mil-ctrl-item"><kbd>K / F9</kbd><div><strong>Atalhos</strong><span>Separar soldado [K] • Salvar [F9]</span></div></div>
+                </div>
+              )}
+            </div>
+          )}
+        </main>
+      </div>
+
+      {fbModalOpen && (
+        <div className="sys-modal-backdrop" onClick={() => setFbModalOpen(false)}>
+          <div className="sys-modal-card mp-fb-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="tutorial-header">
+              <div>
+                <div className="tutorial-kicker">DEPLOY VERCEL / FIREBASE REALTIME DATABASE</div>
+                <h3 className="tutorial-title">⚙️ CONFIGURAR CHAVES FIREBASE</h3>
+              </div>
+              <button type="button" className="hud-btn" onClick={() => setFbModalOpen(false)}>
+                ✕
+              </button>
+            </div>
+            <p className="mp-desc" style={{ marginTop: 8 }}>
+              Cole abaixo o JSON do seu <code>firebaseConfig</code> (ou configure as variáveis <code>VITE_FIREBASE_API_KEY</code> e <code>VITE_FIREBASE_DATABASE_URL</code> na Vercel):
+            </p>
+            <textarea
+              className="mp-fb-textarea"
+              rows={8}
+              value={fbConfigText}
+              onChange={(e) => setFbConfigText(e.target.value)}
+              placeholder={'{\n  "apiKey": "...",\n  "authDomain": "...",\n  "databaseURL": "https://seu-projeto-default-rtdb.firebaseio.com",\n  "projectId": "..."\n}'}
+            />
+            {fbError && <div className="mp-status-note" style={{ color: '#f87171' }}>{fbError}</div>}
+            <div className="mp-waiting-footer" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="mil-btn-secondary"
+                onClick={() => {
+                  networkManager.updateFirebaseConfig(null);
+                  setFbConfigText('');
+                  setFbModalOpen(false);
+                }}
+              >
+                🗑 Limpar (Modo Local)
+              </button>
+              <button
+                type="button"
+                className="mil-btn-primary"
+                onClick={() => {
+                  try {
+                    const parsed = JSON.parse(fbConfigText);
+                    if (!parsed.apiKey || !parsed.databaseURL) {
+                      setFbError('Informe pelo menos apiKey e databaseURL válidos.');
+                      return;
+                    }
+                    networkManager.updateFirebaseConfig(parsed);
+                    setFbModalOpen(false);
+                  } catch {
+                    setFbError('JSON inválido. Verifique as aspas e chaves.');
+                  }
+                }}
+              >
+                ✓ SALVAR CONFIGURAÇÃO
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

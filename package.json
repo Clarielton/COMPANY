@@ -1,0 +1,22 @@
+{
+  "name": "neon-syndicate",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Jogo de ação em mundo aberto urbano (crime sandbox) 2D top-down — React + Canvas",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test:smoke": "node scripts/smoke-test.mjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}

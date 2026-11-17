@@ -1,0 +1,77 @@
+export const FACTIONS = {
+  player: {
+    id: 'player',
+    name: 'Seu Sindicato',
+    short: 'SINDICATO',
+    color: '#00f5d4',
+    territoryFill: 'rgba(0, 245, 212, 0.18)',
+    neon: '#00f5d4',
+    clothes: ['#0b3c49', '#00b4d8', '#14213d'],
+    weapons: ['pistol', 'uzi', 'ak47'],
+  },
+  lossantos: {
+    id: 'lossantos',
+    name: 'Los Santos',
+    short: 'LOS SANTOS',
+    color: '#ff2a85',
+    territoryFill: 'rgba(255, 42, 133, 0.22)',
+    neon: '#ff2a85',
+    clothes: ['#6a0f49', '#b5179e', '#3c096c'],
+    weapons: ['bat', 'pistol', 'uzi', 'shotgun'],
+  },
+  sindicalistas: {
+    id: 'sindicalistas',
+    name: 'Sindicalistas',
+    short: 'SINDIC.',
+    color: '#ff9f1c',
+    territoryFill: 'rgba(255, 159, 28, 0.22)',
+    neon: '#ff9f1c',
+    clothes: ['#7f4f24', '#ca6702', '#3d2c1e'],
+    weapons: ['bat', 'pistol', 'shotgun', 'mp5'],
+  },
+  yakuza: {
+    id: 'yakuza',
+    name: 'Yakuza',
+    short: 'YAKUZA',
+    color: '#ff1e42',
+    territoryFill: 'rgba(255, 30, 66, 0.22)',
+    neon: '#ff1e42',
+    clothes: ['#2b0b12', '#800f2f', '#1a1a22'],
+    weapons: ['knife', 'pistol', 'uzi', 'ak47'],
+  },
+  police: {
+    id: 'police',
+    name: 'DP Metropolitano',
+    short: 'DP METRO',
+    color: '#3a86ff',
+    territoryFill: 'rgba(58, 134, 255, 0.15)',
+    neon: '#3a86ff',
+    clothes: ['#102542', '#1d3557', '#0b132b'],
+    weapons: ['pistol', 'shotgun', 'mp5', 'm4'],
+  },
+  civilian: {
+    id: 'civilian',
+    name: 'Civis',
+    short: 'CIVIL',
+    color: '#9aa5b1',
+    territoryFill: 'rgba(154, 165, 177, 0.08)',
+    neon: '#cbd5e1',
+    clothes: ['#334155', '#475569', '#52525b', '#3f3f46', '#1e293b', '#4c1d95'],
+    weapons: [],
+  },
+};
+
+export const RIVAL_IDS = ['lossantos', 'sindicalistas', 'yakuza'];
+
+// Grade 3x3 de distritos (col 0..2, row 0..2). Cada distrito cobre 3x3 quarteirões.
+export const INITIAL_DISTRICTS = [
+  { id: 'd_0_0', col: 0, row: 0, name: 'Docas Oeste', owner: 'lossantos', vibe: '#ff2a85' },
+  { id: 'd_1_0', col: 1, row: 0, name: 'Distrito Industrial', owner: 'sindicalistas', vibe: '#ff9f1c' },
+  { id: 'd_2_0', col: 2, row: 0, name: 'Little Tokyo', owner: 'yakuza', vibe: '#ff1e42' },
+  { id: 'd_0_1', col: 0, row: 1, name: 'Vila Sul', owner: 'lossantos', vibe: '#ff2a85' },
+  { id: 'd_1_1', col: 1, row: 1, name: 'Centro Financeiro', owner: 'sindicalistas', vibe: '#ff9f1c' },
+  { id: 'd_2_1', col: 2, row: 1, name: 'Neon Plaza', owner: 'yakuza', vibe: '#ff1e42' },
+  { id: 'd_0_2', col: 0, row: 2, name: 'Bairro Ferroviário', owner: 'sindicalistas', vibe: '#ff9f1c' },
+  { id: 'd_1_2', col: 1, row: 2, name: 'Parque Central', owner: 'lossantos', vibe: '#ff2a85' },
+  { id: 'd_2_2', col: 2, row: 2, name: 'Torre Leste', owner: 'yakuza', vibe: '#ff1e42' },
+];
