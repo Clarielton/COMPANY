@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Minimap from './Minimap.jsx';
 import TutorialModal from './TutorialModal.jsx';
+import { BATTALION_UNLOCKS } from '../game/data/accountData.js';
 import { HudPanel, useHudLayout } from './HudPanel.jsx';
 import {
   COMMAND_BY_ID,
@@ -704,6 +705,45 @@ export default function HUD({
               ).actionIds.map((actId, idx) => renderActionSlot(actId, idx, false))}
             </div>
           )}
+
+          {/* Batalhões Especiais Desbloqueados por XP da Conta (incluindo Lançar Paraquedistas) */}
+          {(() => {
+            const unlockedSet = new Set(hud.unlockedBattalions || []);
+            const available = BATTALION_UNLOCKS.filter(
+              (b) => hud.sandboxMode || unlockedSet.has(b.id)
+            );
+            if (available.length === 0) return null;
+            return (
+              <div className="account-battalions-strip">
+                {available.map((b) =>
+                  b.isSpecialDrop ? (
+                    <button
+                      key={b.id}
+                      type="button"
+                      className={`hud-btn ${hud.activeCommandMode === 'paradrop' ? 'active' : ''}`}
+                      onClick={() => gameRef.current?.activateParatrooperDrop()}
+                      title={b.desc}
+                    >
+                      🪂 Lançar Paraquedistas
+                      {hud.paradropCooldown > 0 ? ` (${hud.paradropCooldown}s)` : ` (${b.costSup} SUP)`}
+                    </button>
+                  ) : (
+                    <button
+                      key={b.id}
+                      type="button"
+                      className="hud-btn"
+                      onClick={() =>
+                        gameRef.current?.deployUnlockedBattalion(b.id, b.unitType, b.costSup)
+                      }
+                      title={b.desc}
+                    >
+                      {b.icon} {b.name.split('(')[0].trim()} ({b.costSup} SUP)
+                    </button>
+                  )
+                )}
+              </div>
+            );
+          })()}
         </div>
       </HudPanel>
 

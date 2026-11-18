@@ -499,6 +499,7 @@ export class Game {
     const mapId = room?.mapId || 'normandy_fields';
     const mapSeed = room?.mapSeed || 1944;
     const startingRes = room?.startingResources || 600;
+    const isCampaign = Boolean(room?.isCampaign);
 
     this.mapId = mapId;
     this.map = new BattlefieldMap({ seed: mapSeed, mapId });
@@ -506,10 +507,48 @@ export class Game {
 
     this.setupMatch('1v1', startingRes, mapId, 'medium');
     this.isMultiplayer = true;
+    this.isCampaign = isCampaign;
+    this.campaignDay = room?.campaignDay || 1;
     this.networkManager = networkManager;
     this.localSlot = localSlot;
     this.localPlayerFaction = localSlot === 2 ? 'enemy_1' : 'player';
     this.localPlayerTeam = localSlot === 2 ? 'enemies' : 'allies';
+
+    // Aplicação Automática dos Pacotes Pagos Exclusivos de Campanha de 15 Dias
+    if (isCampaign && networkManager) {
+      const packs = networkManager.getActiveCampaignPacks?.() || [];
+      const hq = this.map?.hqs?.player || { x: 1150, y: 4280 };
+      const hqBld = this.baseBuildings.find((b) => b.faction === 'player' && b.isMainHQ);
+
+      if (packs.includes('hq_defense') || packs.includes('vip_combo')) {
+        // 2 Bunkers de Concreto nas entradas da base
+        this.spawnUnit('player', 'concrete_bunker', hq.x + 190, hq.y - 125, 0);
+        this.spawnUnit('player', 'concrete_bunker', hq.x + 190, hq.y + 125, 0);
+        // Perímetro de Sacos de Areia + Arame Farpado + Ouriços Checos Antitanque
+        this.fortifiedWalls.push(
+          new FortifiedWallLine({ x1: hq.x + 150, y1: hq.y - 190, x2: hq.x + 210, y2: hq.y - 60, team: 'allies' }),
+          new FortifiedWallLine({ x1: hq.x + 210, y1: hq.y + 60, x2: hq.x + 150, y2: hq.y + 190, team: 'allies' })
+        );
+        this.barbedWires.push(
+          new BarbedWireLine({ x1: hq.x + 245, y1: hq.y - 170, x2: hq.x + 245, y2: hq.y + 170, team: 'allies' })
+        );
+        this.barricades.push(
+          new BarricadeLine({ x1: hq.x + 270, y1: hq.y - 95, x2: hq.x + 270, y2: hq.y + 95, team: 'allies' })
+        );
+        if (hqBld) {
+          hqBld.maxHp += 500;
+          hqBld.hp += 500;
+        }
+        // +1 Esquadrão de Engenheiros de Guarda inicial
+        this.spawnUnit('player', 'engineers', hq.x + 115, hq.y + 40, 0);
+      }
+
+      if (packs.includes('vip_combo')) {
+        this.supplies += 250;
+        this.ammo += 100;
+        this.fuel += 100;
+      }
+    }
 
     // Inversão de Câmera & Facção para Jogador 2 (Eixo - Base Norte/Leste)
     if (localSlot === 2) {
@@ -2336,6 +2375,13 @@ export class Game {
     if (this.audio?.setMusicMode) this.audio.setMusicMode('paused');
     this.audio.play(winnerTeam === 'allies' ? 'win' : 'defeat');
     this.notify(title, subtitle, winnerTeam === 'allies' ? '#a3be8c' : '#c94a38');
+    if (this.networkManager?.addAccountXp) {
+      const won = winnerTeam === (this.localPlayerTeam || 'allies');
+      this.networkManager.addAccountXp(won ? 300 : 120, {
+        isCampaign: Boolean(this.isCampaign),
+        won,
+      });
+    }
     this._emitHud();
   }
 
@@ -3937,6 +3983,34 @@ export class Game {
       return;
     }
 
+    // 8b. Lançamento Aéreo de Paraquedistas (Batalhão Nível 4+)
+    if (this.activeCommandMode === 'paradrop') {
+      if (input.mouse.rightClicked) {
+        this.activeCommandMode = null;
+        return;
+      }
+      if (input.mouse.clicked) {
+        const px = clamp(this.worldMouse.x, 140, BATTLEFIELD_SIZE - 140);
+        const py = clamp(this.worldMouse.y, 140, BATTLEFIELD_SIZE - 140);
+        if (this.intelRevealed || this.map.isPositionVisibleToAllies(px, py) || this.sandboxMode) {
+          if (this.sandboxMode || this.supplies >= 320) {
+            if (!this.sandboxMode) this.supplies -= 320;
+            this.paradropCooldown = this.sandboxMode ? 0 : 45;
+            const para = this.spawnUnit(this.localPlayerFaction || 'player', 'assault_squad', px, py, 0);
+            if (para) para.name = 'Paraquedistas 101st Airborne';
+            this.audio.play('star');
+            this.spawnText(px, py - 24, '🪂 PARAQUEDISTAS EM SOLO!', '#c28e38');
+          } else {
+            this.notify('SUPRIMENTOS INSUFICIENTES', 'Necessário 320 SUP para lançamento aéreo.', '#c94a38');
+          }
+        } else {
+          this.notify('ÁREA NÃO VISÍVEL', 'Lance os Paraquedistas em qualquer ponto visível do mapa.', '#c94a38');
+        }
+        this.activeCommandMode = null;
+      }
+      return;
+    }
+
     // 8. Construir Fortificações Fixas (Torre de Defesa / Guarita, Ninho MG/AT, Bunker de Concreto, Posto de Observação)
     if (
       this.activeCommandMode === 'build_watchtower' ||
@@ -4452,6 +4526,33 @@ export class Game {
 
   pushPointOutsideAllBoxes(pos, currentSquad = null, solidBoxes = null) {
     return this.map?.pushPointOutsideAllBoxes(pos, currentSquad, solidBoxes) || pos;
+  }
+
+  activateParatrooperDrop() {
+    if ((this.paradropCooldown || 0) > 0 && !this.sandboxMode) {
+      this.notify('PARAQUEDISTAS EM RECARGA', `Aguarde ${Math.ceil(this.paradropCooldown)}s.`, '#c94a38');
+      return false;
+    }
+    this.activeCommandMode = this.activeCommandMode === 'paradrop' ? null : 'paradrop';
+    this._emitHud();
+    return true;
+  }
+
+  deployUnlockedBattalion(battalionId, unitType, costSup = 250) {
+    if (!this.sandboxMode && this.supplies < costSup) {
+      this.notify('SUPRIMENTOS INSUFICIENTES', `Necessário ${costSup} SUP.`, '#c94a38');
+      return false;
+    }
+    if (!this.sandboxMode) this.supplies -= costSup;
+    const fac = this.localPlayerFaction || 'player';
+    const hq = this.map?.hqs?.[fac] || { x: 1150, y: 4280 };
+    const sq = this.spawnUnit(fac, unitType, hq.x + (fac === 'player' ? 140 : -140), hq.y + randInt(-90, 90), fac === 'player' ? 0 : Math.PI);
+    if (sq) {
+      this.audio.play('pickup');
+      this.spawnText(sq.x, sq.y - 22, `🎖️ BATALHÃO MOBILIZADO!`, '#c28e38');
+    }
+    this._emitHud();
+    return true;
   }
 
   _ungarrisonUnit(unit) {
@@ -5181,6 +5282,7 @@ export class Game {
 
   _updateUnitsAndCombat(dt) {
     this._frameSolidBoxes = this.getSolidBuildingBoxes();
+    if (this.paradropCooldown > 0) this.paradropCooldown = Math.max(0, this.paradropCooldown - dt);
     this.vehicleExhaustTimer -= dt;
     const emitVehicleExhaust = this.vehicleExhaustTimer <= 0;
     if (emitVehicleExhaust) this.vehicleExhaustTimer = 0.14;
@@ -6402,6 +6504,11 @@ export class Game {
       sandboxMode: Boolean(this.sandboxMode),
       sandboxFogDisabled: Boolean(this.sandboxFogDisabled),
       sandboxAiPaused: Boolean(this.sandboxAiPaused),
+      isCampaign: Boolean(this.isCampaign),
+      campaignDay: this.campaignDay || 1,
+      unlockedBattalions: this.networkManager?.currentUser?.unlockedBattalions || [],
+      paradropCooldown: Math.ceil(this.paradropCooldown || 0),
+      activeCommandMode: this.activeCommandMode,
       guidedTrainingTip: this._getGuidedTrainingTip(),
       selectedStructure: selectedStructObj
         ? {

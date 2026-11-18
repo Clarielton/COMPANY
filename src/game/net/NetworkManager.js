@@ -1,7 +1,10 @@
+import { CAMPAIGN_PACKS, computeLevelFromXp } from '../data/accountData.js';
+
 const CONFIG_STORAGE_KEY = 'frontline_firebase_config';
 const USER_STORAGE_KEY = 'COF_AUTH_USER';
 const ACTIVE_ROOMS_KEY = 'COF_ACTIVE_ROOMS';
 const CAMPAIGNS_KEY = 'COF_CAMPAIGNS_V1';
+const LOCAL_CAMPAIGN_SAVES_KEY = 'COF_LOCAL_CAMPAIGN_SAVES';
 const BROADCAST_CHANNEL_NAME = 'cof_multiplayer_v2';
 
 const DEFAULT_FIREBASE_CONFIG = {
@@ -343,12 +346,21 @@ export class NetworkManager {
   // =========================================================================
   _applyAuthenticatedUser({ uid, callsign, email = '', provider = 'guest', idToken = null, isFirebase = false }) {
     const existing = this._loadStoredUser();
+    const xp = existing?.xp ?? 0;
+    const prog = computeLevelFromXp(xp);
+    const ownedPacks = Array.isArray(existing?.ownedCampaignPacks) ? existing.ownedCampaignPacks : [];
     const user = {
       uid: uid || existing?.uid || `cmd_${Math.random().toString(36).slice(2, 10)}`,
       callsign: (callsign || existing?.callsign || 'Comandante').trim().slice(0, 24),
       email: email || existing?.email || '',
       provider,
-      rank: existing?.rank || 'Tenente',
+      xp,
+      level: prog.level,
+      rank: prog.rank,
+      unlockedBattalions: prog.unlockedBattalions,
+      militaryGold: typeof existing?.militaryGold === 'number' ? existing.militaryGold : 1000,
+      ownedCampaignPacks: ownedPacks,
+      hasGoldInsignia: ownedPacks.includes('vip_combo'),
       wins: existing?.wins || 0,
       losses: existing?.losses || 0,
       idToken: idToken || null,
@@ -363,19 +375,168 @@ export class NetworkManager {
     this._saveStoredUser(user);
 
     if (isFirebase && this.hasFirebaseConfig()) {
-      this._rtdbPut(`players/${user.uid}`, {
-        uid: user.uid,
-        callsign: user.callsign,
-        rank: user.rank,
-        wins: user.wins,
-        losses: user.losses,
-        lastSeen: Date.now(),
-      }).catch(() => {});
+      this._syncUserToCloud(user);
+      // Tenta recuperar perfil da nuvem para sincronizar XP/compras entre dispositivos
+      this._rtdbGet(`players/${user.uid}`)
+        .then((cloud) => {
+          if (cloud && typeof cloud === 'object' && this.currentUser?.uid === user.uid) {
+            const mergedXp = Math.max(this.currentUser.xp || 0, cloud.xp || 0);
+            const mergedProg = computeLevelFromXp(mergedXp);
+            const mergedPacks = Array.from(
+              new Set([
+                ...(this.currentUser.ownedCampaignPacks || []),
+                ...(Array.isArray(cloud.ownedCampaignPacks) ? cloud.ownedCampaignPacks : []),
+              ])
+            );
+            this.currentUser = {
+              ...this.currentUser,
+              xp: mergedXp,
+              level: mergedProg.level,
+              rank: mergedProg.rank,
+              unlockedBattalions: mergedProg.unlockedBattalions,
+              ownedCampaignPacks: mergedPacks,
+              hasGoldInsignia: mergedPacks.includes('vip_combo'),
+              militaryGold:
+                typeof cloud.militaryGold === 'number'
+                  ? cloud.militaryGold
+                  : this.currentUser.militaryGold,
+              wins: Math.max(this.currentUser.wins || 0, cloud.wins || 0),
+              losses: Math.max(this.currentUser.losses || 0, cloud.losses || 0),
+            };
+            this._saveStoredUser(this.currentUser);
+            this._emit();
+          }
+        })
+        .catch(() => {});
     }
 
     this._refreshOpenRooms();
     this._emit();
     return { ok: true, user };
+  }
+
+  _syncUserToCloud(user = this.currentUser) {
+    if (!user) return;
+    this._saveStoredUser(user);
+    if (this.isOnline && this.hasFirebaseConfig()) {
+      this._rtdbPut(`players/${user.uid}`, {
+        uid: user.uid,
+        callsign: user.callsign,
+        xp: user.xp || 0,
+        level: user.level || 1,
+        rank: user.rank || 'Recruta',
+        unlockedBattalions: user.unlockedBattalions || [],
+        militaryGold: user.militaryGold ?? 1000,
+        ownedCampaignPacks: user.ownedCampaignPacks || [],
+        hasGoldInsignia: Boolean(user.hasGoldInsignia),
+        wins: user.wins || 0,
+        losses: user.losses || 0,
+        lastSeen: Date.now(),
+      }).catch(() => {});
+    }
+  }
+
+  addAccountXp(baseAmount, { isCampaign = false, won = false } = {}) {
+    if (!this.currentUser) return null;
+    const packs = this.currentUser.ownedCampaignPacks || [];
+    const hasXpBoost = isCampaign && (packs.includes('xp_boost') || packs.includes('vip_combo'));
+    const gained = Math.max(0, Math.round(baseAmount * (hasXpBoost ? 2 : 1)));
+    const nextXp = (this.currentUser.xp || 0) + gained;
+    const prog = computeLevelFromXp(nextXp);
+    this.currentUser = {
+      ...this.currentUser,
+      xp: nextXp,
+      level: prog.level,
+      rank: prog.rank,
+      unlockedBattalions: prog.unlockedBattalions,
+      wins: (this.currentUser.wins || 0) + (won ? 1 : 0),
+    };
+    this._syncUserToCloud(this.currentUser);
+    this._emit();
+    return { gained, hasXpBoost, level: prog.level, rank: prog.rank };
+  }
+
+  addMilitaryGold(amount) {
+    if (!this.currentUser) return;
+    this.currentUser = {
+      ...this.currentUser,
+      militaryGold: Math.max(0, (this.currentUser.militaryGold || 0) + amount),
+    };
+    this._syncUserToCloud(this.currentUser);
+    this._emit();
+  }
+
+  purchaseCampaignPack(packId) {
+    if (!this.currentUser) return { ok: false, error: 'Faça login primeiro.' };
+    const pack = CAMPAIGN_PACKS.find((p) => p.id === packId);
+    if (!pack) return { ok: false, error: 'Pacote inválido.' };
+    const owned = new Set(this.currentUser.ownedCampaignPacks || []);
+    if (owned.has(packId)) return { ok: false, error: 'Pacote já adquirido na conta.' };
+    const gold = this.currentUser.militaryGold || 0;
+    if (gold < pack.priceGold) {
+      return { ok: false, error: `Ouro Militar insuficiente (${pack.priceGold} necessários).` };
+    }
+    owned.add(packId);
+    if (packId === 'vip_combo') {
+      owned.add('xp_boost');
+      owned.add('hq_defense');
+    }
+    const ownedArr = Array.from(owned);
+    this.currentUser = {
+      ...this.currentUser,
+      militaryGold: gold - pack.priceGold,
+      ownedCampaignPacks: ownedArr,
+      hasGoldInsignia: ownedArr.includes('vip_combo'),
+    };
+    this._syncUserToCloud(this.currentUser);
+    this._emit();
+    return { ok: true, pack };
+  }
+
+  getActiveCampaignPacks() {
+    return this.currentUser?.ownedCampaignPacks || [];
+  }
+
+  // =========================================================================
+  // SAVES DE CAMPANHA 100% LOCAIS (COF_LOCAL_CAMPAIGN_SAVES — ATÉ 3 SLOTS)
+  // =========================================================================
+  getLocalCampaignSaves() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LOCAL_CAMPAIGN_SAVES_KEY) || '[null,null,null]');
+      return [0, 1, 2].map((i) => (Array.isArray(raw) && raw[i] ? raw[i] : null));
+    } catch {
+      return [null, null, null];
+    }
+  }
+
+  saveLocalCampaignSlot(slotIdx, snapshot) {
+    if (slotIdx < 0 || slotIdx > 2 || !snapshot) return false;
+    try {
+      const slots = this.getLocalCampaignSaves();
+      slots[slotIdx] = {
+        ...snapshot,
+        slotIdx,
+        savedAt: Date.now(),
+      };
+      localStorage.setItem(LOCAL_CAMPAIGN_SAVES_KEY, JSON.stringify(slots));
+      this._emit();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  deleteLocalCampaignSlot(slotIdx) {
+    if (slotIdx < 0 || slotIdx > 2) return false;
+    try {
+      const slots = this.getLocalCampaignSaves();
+      slots[slotIdx] = null;
+      localStorage.setItem(LOCAL_CAMPAIGN_SAVES_KEY, JSON.stringify(slots));
+      this._emit();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async loginAsGuest(callsign) {

@@ -11,6 +11,11 @@ import {
   AI_DIFFICULTIES,
   ARMY_SKINS,
 } from '../game/data/rtsData.js';
+import {
+  BATTALION_UNLOCKS,
+  CAMPAIGN_PACKS,
+  computeLevelFromXp,
+} from '../game/data/accountData.js';
 
 function MapPreviewCanvas({ map }) {
   const cRef = useRef(null);
@@ -89,6 +94,7 @@ export default function GameMenus({
   );
   const [net, setNet] = useState(() => networkManager.getStatusSnapshot());
   const [newCampName, setNewCampName] = useState('');
+  const [storeMsg, setStoreMsg] = useState('');
   const [selectedMode, setSelectedMode] = useState(hud?.gameMode || '1v1');
   const [selectedMapId, setSelectedMapId] = useState(hud?.mapId || 'normandy_fields');
   const [selectedDifficulty, setSelectedDifficulty] = useState(hud?.aiDifficulty || 'medium');
@@ -334,6 +340,10 @@ export default function GameMenus({
   const activeTab =
     subTab === 'campaign'
       ? 'campaign'
+      : subTab === 'ranks'
+      ? 'ranks'
+      : subTab === 'store'
+      ? 'store'
       : ['skins', 'arsenal', 'tutorial', 'saves', 'settings', 'controls', 'sandbox'].includes(subTab)
       ? 'arsenal_hub'
       : 'rooms';
@@ -379,23 +389,41 @@ export default function GameMenus({
               className={`mil-tab-btn ${activeTab === 'campaign' ? 'active' : ''}`}
               onClick={() => setSubTab('campaign')}
             >
-              🗓️ CAMPANHA (15 DIAS)
+              🗓️ CAMPANHAS (15 DIAS)
+            </button>
+            <button
+              type="button"
+              className={`mil-tab-btn ${activeTab === 'ranks' ? 'active' : ''}`}
+              onClick={() => setSubTab('ranks')}
+            >
+              🎖️ PATENTE & BATALHÕES
+            </button>
+            <button
+              type="button"
+              className={`mil-tab-btn ${activeTab === 'store' ? 'active' : ''}`}
+              onClick={() => setSubTab('store')}
+            >
+              🛒 SUPRIMENTOS
             </button>
             <button
               type="button"
               className={`mil-tab-btn ${activeTab === 'arsenal_hub' ? 'active' : ''}`}
               onClick={() => setSubTab('tutorial')}
             >
-              🎖️ ARSENAL, TUTORIAL & SISTEMA
+              📖 GUIA / SIST.
             </button>
           </nav>
 
           {net.currentUser && (
             <div className="hub-user-badge">
               <div className="hub-user-info">
-                <strong>{net.currentUser.callsign}</strong>
+                <strong>
+                  {net.currentUser.hasGoldInsignia ? '🏅 ' : ''}
+                  {net.currentUser.callsign}
+                </strong>
                 <small>
-                  {net.currentUser.rank} • {net.currentUser.wins || 0}V / {net.currentUser.losses || 0}D
+                  Nv.{net.currentUser.level || 1} {net.currentUser.rank} • 💰{' '}
+                  {net.currentUser.militaryGold ?? 1000} Ouro
                 </small>
               </div>
               <button
@@ -442,9 +470,28 @@ export default function GameMenus({
                         setNewCampName('');
                       }}
                     >
-                      ➕ Criar Nova Campanha de 15 Dias
+                      ➕ Criar Campanha de 15 Dias
                     </button>
                   </div>
+                </div>
+
+                {/* Pacotes Táticos Ativos na Conta para Campanhas */}
+                <div className="mp-active-packs-strip">
+                  <span className="mp-kicker">PACOTES ATIVOS NA CAMPANHA:</span>
+                  {(net.currentUser?.ownedCampaignPacks || []).length === 0 ? (
+                    <small style={{ color: '#8c948c' }}>
+                      Nenhum pacote ativo (visite 🛒 SUPRIMENTOS para equipar Defesa de QG / 2× XP).
+                    </small>
+                  ) : (
+                    (net.currentUser?.ownedCampaignPacks || []).map((pid) => {
+                      const pk = CAMPAIGN_PACKS.find((x) => x.id === pid);
+                      return (
+                        <span key={pid} className="mp-ping-badge">
+                          {pk?.icon || '✓'} {pk?.badge || pid}
+                        </span>
+                      );
+                    })
+                  )}
                 </div>
 
                 <div className="mp-campaigns-grid">
@@ -472,6 +519,8 @@ export default function GameMenus({
                               mapId: c.mapId || 'normandy_fields',
                               mapSeed: c.mapSeed || 194406,
                               startingResources: c.playerSupplies || 1000,
+                              isCampaign: true,
+                              campaignDay: c.day || 1,
                             },
                             localSlot: 1,
                           })
@@ -481,6 +530,222 @@ export default function GameMenus({
                       </button>
                     </div>
                   ))}
+                </div>
+              </div>
+
+              {/* Salvamento 100% Local das Campanhas (COF_LOCAL_CAMPAIGN_SAVES — 3 Slots) */}
+              <div className="mp-card">
+                <div className="mp-card-head">
+                  <div>
+                    <span className="mp-kicker">COF_LOCAL_CAMPAIGN_SAVES • ARMAZENAMENTO NO NAVEGADOR</span>
+                    <h3>SAVES LOCAIS DE CAMPANHA (3 SLOTS)</h3>
+                  </div>
+                  <div className="mp-join-inline">
+                    <button
+                      type="button"
+                      className="mil-btn-secondary"
+                      onClick={() => onExportBattle?.(null)}
+                    >
+                      📥 Exportar Save (.json)
+                    </button>
+                    <button
+                      type="button"
+                      className="mil-btn-secondary"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      📤 Importar Save
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".json,application/json"
+                      style={{ display: 'none' }}
+                      onChange={handleFileImport}
+                    />
+                  </div>
+                </div>
+                <div className="mp-campaigns-grid">
+                  {networkManager.getLocalCampaignSaves().map((slotData, idx) => (
+                    <div key={idx} className="mp-campaign-card">
+                      <div className="mp-card-head">
+                        <strong>SLOT #{idx + 1}</strong>
+                        <span className="mp-ping-badge">
+                          {slotData ? `Dia ${slotData.campaignDay || 1}/15` : 'VAZIO'}
+                        </span>
+                      </div>
+                      <small style={{ color: '#8c948c' }}>
+                        {slotData
+                          ? `${slotData.title || 'Campanha'} • ${Math.round(slotData.supplies || 0)} SUP`
+                          : 'Salve uma partida de Campanha em andamento para retomar deste dispositivo.'}
+                      </small>
+                      <div className="mp-join-inline" style={{ marginLeft: 0 }}>
+                        {slotData && (
+                          <button
+                            type="button"
+                            className="mil-pill active"
+                            onClick={() => onImportBattle?.(slotData)}
+                          >
+                            ▸ Carregar
+                          </button>
+                        )}
+                        {isPaused && (
+                          <button
+                            type="button"
+                            className="mil-pill"
+                            onClick={() => {
+                              const snap = window.__frontlineGame?.serializeBattleState?.(
+                                `Campanha Slot ${idx + 1}`
+                              );
+                              if (snap) networkManager.saveLocalCampaignSlot(idx, snap);
+                            }}
+                          >
+                            💾 Salvar Aqui
+                          </button>
+                        )}
+                        {slotData && (
+                          <button
+                            type="button"
+                            className="mil-pill"
+                            onClick={() => networkManager.deleteLocalCampaignSlot(idx)}
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'ranks' && (
+            <div className="mil-subpane">
+              {(() => {
+                const xp = net.currentUser?.xp || 0;
+                const prog = computeLevelFromXp(xp);
+                const span = Math.max(1, prog.nextLevelXp - prog.currentMinXp);
+                const pct =
+                  prog.nextLevelXp > prog.currentMinXp
+                    ? Math.min(100, Math.round(((xp - prog.currentMinXp) / span) * 100))
+                    : 100;
+                return (
+                  <div className="mp-card">
+                    <div className="mp-card-head">
+                      <div>
+                        <span className="mp-kicker">PROGRESSÃO DE CONTA NA NUVEM (FIREBASE)</span>
+                        <h3>
+                          PATENTE ATUAL: Nível {prog.level} — {prog.rank.toUpperCase()} ({xp} XP)
+                        </h3>
+                      </div>
+                      <button
+                        type="button"
+                        className="mil-pill"
+                        onClick={() => networkManager.addAccountXp(250, { isCampaign: true })}
+                        title="Simular ganho de XP de Campanha para testar desbloqueios"
+                      >
+                        ⚡ +250 XP Teste
+                      </button>
+                    </div>
+                    <div className="struct-ctx-hpbar" style={{ height: 8 }}>
+                      <div style={{ width: `${pct}%` }} />
+                    </div>
+                    <small style={{ color: '#8c948c' }}>
+                      Próximo nível: {xp} / {prog.nextLevelXp} XP • Toda partida concluída e dia sobrevivido na Campanha de 15 Dias concede XP.
+                    </small>
+
+                    <div className="mp-campaigns-grid">
+                      {BATTALION_UNLOCKS.map((b) => {
+                        const unlocked = prog.level >= b.requiredLevel;
+                        return (
+                          <div
+                            key={b.id}
+                            className={`mp-campaign-card ${unlocked ? 'unlocked-bat' : 'locked-bat'}`}
+                          >
+                            <div className="mp-card-head">
+                              <strong>
+                                {b.icon} {b.name}
+                              </strong>
+                              <span className="mp-ping-badge">
+                                {unlocked ? '✓ LIBERADO' : `🔒 Nv.${b.requiredLevel} (${b.rankName})`}
+                              </span>
+                            </div>
+                            <small style={{ color: '#b7beb7', lineHeight: 1.4 }}>{b.desc}</small>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {activeTab === 'store' && (
+            <div className="mil-subpane">
+              <div className="mp-card">
+                <div className="mp-card-head">
+                  <div>
+                    <span className="mp-kicker">LOJA CONECTADA À CONTA • VINCULADA AO UID</span>
+                    <h3>🛒 SUPRIMENTOS DE CAMPANHA (ITENS PAGOS)</h3>
+                  </div>
+                  <div className="mp-room-meta">
+                    <span className="mp-ping-badge">
+                      💰 {net.currentUser?.militaryGold ?? 1000} Ouro Militar
+                    </span>
+                    <button
+                      type="button"
+                      className="mil-pill"
+                      onClick={() => networkManager.addMilitaryGold(500)}
+                    >
+                      +500 Ouro (Teste)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="store-fairplay-banner">
+                  ⚠️ <strong>Válido Exclusivamente em Operações de Campanha de 15 Dias</strong> — Desativado automaticamente em Partidas 1v1 / 2v2 Competitivas.
+                </div>
+
+                {storeMsg && <div className="mp-status-note">{storeMsg}</div>}
+
+                <div className="mp-campaigns-grid">
+                  {CAMPAIGN_PACKS.map((pack) => {
+                    const owned = (net.currentUser?.ownedCampaignPacks || []).includes(pack.id);
+                    return (
+                      <div key={pack.id} className="mp-campaign-card store-pack-card">
+                        <div className="mp-card-head">
+                          <strong>
+                            {pack.icon} {pack.name}
+                          </strong>
+                          <span className="mp-ping-badge">{pack.badge}</span>
+                        </div>
+                        <small style={{ color: '#8c948c', lineHeight: 1.4 }}>{pack.desc}</small>
+                        <ul className="store-perks-list">
+                          {pack.perks.map((pk, idx) => (
+                            <li key={idx}>✓ {pk}</li>
+                          ))}
+                        </ul>
+                        <button
+                          type="button"
+                          disabled={owned}
+                          className={owned ? 'mil-btn-secondary' : 'mil-btn-primary'}
+                          onClick={() => {
+                            const res = networkManager.purchaseCampaignPack(pack.id);
+                            setStoreMsg(
+                              res.ok
+                                ? `✓ ${pack.name} ativado na sua conta!`
+                                : res.error || 'Erro na compra.'
+                            );
+                          }}
+                        >
+                          {owned
+                            ? '✓ EQUIPADO NA CONTA'
+                            : `ADQUIRIR (${pack.priceGold} OURO • ${pack.priceBrl})`}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>
