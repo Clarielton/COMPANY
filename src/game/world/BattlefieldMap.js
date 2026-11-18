@@ -1972,20 +1972,42 @@ export class BattlefieldMap {
   isPointBlocked(x, y, unitRadius = 24, ignoreStructureId = null, customWalls = []) {
     for (const st of this.structures) {
       if (st.id === ignoreStructureId) continue;
-      const hw = st.w * 0.5 + unitRadius * 0.72;
-      const hd = st.d * 0.5 + unitRadius * 0.72;
+      const hw = st.w * 0.5 + unitRadius * 0.82;
+      const hd = (st.d || st.h || st.w) * 0.5 + unitRadius * 0.82;
       if (Math.abs(x - st.x) < hw && Math.abs(y - st.y) < hd) return true;
+    }
+    for (const col of this.allColliders || []) {
+      if (col.kind !== 'base_building') continue;
+      if (dist(x, y, col.x, col.y) < (col.radius || 48) + unitRadius * 0.82) return true;
     }
     for (const w of this.stoneWalls) {
       const d = this._distToSegment(x, y, w.x1, w.y1, w.x2, w.y2);
-      if (d < (w.thickness || 18) * 0.5 + unitRadius * 0.65) return true;
+      if (d < (w.thickness || 18) * 0.5 + unitRadius * 0.82) return true;
     }
     for (const cw of customWalls) {
-      const d = this._distToSegment(x, y, cw.x1, cw.y1, cw.x2, cw.y2);
-      if (d < (cw.width || 24) * 0.5 + unitRadius * 0.65) return true;
+      if (cw.hp !== undefined && cw.hp <= 0) continue;
+      const thick = (cw.width || 22) * 0.5 + unitRadius * 0.82;
+      if (cw.isGate) {
+        const len = Math.hypot(cw.x2 - cw.x1, cw.y2 - cw.y1) || 1;
+        const ux = (cw.x2 - cw.x1) / len;
+        const uy = (cw.y2 - cw.y1) / len;
+        const cx = (cw.x1 + cw.x2) * 0.5;
+        const cy = (cw.y1 + cw.y2) * 0.5;
+        const gapHalf = Math.min(38, len * 0.32);
+        const lx = cx - ux * gapHalf;
+        const ly = cy - uy * gapHalf;
+        const rx2 = cx + ux * gapHalf;
+        const ry2 = cy + uy * gapHalf;
+
+        if (this._distToSegment(x, y, cw.x1, cw.y1, lx, ly) < thick) return true;
+        if (this._distToSegment(x, y, rx2, ry2, cw.x2, cw.y2) < thick) return true;
+        if (!cw.gateOpen && this._distToSegment(x, y, lx, ly, rx2, ry2) < thick) return true;
+      } else {
+        if (this._distToSegment(x, y, cw.x1, cw.y1, cw.x2, cw.y2) < thick) return true;
+      }
     }
     for (const wrk of this.wrecks) {
-      if (dist(x, y, wrk.x, wrk.y) < (wrk.colRadius || 26) + unitRadius * 0.65) return true;
+      if (dist(x, y, wrk.x, wrk.y) < (wrk.colRadius || 26) + unitRadius * 0.82) return true;
     }
     return false;
   }
@@ -2064,8 +2086,8 @@ export class BattlefieldMap {
     // 1. Colisão AABB contra Construções Rurais/Urbanas (exceto se o esquadrão estiver entrando nela em Guarnição)
     for (const st of this.structures) {
       if (st.id === ignoreStructureId) continue;
-      const hw = st.w * 0.5 + unitRadius * 0.65;
-      const hd = st.d * 0.5 + unitRadius * 0.65;
+      const hw = st.w * 0.5 + unitRadius * 0.9;
+      const hd = (st.d || st.h || st.w) * 0.5 + unitRadius * 0.9;
       const dx = rx - st.x;
       const dy = ry - st.y;
       if (Math.abs(dx) < hw && Math.abs(dy) < hd) {
@@ -2086,7 +2108,7 @@ export class BattlefieldMap {
       const dx = rx - col.x;
       const dy = ry - col.y;
       const d = Math.hypot(dx, dy);
-      const minD = col.radius + unitRadius * 0.55;
+      const minD = (col.radius || 48) + unitRadius * 0.85;
       if (d < minD) {
         collided = true;
         const invD = d < 0.001 ? 0.001 : d;
@@ -2106,7 +2128,7 @@ export class BattlefieldMap {
         w.y1,
         w.x2,
         w.y2,
-        (w.thickness || 18) * 0.5 + unitRadius * 0.55
+        (w.thickness || 18) * 0.5 + unitRadius * 0.85
       );
       if (res.x !== rx || res.y !== ry) collided = true;
       rx = res.x;
@@ -2116,24 +2138,49 @@ export class BattlefieldMap {
     // 3. Colisão contra Muros Fortificados Construídos (Concreto Armado — Portão abre para aliados)
     for (const cw of customWalls) {
       if (cw.hp !== undefined && cw.hp <= 0) continue;
-      if (cw.isGate && cw.gateOpen) continue;
-      const res = this._pushFromSegment(
-        rx,
-        ry,
-        cw.x1,
-        cw.y1,
-        cw.x2,
-        cw.y2,
-        (cw.width || 24) * 0.5 + unitRadius * 0.55
-      );
-      if (res.x !== rx || res.y !== ry) collided = true;
-      rx = res.x;
-      ry = res.y;
+      const thick = (cw.width || 22) * 0.5 + unitRadius * 0.85;
+      if (cw.isGate) {
+        const len = Math.hypot(cw.x2 - cw.x1, cw.y2 - cw.y1) || 1;
+        const ux = (cw.x2 - cw.x1) / len;
+        const uy = (cw.y2 - cw.y1) / len;
+        const cx = (cw.x1 + cw.x2) * 0.5;
+        const cy = (cw.y1 + cw.y2) * 0.5;
+        const gapHalf = Math.min(38, len * 0.32);
+        const lx = cx - ux * gapHalf;
+        const ly = cy - uy * gapHalf;
+        const rx2 = cx + ux * gapHalf;
+        const ry2 = cy + uy * gapHalf;
+
+        // Asa Esquerda (sempre sólida)
+        let res = this._pushFromSegment(rx, ry, cw.x1, cw.y1, lx, ly, thick);
+        if (res.x !== rx || res.y !== ry) collided = true;
+        rx = res.x;
+        ry = res.y;
+
+        // Asa Direita (sempre sólida)
+        res = this._pushFromSegment(rx, ry, rx2, ry2, cw.x2, cw.y2, thick);
+        if (res.x !== rx || res.y !== ry) collided = true;
+        rx = res.x;
+        ry = res.y;
+
+        // Vão Central do Portão (só bloqueia se NÃO estiver aberto)
+        if (!cw.gateOpen) {
+          res = this._pushFromSegment(rx, ry, lx, ly, rx2, ry2, thick);
+          if (res.x !== rx || res.y !== ry) collided = true;
+          rx = res.x;
+          ry = res.y;
+        }
+      } else {
+        const res = this._pushFromSegment(rx, ry, cw.x1, cw.y1, cw.x2, cw.y2, thick);
+        if (res.x !== rx || res.y !== ry) collided = true;
+        rx = res.x;
+        ry = res.y;
+      }
     }
 
     // 4. Colisão contra Carcaças de Carros, Caminhões e Tanques Destruídos
     for (const wrk of this.wrecks) {
-      const minD = (wrk.colRadius || 26) + unitRadius * 0.55;
+      const minD = (wrk.colRadius || 26) + unitRadius * 0.85;
       const dx = rx - wrk.x;
       const dy = ry - wrk.y;
       const d = Math.hypot(dx, dy);
@@ -2638,7 +2685,28 @@ export class BattlefieldMap {
     };
 
     for (const sw of this.stoneWalls) testSegment(sw.x1, sw.y1, sw.x2, sw.y2, 'wall');
-    for (const fw of fortifiedWalls) testSegment(fw.x1, fw.y1, fw.x2, fw.y2, 'wall');
+    for (const fw of fortifiedWalls) {
+      if (fw.hp !== undefined && fw.hp <= 0) continue;
+      if (fw.isGate) {
+        const len = Math.hypot(fw.x2 - fw.x1, fw.y2 - fw.y1) || 1;
+        const ux = (fw.x2 - fw.x1) / len;
+        const uy = (fw.y2 - fw.y1) / len;
+        const cx = (fw.x1 + fw.x2) * 0.5;
+        const cy = (fw.y1 + fw.y2) * 0.5;
+        const gapHalf = Math.min(38, len * 0.32);
+        const lx = cx - ux * gapHalf;
+        const ly = cy - uy * gapHalf;
+        const rx2 = cx + ux * gapHalf;
+        const ry2 = cy + uy * gapHalf;
+        testSegment(fw.x1, fw.y1, lx, ly, 'wall');
+        testSegment(rx2, ry2, fw.x2, fw.y2, 'wall');
+        if (!fw.gateOpen) {
+          testSegment(lx, ly, rx2, ry2, 'gate_closed');
+        }
+      } else {
+        testSegment(fw.x1, fw.y1, fw.x2, fw.y2, 'wall');
+      }
+    }
     for (const bar of barricades) testSegment(bar.x1, bar.y1, bar.x2, bar.y2, 'barricade');
 
     return closest;
@@ -2686,7 +2754,7 @@ export class BattlefieldMap {
   }
 
   getSolidBuildingBoxes(fortifiedWalls = [], barricades = []) {
-    const padding = 9; // ~0.6m de margem de segurança no plano XZ
+    const padding = 1.2; // Margem de segurança no plano XZ
     const boxes = [];
 
     for (const st of this.structures || []) {
@@ -2719,40 +2787,66 @@ export class BattlefieldMap {
       });
     }
 
+    for (const wrk of this.wrecks || []) {
+      const r = wrk.colRadius || 24;
+      boxes.push({
+        minX: wrk.x - r - padding,
+        maxX: wrk.x + r + padding,
+        minZ: wrk.y - r - padding,
+        maxZ: wrk.y + r + padding,
+        isGarrisonable: false,
+        ref: wrk,
+      });
+    }
+
+    const pushSubSegmentBoxes = (ax, ay, bx, by, halfT, wallRef) => {
+      const segLen = Math.hypot(bx - ax, by - ay);
+      if (segLen < 1) return;
+      const numSteps = Math.max(1, Math.ceil(segLen / 28));
+      for (let s = 0; s < numSteps; s++) {
+        const t0 = s / numSteps;
+        const t1 = (s + 1) / numSteps;
+        const sx0 = ax + (bx - ax) * t0;
+        const sz0 = ay + (by - ay) * t0;
+        const sx1 = ax + (bx - ax) * t1;
+        const sz1 = ay + (by - ay) * t1;
+        boxes.push({
+          minX: Math.min(sx0, sx1) - halfT - padding,
+          maxX: Math.max(sx0, sx1) + halfT + padding,
+          minZ: Math.min(sz0, sz1) - halfT - padding,
+          maxZ: Math.max(sz0, sz1) + halfT + padding,
+          isGarrisonable: false,
+          ref: wallRef,
+        });
+      }
+    };
+
     const pushWallBoxes = (list, defaultThick) => {
       for (const w of list || []) {
         if (w.hp !== undefined && w.hp <= 0) continue;
         const halfT = (w.thickness || w.width || defaultThick) * 0.5;
-        const dx = Math.abs(w.x2 - w.x1);
-        const dz = Math.abs(w.y2 - w.y1);
-        if (dx < 20 || dz < 20) {
-          boxes.push({
-            minX: Math.min(w.x1, w.x2) - halfT - padding,
-            maxX: Math.max(w.x1, w.x2) + halfT + padding,
-            minZ: Math.min(w.y1, w.y2) - halfT - padding,
-            maxZ: Math.max(w.y1, w.y2) + halfT + padding,
-            isGarrisonable: false,
-            ref: w,
-          });
-        } else {
-          // Subdivide muro diagonal em 4 caixas ajustadas
-          const segs = 4;
-          for (let i = 0; i < segs; i++) {
-            const t0 = i / segs;
-            const t1 = (i + 1) / segs;
-            const sx0 = w.x1 + (w.x2 - w.x1) * t0;
-            const sz0 = w.y1 + (w.y2 - w.y1) * t0;
-            const sx1 = w.x1 + (w.x2 - w.x1) * t1;
-            const sz1 = w.y1 + (w.y2 - w.y1) * t1;
-            boxes.push({
-              minX: Math.min(sx0, sx1) - halfT - padding,
-              maxX: Math.max(sx0, sx1) + halfT + padding,
-              minZ: Math.min(sz0, sz1) - halfT - padding,
-              maxZ: Math.max(sz0, sz1) + halfT + padding,
-              isGarrisonable: false,
-              ref: w,
-            });
+        if (w.isGate) {
+          const len = Math.hypot(w.x2 - w.x1, w.y2 - w.y1) || 1;
+          const ux = (w.x2 - w.x1) / len;
+          const uy = (w.y2 - w.y1) / len;
+          const cx = (w.x1 + w.x2) * 0.5;
+          const cy = (w.y1 + w.y2) * 0.5;
+          const gapHalf = Math.min(38, len * 0.32);
+          const lx = cx - ux * gapHalf;
+          const ly = cy - uy * gapHalf;
+          const rx2 = cx + ux * gapHalf;
+          const ry2 = cy + uy * gapHalf;
+
+          // Asas laterais são SEMPRE sólidas!
+          pushSubSegmentBoxes(w.x1, w.y1, lx, ly, halfT, w);
+          pushSubSegmentBoxes(rx2, ry2, w.x2, w.y2, halfT, w);
+
+          // Vão central do portão: só é sólido quando FECHADO
+          if (!w.gateOpen) {
+            pushSubSegmentBoxes(lx, ly, rx2, ry2, halfT, w);
           }
+        } else {
+          pushSubSegmentBoxes(w.x1, w.y1, w.x2, w.y2, halfT, w);
         }
       }
     };
@@ -2801,17 +2895,27 @@ export class BattlefieldMap {
     return true;
   }
 
-  pushPointOutsideAllBoxes(pos, currentSquad = null, solidBoxes = null) {
+  pushPointOutsideAllBoxes(pos, currentSquad = null, solidBoxes = null, unitRadius = null) {
     const boxes = solidBoxes || this.getSolidBuildingBoxes();
     const pz = pos.z !== undefined ? pos.z : pos.y;
     let px = pos.x;
     let curZ = pz;
 
+    let r = 0;
+    if (typeof unitRadius === 'number') {
+      r = Math.max(0, unitRadius * 0.72);
+    } else if (currentSquad) {
+      if (currentSquad.spec?.type === 'vehicle') {
+        r = (currentSquad.radius || 30) * 0.72;
+      } else {
+        r = 8;
+      }
+    }
+
     for (const box of boxes) {
       if (
         currentSquad &&
-        ((box.ref?.isGate && box.ref.team === currentSquad.team) ||
-          currentSquad.targetBuilding === box.ref ||
+        (currentSquad.targetBuilding === box.ref ||
           currentSquad.garrisonedBuilding === box.ref ||
           (currentSquad.order?.type === 'garrison_building' &&
             box.ref?.id &&
@@ -2822,16 +2926,20 @@ export class BattlefieldMap {
       ) {
         continue;
       }
-      if (px > box.minX && px < box.maxX && curZ > box.minZ && curZ < box.maxZ) {
-        const dLeft = px - box.minX;
-        const dRight = box.maxX - px;
-        const dTop = curZ - box.minZ;
-        const dBottom = box.maxZ - curZ;
+      const bMinX = box.minX - r;
+      const bMaxX = box.maxX + r;
+      const bMinZ = box.minZ - r;
+      const bMaxZ = box.maxZ + r;
+      if (px > bMinX && px < bMaxX && curZ > bMinZ && curZ < bMaxZ) {
+        const dLeft = px - bMinX;
+        const dRight = bMaxX - px;
+        const dTop = curZ - bMinZ;
+        const dBottom = bMaxZ - curZ;
         const minD = Math.min(dLeft, dRight, dTop, dBottom);
-        if (minD === dLeft) px = box.minX;
-        else if (minD === dRight) px = box.maxX;
-        else if (minD === dTop) curZ = box.minZ;
-        else curZ = box.maxZ;
+        if (minD === dLeft) px = bMinX;
+        else if (minD === dRight) px = bMaxX;
+        else if (minD === dTop) curZ = bMinZ;
+        else curZ = bMaxZ;
       }
     }
 
@@ -2884,13 +2992,103 @@ export class BattlefieldMap {
       return waypoints;
     }
 
+    // 1. Detecta se a rota direta atravessa alguma Muralha Fortificada com ou sem Portão
+    let hitWall = null;
+    let hitWallPt = null;
+    let minWallT = 1.0;
+    for (const fw of fortifiedWalls || []) {
+      if (fw.hp !== undefined && fw.hp <= 0) continue;
+      const hit = this._intersectSegments(startX, startY, endX, endY, fw.x1, fw.y1, fw.x2, fw.y2);
+      if (hit && hit.t > 0.02 && hit.t < 0.98 && hit.t < minWallT) {
+        minWallT = hit.t;
+        hitWall = fw;
+        hitWallPt = hit;
+      }
+    }
+
+    if (hitWall) {
+      let gate = null;
+      if (hitWall.isGate) {
+        gate = hitWall;
+      } else {
+        // Se a muralha atingida não tem portão próprio, procura o portão mais próximo na linha defensiva
+        let bestGD = 1800;
+        for (const fw of fortifiedWalls) {
+          if (!fw.isGate || (fw.hp !== undefined && fw.hp <= 0)) continue;
+          const gc = fw.getCenter();
+          const d = Math.hypot(gc.x - hitWallPt.x, gc.y - hitWallPt.y);
+          if (d < bestGD) {
+            bestGD = d;
+            gate = fw;
+          }
+        }
+      }
+
+      if (gate) {
+        const gc = gate.getCenter();
+        const gLen = Math.hypot(gate.x2 - gate.x1, gate.y2 - gate.y1) || 1;
+        const nx = -(gate.y2 - gate.y1) / gLen;
+        const ny = (gate.x2 - gate.x1) / gLen;
+
+        const sideStart = (startX - gc.x) * nx + (startY - gc.y) * ny;
+        const sideEnd = (endX - gc.x) * nx + (endY - gc.y) * ny;
+        const signStart = sideStart >= 0 ? 1 : -1;
+        const signEnd = sideEnd >= 0 ? 1 : -1;
+
+        const approachDist = Math.max(48, unitRadius + 24);
+        const pApproachStart = {
+          x: clamp(gc.x + nx * signStart * approachDist, 80, this.size - 80),
+          y: clamp(gc.y + ny * signStart * approachDist, 80, this.size - 80),
+        };
+        const pGateMid = {
+          x: clamp(gc.x, 80, this.size - 80),
+          y: clamp(gc.y, 80, this.size - 80),
+        };
+        const pApproachEnd = {
+          x: clamp(gc.x + nx * signEnd * approachDist, 80, this.size - 80),
+          y: clamp(gc.y + ny * signEnd * approachDist, 80, this.size - 80),
+        };
+
+        if (Math.hypot(pApproachStart.x - startX, pApproachStart.y - startY) > 20) {
+          waypoints.push(pApproachStart);
+        }
+        waypoints.push(pGateMid);
+        if (Math.hypot(pApproachEnd.x - endX, pApproachEnd.y - endY) > 20) {
+          waypoints.push(pApproachEnd);
+        }
+        waypoints.push({ x: endX, y: endY });
+        return waypoints;
+      } else {
+        // Muralha fechada sem portão: contorna pela extremidade mais curta
+        const end1 = { x: hitWall.x1, y: hitWall.y1 };
+        const end2 = { x: hitWall.x2, y: hitWall.y2 };
+        const wLen = Math.hypot(end2.x - end1.x, end2.y - end1.y) || 1;
+        const ux = (end2.x - end1.x) / wLen;
+        const uy = (end2.y - end1.y) / wLen;
+        const margin = unitRadius + 32;
+        const cand1 = {
+          x: clamp(end1.x - ux * margin, 80, this.size - 80),
+          y: clamp(end1.y - uy * margin, 80, this.size - 80),
+        };
+        const cand2 = {
+          x: clamp(end2.x + ux * margin, 80, this.size - 80),
+          y: clamp(end2.y + uy * margin, 80, this.size - 80),
+        };
+        const cost1 = Math.hypot(cand1.x - startX, cand1.y - startY) + Math.hypot(endX - cand1.x, endY - cand1.y);
+        const cost2 = Math.hypot(cand2.x - startX, cand2.y - startY) + Math.hypot(endX - cand2.x, endY - cand2.y);
+        waypoints.push(cost1 <= cost2 ? cand1 : cand2);
+        waypoints.push({ x: endX, y: endY });
+        return waypoints;
+      }
+    }
+
     let curX = startX;
     let curY = startY;
     const solidBoxes = this.getSolidBuildingBoxes(fortifiedWalls, barricades);
-    const maxIter = 1; // Máximo 1 ponto intermediário suave de contorno (sem zigue-zague)
+    const maxIter = 2; // Até 2 pontos intermediários suaves de contorno ao redor de construções
 
     for (let iter = 0; iter < maxIter; iter++) {
-      // 1. Teste Line-vs-AABB contra todas as caixas retangulares (casas e muros compridos)
+      // Teste Line-vs-AABB contra caixas retangulares (casas, prédios e carcaças)
       let hitBox = null;
       let hitDist = Infinity;
       const p1 = { x: curX, z: curY };
@@ -2908,7 +3106,7 @@ export class BattlefieldMap {
       }
 
       if (hitBox) {
-        const margin = Math.max(22, unitRadius);
+        const margin = Math.max(22, unitRadius + 8);
         const corners = [
           { x: clamp(hitBox.minX - margin, 80, this.size - 80), y: clamp(hitBox.minZ - margin, 80, this.size - 80) },
           { x: clamp(hitBox.maxX + margin, 80, this.size - 80), y: clamp(hitBox.minZ - margin, 80, this.size - 80) },

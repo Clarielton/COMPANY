@@ -5445,7 +5445,13 @@ export class Game {
       if (!w.isGate || (w.hp ?? 2500) <= 0) continue;
       const c = w.getCenter();
       const nearAlly = this.units.some(
-        (u) => u.alive && u.team === w.team && !u.embarkedInId && dist(u.x, u.y, c.x, c.y) <= 125
+        (u) =>
+          u.alive &&
+          u.team === w.team &&
+          !u.embarkedInId &&
+          (dist(u.x, u.y, c.x, c.y) <= 150 ||
+            (Array.isArray(u.waypoints) &&
+              u.waypoints.some((wp) => wp && dist(wp.x, wp.y, c.x, c.y) <= 60)))
       );
       w.gateOpen = nearAlly;
       const targetProg = nearAlly ? 1 : 0;
@@ -6035,14 +6041,19 @@ export class Game {
       if (!u.garrisonedBuildingId && !u.embarkedInId && this.map?.pushPointOutsideAllBoxes) {
         const solidBoxes = this._frameSolidBoxes || (this._frameSolidBoxes = this.getSolidBuildingBoxes());
         const centerPos = { x: u.x, z: u.y };
-        this.map.pushPointOutsideAllBoxes(centerPos, u, solidBoxes);
+        this.map.pushPointOutsideAllBoxes(
+          centerPos,
+          u,
+          solidBoxes,
+          u.spec.type === 'vehicle' ? (u.radius || 32) : 16
+        );
         u.x = centerPos.x;
         u.y = centerPos.z;
         if (u.spec.type === 'infantry' && Array.isArray(u.soldiers)) {
           for (const s of u.soldiers) {
             if (!s.alive) continue;
             const sPos = { x: s.worldX, z: s.worldY };
-            this.map.pushPointOutsideAllBoxes(sPos, u, solidBoxes);
+            this.map.pushPointOutsideAllBoxes(sPos, u, solidBoxes, 6);
             s.worldX = sPos.x;
             s.worldY = sPos.z;
           }

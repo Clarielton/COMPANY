@@ -278,3 +278,27 @@ No **Lobby Skirmish**, escolha o campo de batalha antes de mobilizar o batalhão
 3. **Limpeza da Aba `📖 GUIA / SIST.` & `TUTORIAL`:**
    - O botão `🛠️ CAMPO DE TREINAMENTO (SANDBOX)` foi totalmente removido do menu de Guia e Sistema.
    - A sub-aba `⚙ ARSENAL DE COMBATE` foi removida da aba Tutorial/Guia, mantendo o menu enxuto e focado em Doutrina Militar, Uniformes, Saves e Configurações de Áudio/Câmera.
+
+---
+
+## 21. Sistema Físico de Colisão em Muralhas & Roteamento por Portões
+
+### 21.1 Travamento Físico de Asas e Passagem por Portões Automáticos
+- **Divisão Geométrica das Muralhas com Portão:** Muralhas fortificadas dotadas de portão (`isGate: true`) são divididas em duas asas laterais sólidas (`left wing` e `right wing`) e um vão central livre (`gapHalf = Math.min(38, len * 0.32)`):
+  - **Asas Laterais:** Permanecem 100% sólidas e intransponíveis o tempo todo, tanto em `resolveObstacleCollision` quanto em `getSolidBuildingBoxes` e `pushPointOutsideAllBoxes`. Nem soldados nem veículos blindados conseguem penetrar ou atravessar as laterais de concreto ao lado do portão.
+  - **Vão Central do Portão:** Abre automaticamente quando unidades aliadas se aproximam (distância `<= 150u` ou waypoints de aproximação `<= 60u`). Quando aberto para aliados, o vão central é livre para passagem. Quando fechado (ou para unidades inimigas), o vão é bloqueado com colisão física total.
+  - **Proteção do Chassi de Veículos:** Em `pushPointOutsideAllBoxes`, o envelope de colisão AABB respeita o raio físico de veículos (`radius 28–38u`), garantindo que a carenagem e esteiras do veículo parem com precisão na face externa de construções, carcaças e muralhas.
+
+### 21.2 Roteamento Inteligente (Line-vs-Wall Gate Pathfinding)
+- Quando o jogador emite uma ordem de movimentação com o destino do outro lado de uma muralha defensiva:
+  1. `BattlefieldMap.computeObstacleDetourPath()` detecta a interseção com a muralha defensiva.
+  2. Localiza o portão correspondente ou o portão mais próximo na linha fortificada.
+  3. Gera automaticamente os waypoints táticos guiados:
+     - `pApproachStart`: Ponto de aproximação perpendicular à muralha a 48u de distância.
+     - `pGateMid`: Ponto central exato no meio do portal blindado.
+     - `pApproachEnd`: Ponto de saída perpendicular do outro lado da muralha.
+  4. O renderizador 3D (`Renderer3D.js`) desenha a linha tracejada de caminho passando exatamente pelo vão do portão, orientando o jogador visualmente sem cortes irreais através das paredes.
+
+### 21.3 Status e Validação do Banco de Dados Firebase Realtime Database
+- **URL Ativa:** `https://companyoffrontline-default-rtdb.firebaseio.com/`.
+- **Modo Seguro REST com Autenticação Anônima:** As regras de segurança exigem autenticação ativa (`auth != null`). Ao efetuar o login anônimo ou Google pelo jogo, as requisições incluem o token de autorização. Caso o jogador esteja offline ou em rede local, o motor comuta suavemente para o canal de sincronização `BroadcastChannel`, mantendo a jogabilidade ininterrupta.

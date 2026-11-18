@@ -4571,8 +4571,9 @@ export class Renderer3D {
       if (!u.alive || !u.selected || u.faction !== 'player' || u.order.type === 'hold') continue;
       const raw = [{ x: u.x, y: u.y }];
       if (Array.isArray(u.waypoints) && u.waypoints.length > 0) {
-        const wp0 = u.waypoints[0];
-        if (wp0 && Number.isFinite(wp0.x) && Number.isFinite(wp0.y)) raw.push(wp0);
+        for (const wp of u.waypoints) {
+          if (wp && Number.isFinite(wp.x) && Number.isFinite(wp.y)) raw.push(wp);
+        }
       }
       const endPt = u.finalDestination || { x: u.order.targetX, y: u.order.targetY };
       if (endPt && Number.isFinite(endPt.x) && Number.isFinite(endPt.y)) raw.push(endPt);
