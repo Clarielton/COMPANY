@@ -1,7 +1,8 @@
 const CONFIG_STORAGE_KEY = 'frontline_firebase_config';
-const PROFILE_STORAGE_KEY = 'frontline_commander_name';
-const LOCAL_ROOMS_KEY = 'frontline_mp_local_rooms';
-const BROADCAST_CHANNEL_NAME = 'frontline_rts_mp_v1';
+const USER_STORAGE_KEY = 'COF_AUTH_USER';
+const ACTIVE_ROOMS_KEY = 'COF_ACTIVE_ROOMS';
+const CAMPAIGNS_KEY = 'COF_CAMPAIGNS_V1';
+const BROADCAST_CHANNEL_NAME = 'cof_multiplayer_v2';
 
 const DEFAULT_FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCXzNWDYr_w8lsb48UezYv_Yr7YGo9K3Pw',
@@ -77,16 +78,19 @@ function generateRoomCode() {
 export class NetworkManager {
   constructor() {
     this.config = loadStoredFirebaseConfig();
-    this.uid = `cmd_${Math.random().toString(36).slice(2, 10)}`;
-    this.idToken = null;
-    this.authProvider = 'offline';
-    this.commanderName = this._loadCommanderName();
-    this.isOnline = false;
-    this.mode = 'local_broadcast'; // 'firebase' | 'local_broadcast'
+    this.currentUser = this._loadStoredUser();
+    this.uid = this.currentUser?.uid || `cmd_${Math.random().toString(36).slice(2, 10)}`;
+    this.idToken = this.currentUser?.idToken || null;
+    this.commanderName = this.currentUser?.callsign || 'Comandante';
+    this.isOnline = Boolean(this.currentUser && this.currentUser.isFirebase);
+    this.mode = this.isOnline ? 'firebase' : 'local_broadcast';
+
     this.roomId = null;
     this.room = null;
-    this.localSlot = 1; // 1 = Host (Aliados), 2 = Guest (Eixo)
+    this.localSlot = 1;
     this.pingMs = 14;
+    this.openRooms = [];
+    this.campaigns = this._readLocalCampaigns();
 
     this._listeners = new Set();
     this._cmdListeners = new Set();
@@ -95,28 +99,35 @@ export class NetworkManager {
 
     this._seenCommandIds = new Set();
     this._pollTimer = null;
-    this._heartbeatTimer = null;
+    this._browserPollTimer = null;
     this._channel = null;
 
-    this._initBroadcastChannel();
+    this._initDualLayerSync();
+    this._refreshOpenRooms();
+    this._startBrowserPoll();
   }
 
-  _loadCommanderName() {
+  _loadStoredUser() {
     try {
-      return localStorage.getItem(PROFILE_STORAGE_KEY) || `Comandante_${Math.floor(100 + Math.random() * 899)}`;
+      const raw = localStorage.getItem(USER_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed && parsed.uid ? parsed : null;
     } catch {
-      return 'Comandante';
+      return null;
     }
   }
 
-  setCommanderName(name) {
-    this.commanderName = (name || 'Comandante').trim().slice(0, 24) || 'Comandante';
+  _saveStoredUser(user) {
     try {
-      localStorage.setItem(PROFILE_STORAGE_KEY, this.commanderName);
+      if (!user) {
+        localStorage.removeItem(USER_STORAGE_KEY);
+        return;
+      }
+      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
     } catch {
       // noop
     }
-    this._emit();
   }
 
   hasFirebaseConfig() {
@@ -135,6 +146,7 @@ export class NetworkManager {
 
   getStatusSnapshot() {
     return {
+      currentUser: this.currentUser ? { ...this.currentUser } : null,
       uid: this.uid,
       commanderName: this.commanderName,
       isOnline: this.isOnline,
@@ -144,7 +156,8 @@ export class NetworkManager {
       room: this.room ? { ...this.room } : null,
       localSlot: this.localSlot,
       pingMs: this.pingMs,
-      authProvider: this.authProvider,
+      openRooms: [...this.openRooms],
+      campaigns: [...this.campaigns],
     };
   }
 
@@ -174,17 +187,40 @@ export class NetworkManager {
     for (const fn of this._listeners) fn(snap);
   }
 
-  _initBroadcastChannel() {
-    if (typeof BroadcastChannel === 'undefined') return;
-    try {
-      this._channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
-      this._channel.onmessage = (ev) => {
-        const msg = ev?.data;
-        if (!msg || msg.senderId === this.uid) return;
-        this._handleBroadcastMessage(msg);
-      };
-    } catch {
-      this._channel = null;
+  // =========================================================================
+  // CAMADA DUAL: BROADCASTCHANNEL + SHARED LOCALSTORAGE + FIREBASE RTDB
+  // =========================================================================
+  _initDualLayerSync() {
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        this._channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
+        this._channel.onmessage = (ev) => {
+          const msg = ev?.data;
+          if (!msg || msg.senderId === this.uid) return;
+          this._handleBroadcastMessage(msg);
+        };
+      } catch {
+        this._channel = null;
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', (ev) => {
+        if (ev.key === ACTIVE_ROOMS_KEY) {
+          this._refreshOpenRooms();
+        } else if (ev.key === CAMPAIGNS_KEY) {
+          this.campaigns = this._readLocalCampaigns();
+          this._emit();
+        }
+      });
+
+      // Equivalente ao onDisconnect: remove sala abandonada ao fechar a aba
+      window.addEventListener('beforeunload', () => {
+        if (this.roomId && this.localSlot === 1 && this.room?.status === 'waiting') {
+          this._removeLocalRoom(this.roomId);
+          this._postBroadcast({ kind: 'rooms_updated' });
+        }
+      });
     }
   }
 
@@ -197,13 +233,18 @@ export class NetworkManager {
   }
 
   _handleBroadcastMessage(msg) {
-    if (msg.kind === 'room_sync' && msg.room && msg.room.roomId === this.roomId) {
-      const prevStatus = this.room?.status;
-      this.room = msg.room;
-      this._saveLocalRoom(this.room);
-      this._emit();
-      if (prevStatus !== 'playing' && msg.room.status === 'playing') {
-        for (const fn of this._matchStartListeners) fn(msg.room);
+    if (msg.kind === 'rooms_updated') {
+      this._refreshOpenRooms();
+    } else if (msg.kind === 'room_sync' && msg.room) {
+      this._saveLocalRoom(msg.room);
+      this._refreshOpenRooms();
+      if (msg.room.roomId === this.roomId) {
+        const prevStatus = this.room?.status;
+        this.room = msg.room;
+        this._emit();
+        if (prevStatus !== 'playing' && msg.room.status === 'playing') {
+          for (const fn of this._matchStartListeners) fn(msg.room);
+        }
       }
     } else if (msg.kind === 'command' && msg.roomId === this.roomId && msg.cmd) {
       if (!this._seenCommandIds.has(msg.cmd.id)) {
@@ -222,7 +263,15 @@ export class NetworkManager {
 
   _readLocalRooms() {
     try {
-      return JSON.parse(localStorage.getItem(LOCAL_ROOMS_KEY) || '{}') || {};
+      const raw = JSON.parse(localStorage.getItem(ACTIVE_ROOMS_KEY) || '{}') || {};
+      const now = Date.now();
+      const cleaned = {};
+      for (const [id, r] of Object.entries(raw)) {
+        if (r && now - (r.updatedAt || r.createdAt || now) < 900000) {
+          cleaned[id] = r;
+        }
+      }
+      return cleaned;
     } catch {
       return {};
     }
@@ -231,14 +280,106 @@ export class NetworkManager {
   _saveLocalRoom(room) {
     try {
       const all = this._readLocalRooms();
-      all[room.roomId] = room;
-      localStorage.setItem(LOCAL_ROOMS_KEY, JSON.stringify(all));
+      all[room.roomId] = { ...room, updatedAt: Date.now() };
+      localStorage.setItem(ACTIVE_ROOMS_KEY, JSON.stringify(all));
     } catch {
       // noop
     }
   }
 
-  async loginAnonymous() {
+  _removeLocalRoom(roomId) {
+    try {
+      const all = this._readLocalRooms();
+      delete all[roomId];
+      localStorage.setItem(ACTIVE_ROOMS_KEY, JSON.stringify(all));
+    } catch {
+      // noop
+    }
+  }
+
+  _startBrowserPoll() {
+    if (this._browserPollTimer) clearInterval(this._browserPollTimer);
+    this._browserPollTimer = setInterval(() => {
+      if (this.currentUser) {
+        this._refreshOpenRooms();
+      }
+    }, 2000);
+  }
+
+  async _refreshOpenRooms() {
+    const merged = { ...this._readLocalRooms() };
+
+    if (this.hasFirebaseConfig() && this.isOnline) {
+      try {
+        const remote = await this._rtdbGet('rooms');
+        if (remote && typeof remote === 'object') {
+          for (const [id, r] of Object.entries(remote)) {
+            if (r && r.roomId) merged[id] = r;
+          }
+        }
+      } catch {
+        // Mantém fallback local se Firebase RTDB estiver restrito ou offline
+      }
+    }
+
+    const list = Object.values(merged).filter(
+      (r) => r && r.status === 'WAITING' && (r.playersCount || 1) < (r.maxPlayers || 2)
+    );
+    list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    this.openRooms = list;
+
+    if (this.roomId && merged[this.roomId]) {
+      const prevStatus = this.room?.status;
+      this.room = merged[this.roomId];
+      if (prevStatus !== 'playing' && this.room.status === 'playing') {
+        for (const fn of this._matchStartListeners) fn(this.room);
+      }
+    }
+    this._emit();
+  }
+
+  // =========================================================================
+  // AUTENTICAÇÃO MILITAR (AUTH GATE)
+  // =========================================================================
+  _applyAuthenticatedUser({ uid, callsign, email = '', provider = 'guest', idToken = null, isFirebase = false }) {
+    const existing = this._loadStoredUser();
+    const user = {
+      uid: uid || existing?.uid || `cmd_${Math.random().toString(36).slice(2, 10)}`,
+      callsign: (callsign || existing?.callsign || 'Comandante').trim().slice(0, 24),
+      email: email || existing?.email || '',
+      provider,
+      rank: existing?.rank || 'Tenente',
+      wins: existing?.wins || 0,
+      losses: existing?.losses || 0,
+      idToken: idToken || null,
+      isFirebase,
+    };
+    this.currentUser = user;
+    this.uid = user.uid;
+    this.idToken = user.idToken;
+    this.commanderName = user.callsign;
+    this.isOnline = isFirebase;
+    this.mode = isFirebase ? 'firebase' : 'local_broadcast';
+    this._saveStoredUser(user);
+
+    if (isFirebase && this.hasFirebaseConfig()) {
+      this._rtdbPut(`players/${user.uid}`, {
+        uid: user.uid,
+        callsign: user.callsign,
+        rank: user.rank,
+        wins: user.wins,
+        losses: user.losses,
+        lastSeen: Date.now(),
+      }).catch(() => {});
+    }
+
+    this._refreshOpenRooms();
+    this._emit();
+    return { ok: true, user };
+  }
+
+  async loginAsGuest(callsign) {
+    const cleanName = (callsign || `Cmd_${Math.floor(100 + Math.random() * 899)}`).trim();
     if (this.hasFirebaseConfig()) {
       try {
         const res = await fetch(
@@ -253,30 +394,129 @@ export class NetworkManager {
         );
         const data = await res.json();
         if (res.ok && data.idToken) {
-          this.uid = data.localId || this.uid;
-          this.idToken = data.idToken;
-          this.isOnline = true;
-          this.mode = 'firebase';
-          this.authProvider = 'anonymous';
-          this._emit();
-          return { ok: true, mode: 'firebase' };
+          return this._applyAuthenticatedUser({
+            uid: data.localId,
+            callsign: cleanName,
+            provider: 'anonymous',
+            idToken: data.idToken,
+            isFirebase: true,
+          });
         }
       } catch {
-        // fallback para modo local
+        // Fallback local
       }
     }
+    return this._applyAuthenticatedUser({
+      callsign: cleanName,
+      provider: 'guest_local',
+      isFirebase: false,
+    });
+  }
+
+  async loginWithEmail(email, password, callsign) {
+    if (!email || !password || password.length < 6) {
+      return { ok: false, error: 'Informe e-mail válido e senha com no mínimo 6 caracteres.' };
+    }
+    if (this.hasFirebaseConfig()) {
+      try {
+        const res = await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(
+            this.config.apiKey
+          )}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password, returnSecureToken: true }),
+          }
+        );
+        const data = await res.json();
+        if (res.ok && data.idToken) {
+          return this._applyAuthenticatedUser({
+            uid: data.localId,
+            callsign: callsign || email.split('@')[0],
+            email,
+            provider: 'email',
+            idToken: data.idToken,
+            isFirebase: true,
+          });
+        }
+        return { ok: false, error: data.error?.message || 'E-mail ou senha inválidos.' };
+      } catch {
+        // fallback local
+      }
+    }
+    return this._applyAuthenticatedUser({
+      callsign: callsign || email.split('@')[0],
+      email,
+      provider: 'email_local',
+      isFirebase: false,
+    });
+  }
+
+  async registerWithEmail(email, password, callsign) {
+    if (!email || !password || password.length < 6) {
+      return { ok: false, error: 'Informe e-mail válido e senha com no mínimo 6 caracteres.' };
+    }
+    if (this.hasFirebaseConfig()) {
+      try {
+        const res = await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${encodeURIComponent(
+            this.config.apiKey
+          )}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password, returnSecureToken: true }),
+          }
+        );
+        const data = await res.json();
+        if (res.ok && data.idToken) {
+          return this._applyAuthenticatedUser({
+            uid: data.localId,
+            callsign: callsign || email.split('@')[0],
+            email,
+            provider: 'email',
+            idToken: data.idToken,
+            isFirebase: true,
+          });
+        }
+        return { ok: false, error: data.error?.message || 'Erro ao criar conta.' };
+      } catch {
+        // fallback local
+      }
+    }
+    return this._applyAuthenticatedUser({
+      callsign: callsign || email.split('@')[0],
+      email,
+      provider: 'email_local',
+      isFirebase: false,
+    });
+  }
+
+  async loginWithGoogle(callsign) {
+    const cleanName = (callsign || 'Comandante Google').trim();
+    // Usa fluxo anônimo/token Firebase seguro sem exigir domínio OAuth extra em localhost/Vercel
+    const res = await this.loginAsGuest(cleanName);
+    if (res.ok && this.currentUser) {
+      this.currentUser.provider = 'google';
+      this._saveStoredUser(this.currentUser);
+      this._emit();
+    }
+    return res;
+  }
+
+  logout() {
+    this.leaveRoom();
+    this.currentUser = null;
+    this.idToken = null;
     this.isOnline = false;
-    this.mode = 'local_broadcast';
-    this.authProvider = 'local';
+    this._saveStoredUser(null);
     this._emit();
-    return { ok: true, mode: 'local_broadcast' };
   }
 
-  async loginGoogle() {
-    // Em deploy estático sem SDK externo, usa Firebase Auth REST se configurado ou sessão local autenticada
-    return this.loginAnonymous();
-  }
-
+  // =========================================================================
+  // RTDB HELPERS
+  // =========================================================================
   _rtdbUrl(path) {
     const base = String(this.config?.databaseURL || '').replace(/\/+$/, '');
     const auth = this.idToken ? `?auth=${encodeURIComponent(this.idToken)}` : '';
@@ -313,16 +553,34 @@ export class NetworkManager {
     return res.json();
   }
 
-  async createPrivateRoom({ mapId = 'normandy_fields', startingResources = 600 } = {}) {
+  // =========================================================================
+  // SALAS, SERVER BROWSER & MATCHMAKING AUTOMÁTICO
+  // =========================================================================
+  async createRoom({
+    roomName = '',
+    mapId = 'normandy_fields',
+    mode = '1v1',
+    isPrivate = false,
+    password = '',
+    startingResources = 600,
+  } = {}) {
     const roomId = generateRoomCode();
     const mapSeed = Math.floor(1000 + Math.random() * 900000);
+    const maxPlayers = mode === '2v2' ? 4 : 2;
     const room = {
       roomId,
       codeFormatted: formatRoomCode(roomId),
-      status: 'waiting',
+      roomName: (roomName || `Operação ${formatRoomCode(roomId)}`).trim().slice(0, 36),
+      status: 'WAITING',
+      mode,
       mapId,
       mapSeed,
+      isPrivate: Boolean(isPrivate),
+      password: isPrivate ? String(password || '') : '',
       startingResources,
+      playersCount: 1,
+      maxPlayers,
+      pingMs: this.pingMs,
       createdAt: Date.now(),
       host: { uid: this.uid, name: this.commanderName, ready: true },
       guest: null,
@@ -333,63 +591,27 @@ export class NetworkManager {
     this.localSlot = 1;
     this._saveLocalRoom(room);
 
-    if (this.mode === 'firebase' && this.hasFirebaseConfig()) {
+    if (this.isOnline && this.hasFirebaseConfig()) {
       try {
         await this._rtdbPut(`rooms/${roomId}`, room);
       } catch {
-        this.mode = 'local_broadcast';
+        // Fallback local já salvo em COF_ACTIVE_ROOMS
       }
     }
 
+    this._postBroadcast({ kind: 'room_sync', room });
+    this._postBroadcast({ kind: 'rooms_updated' });
     this._startRoomSyncLoop();
-    this._emit();
+    await this._refreshOpenRooms();
     return room;
   }
 
-  async findOrCreateQuickMatch({ mapId = 'normandy_fields', startingResources = 600 } = {}) {
-    if (this.mode === 'firebase' && this.hasFirebaseConfig()) {
-      try {
-        const queue = await this._rtdbGet('matchmaking_queue');
-        if (queue && typeof queue === 'object') {
-          const open = Object.values(queue).find(
-            (q) => q && q.status === 'waiting' && q.hostUid !== this.uid && Date.now() - q.createdAt < 180000
-          );
-          if (open?.roomId) {
-            const joined = await this.joinRoomByCode(open.roomId);
-            if (joined.ok) return joined;
-          }
-        }
-        const room = await this.createPrivateRoom({ mapId, startingResources });
-        await this._rtdbPut(`matchmaking_queue/${room.roomId}`, {
-          roomId: room.roomId,
-          hostUid: this.uid,
-          status: 'waiting',
-          createdAt: Date.now(),
-        });
-        return { ok: true, room };
-      } catch {
-        // fallback local
-      }
-    }
-
-    // Fallback Local 2 Abas (localStorage + BroadcastChannel)
-    const rooms = this._readLocalRooms();
-    const openLocal = Object.values(rooms).find(
-      (r) => r && r.status === 'waiting' && !r.guest && r.host?.uid !== this.uid && Date.now() - r.createdAt < 300000
-    );
-    if (openLocal) {
-      return this.joinRoomByCode(openLocal.roomId);
-    }
-    const created = await this.createPrivateRoom({ mapId, startingResources });
-    return { ok: true, room: created };
-  }
-
-  async joinRoomByCode(rawCode) {
-    const roomId = normalizeCode(rawCode);
+  async joinRoom(rawCodeOrId, passwordAttempt = '') {
+    const roomId = normalizeCode(rawCodeOrId);
     if (roomId.length < 4) return { ok: false, error: 'Código inválido.' };
 
     let targetRoom = null;
-    if (this.mode === 'firebase' && this.hasFirebaseConfig()) {
+    if (this.isOnline && this.hasFirebaseConfig()) {
       try {
         targetRoom = await this._rtdbGet(`rooms/${roomId}`);
       } catch {
@@ -403,31 +625,62 @@ export class NetworkManager {
     if (!targetRoom) {
       return { ok: false, error: `Sala ${formatRoomCode(roomId)} não encontrada.` };
     }
+    if (targetRoom.isPrivate && targetRoom.password && targetRoom.password !== passwordAttempt) {
+      return { ok: false, error: 'Senha incorreta para esta sala privada.' };
+    }
 
-    targetRoom.guest = { uid: this.uid, name: this.commanderName, ready: true };
+    if (targetRoom.host?.uid !== this.uid) {
+      targetRoom.guest = { uid: this.uid, name: this.commanderName, ready: true };
+      targetRoom.playersCount = Math.min(targetRoom.maxPlayers || 2, 2);
+    }
+
     this.roomId = roomId;
     this.room = targetRoom;
     this.localSlot = targetRoom.host?.uid === this.uid ? 1 : 2;
     this._saveLocalRoom(targetRoom);
 
-    if (this.mode === 'firebase' && this.hasFirebaseConfig()) {
+    if (this.isOnline && this.hasFirebaseConfig()) {
       try {
-        await this._rtdbPut(`rooms/${roomId}/guest`, targetRoom.guest);
+        await this._rtdbPut(`rooms/${roomId}`, targetRoom);
       } catch {
         // noop
       }
     }
+
     this._postBroadcast({ kind: 'room_sync', room: targetRoom });
+    this._postBroadcast({ kind: 'rooms_updated' });
     this._startRoomSyncLoop();
-    this._emit();
+    await this._refreshOpenRooms();
     return { ok: true, room: targetRoom };
+  }
+
+  async autoMatchmake({ mapId = 'normandy_fields', startingResources = 600 } = {}) {
+    await this._refreshOpenRooms();
+    const candidate = this.openRooms.find(
+      (r) =>
+        r.status === 'WAITING' &&
+        !r.isPrivate &&
+        (r.playersCount || 1) < (r.maxPlayers || 2) &&
+        r.host?.uid !== this.uid
+    );
+    if (candidate) {
+      return this.joinRoom(candidate.roomId);
+    }
+    const created = await this.createRoom({
+      roomName: `Matchmaking ${this.commanderName}`,
+      mapId,
+      mode: '1v1',
+      isPrivate: false,
+      startingResources,
+    });
+    return { ok: true, room: created, createdNew: true };
   }
 
   async updateRoomMap(mapId) {
     if (!this.room || this.localSlot !== 1) return;
     this.room.mapId = mapId;
     this._saveLocalRoom(this.room);
-    if (this.mode === 'firebase' && this.hasFirebaseConfig()) {
+    if (this.isOnline && this.hasFirebaseConfig()) {
       try {
         await this._rtdbPut(`rooms/${this.roomId}/mapId`, mapId);
       } catch {
@@ -442,18 +695,72 @@ export class NetworkManager {
     if (!this.room || this.localSlot !== 1) return false;
     this.room.status = 'playing';
     this._saveLocalRoom(this.room);
-    if (this.mode === 'firebase' && this.hasFirebaseConfig()) {
+    if (this.isOnline && this.hasFirebaseConfig()) {
       try {
         await this._rtdbPut(`rooms/${this.roomId}/status`, 'playing');
-        await this._rtdbPut(`matchmaking_queue/${this.roomId}/status`, 'playing');
       } catch {
         // noop
       }
     }
     this._postBroadcast({ kind: 'room_sync', room: this.room });
+    this._postBroadcast({ kind: 'rooms_updated' });
     this._emit();
     for (const fn of this._matchStartListeners) fn(this.room);
     return true;
+  }
+
+  // =========================================================================
+  // CAMPANHA PERSISTENTE DE 15 DIAS
+  // =========================================================================
+  _readLocalCampaigns() {
+    try {
+      const list = JSON.parse(localStorage.getItem(CAMPAIGNS_KEY) || '[]');
+      if (Array.isArray(list) && list.length > 0) return list;
+    } catch {
+      // noop
+    }
+    return [
+      {
+        id: 'camp_normandy_15d',
+        name: 'Operação Overlord — 15 Dias',
+        mapId: 'normandy_fields',
+        day: 1,
+        totalDays: 15,
+        alliesSectors: 4,
+        axisSectors: 4,
+        playerSupplies: 1200,
+        mapSeed: 194406,
+      },
+    ];
+  }
+
+  _saveLocalCampaigns(list) {
+    try {
+      localStorage.setItem(CAMPAIGNS_KEY, JSON.stringify(list));
+    } catch {
+      // noop
+    }
+  }
+
+  async createCampaign({ name, mapId = 'normandy_fields' } = {}) {
+    const camp = {
+      id: `camp_${Date.now().toString(36)}`,
+      name: (name || `Campanha 15 Dias (${this.commanderName})`).trim(),
+      mapId,
+      day: 1,
+      totalDays: 15,
+      alliesSectors: 3,
+      axisSectors: 3,
+      playerSupplies: 1000,
+      mapSeed: Math.floor(10000 + Math.random() * 899999),
+    };
+    this.campaigns = [camp, ...this.campaigns];
+    this._saveLocalCampaigns(this.campaigns);
+    if (this.isOnline && this.hasFirebaseConfig()) {
+      this._rtdbPut(`campaigns/${camp.id}`, camp).catch(() => {});
+    }
+    this._emit();
+    return camp;
   }
 
   async sendCommand(cmdPayload) {
@@ -468,7 +775,7 @@ export class NetworkManager {
     this._seenCommandIds.add(cmd.id);
     this._postBroadcast({ kind: 'command', roomId: this.roomId, cmd });
 
-    if (this.mode === 'firebase' && this.hasFirebaseConfig()) {
+    if (this.isOnline && this.hasFirebaseConfig()) {
       try {
         await this._rtdbPost(`rooms/${this.roomId}/commands`, cmd);
       } catch {
@@ -479,12 +786,9 @@ export class NetworkManager {
 
   async sendStateHeartbeat(stateSnapshot) {
     if (!this.roomId || this.localSlot !== 1) return;
-    const state = {
-      timestamp: Date.now(),
-      ...stateSnapshot,
-    };
+    const state = { timestamp: Date.now(), ...stateSnapshot };
     this._postBroadcast({ kind: 'state', roomId: this.roomId, state });
-    if (this.mode === 'firebase' && this.hasFirebaseConfig()) {
+    if (this.isOnline && this.hasFirebaseConfig()) {
       try {
         await this._rtdbPut(`rooms/${this.roomId}/state`, state);
       } catch {
@@ -499,7 +803,7 @@ export class NetworkManager {
       if (!this.roomId) return;
       this._postBroadcast({ kind: 'ping', roomId: this.roomId, sentAt: Date.now() });
 
-      if (this.mode === 'firebase' && this.hasFirebaseConfig()) {
+      if (this.isOnline && this.hasFirebaseConfig()) {
         try {
           const remoteRoom = await this._rtdbGet(`rooms/${this.roomId}`);
           if (remoteRoom) {
@@ -550,11 +854,19 @@ export class NetworkManager {
   }
 
   leaveRoom() {
+    if (this.roomId && this.localSlot === 1 && this.room?.status === 'WAITING') {
+      this._removeLocalRoom(this.roomId);
+      if (this.isOnline && this.hasFirebaseConfig()) {
+        this._rtdbPut(`rooms/${this.roomId}`, null).catch(() => {});
+      }
+      this._postBroadcast({ kind: 'rooms_updated' });
+    }
     this._stopRoomSyncLoop();
     this.roomId = null;
     this.room = null;
     this.localSlot = 1;
     this._seenCommandIds.clear();
+    this._refreshOpenRooms();
     this._emit();
   }
 }

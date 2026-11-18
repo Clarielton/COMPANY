@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import TutorialModal from './TutorialModal.jsx';
 import MultiplayerLobby from './MultiplayerLobby.jsx';
+import AuthGate from './AuthGate.jsx';
 import { loadStoredFirebaseConfig, networkManager } from '../game/net/NetworkManager.js';
 import {
   COMMAND_BY_ID,
@@ -83,7 +84,11 @@ export default function GameMenus({
   onInstallPwa,
   onResolveInterrogation,
 }) {
-  const [subTab, setSubTab] = useState(initialTab || 'skirmish'); // 'skirmish' | 'skins' | 'config' | 'saves' | 'arsenal' | 'settings' | 'controls'
+  const [subTab, setSubTab] = useState(
+    initialTab && initialTab !== 'skirmish' ? initialTab : 'rooms'
+  );
+  const [net, setNet] = useState(() => networkManager.getStatusSnapshot());
+  const [newCampName, setNewCampName] = useState('');
   const [selectedMode, setSelectedMode] = useState(hud?.gameMode || '1v1');
   const [selectedMapId, setSelectedMapId] = useState(hud?.mapId || 'normandy_fields');
   const [selectedDifficulty, setSelectedDifficulty] = useState(hud?.aiDifficulty || 'medium');
@@ -100,8 +105,13 @@ export default function GameMenus({
   const fileInputRef = useRef(null);
 
   useEffect(() => {
+    const unsub = networkManager.subscribe(setNet);
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
     if (initialTab && (gameState === 'PAUSED' || gameState === 'MENU')) {
-      setSubTab(initialTab);
+      setSubTab(initialTab === 'skirmish' ? 'rooms' : initialTab);
     }
   }, [initialTab, gameState]);
 
@@ -313,29 +323,26 @@ export default function GameMenus({
 
   if (gameState !== 'MENU' && gameState !== 'PAUSED') return null;
 
+  // AUTH GATE OBRIGATÓRIO: exige login antes de acessar o Hub Principal
+  if (gameState === 'MENU' && !net.currentUser) {
+    return <AuthGate />;
+  }
+
   const isPaused = gameState === 'PAUSED';
   const s = hud.settings || { camSpeed: 1.0, volume: 0.35, highQuality: true };
 
-  const allySlots =
-    selectedMode === '2v2'
-      ? [ARMY_FACTIONS.player, ARMY_FACTIONS.ally_ai]
-      : [ARMY_FACTIONS.player];
-  const enemySlots =
-    selectedMode === '2v2'
-      ? [ARMY_FACTIONS.enemy_1, ARMY_FACTIONS.enemy_2]
-      : [ARMY_FACTIONS.enemy_1];
-
   const activeTab =
-    subTab === 'multiplayer'
-      ? 'multiplayer'
-      : subTab === 'tutorial'
-      ? 'tutorial'
-      : subTab === 'skins' || subTab === 'arsenal'
-      ? 'skins'
-      : subTab === 'saves' || subTab === 'settings' || subTab === 'controls'
-      ? 'system'
-      : 'skirmish';
+    subTab === 'campaign'
+      ? 'campaign'
+      : ['skins', 'arsenal', 'tutorial', 'saves', 'settings', 'controls', 'sandbox'].includes(subTab)
+      ? 'arsenal_hub'
+      : 'rooms';
 
+  const hubSubTab = ['skins', 'arsenal', 'tutorial', 'saves', 'settings', 'controls', 'sandbox'].includes(
+    subTab
+  )
+    ? subTab
+    : 'skins';
   const systemSubTab =
     subTab === 'settings' ? 'settings' : subTab === 'controls' ? 'controls' : 'saves';
 
@@ -348,57 +355,351 @@ export default function GameMenus({
   return (
     <div className="mil-menu-overlay">
       <div className="mil-menu-panel">
-        {/* CABEÇALHO COMPACTO + 3 ABAS SUPERIORES */}
+        {/* CABEÇALHO DO HUB ONLINE + PERFIL DO COMANDANTE */}
         <header className="mil-menu-header">
           <div className="mil-brand">
             <span className="mil-brand-title">COMPANY OF FRONTLINE</span>
             <span className="mil-brand-sub">
-              {isPaused ? `▪ OPERAÇÃO ${hud.gameMode.toUpperCase()} PAUSADA` : '▪ COMANDO TÁTICO RTS 3D'}
+              {isPaused
+                ? `▪ OPERAÇÃO ${hud.gameMode.toUpperCase()} PAUSADA`
+                : '▪ HUB MULTIPLAYER ONLINE'}
             </span>
           </div>
 
-          <nav className="mil-tabs" aria-label="Menu Principal">
+          <nav className="mil-tabs" aria-label="Hub Principal">
             <button
               type="button"
-              className={`mil-tab-btn ${activeTab === 'skirmish' ? 'active' : ''}`}
-              onClick={() => setSubTab('skirmish')}
+              className={`mil-tab-btn ${activeTab === 'rooms' ? 'active' : ''}`}
+              onClick={() => setSubTab('rooms')}
             >
-              ⚔ COMBATE
+              📡 PAINEL DE SALAS
             </button>
             <button
               type="button"
-              className={`mil-tab-btn ${activeTab === 'skins' ? 'active' : ''}`}
-              onClick={() => setSubTab('skins')}
+              className={`mil-tab-btn ${activeTab === 'campaign' ? 'active' : ''}`}
+              onClick={() => setSubTab('campaign')}
             >
-              ✦ ARSENAL / SKINS
+              🗓️ CAMPANHA (15 DIAS)
             </button>
             <button
               type="button"
-              className={`mil-tab-btn ${activeTab === 'system' ? 'active' : ''}`}
-              onClick={() => setSubTab('saves')}
-            >
-              ⚙ SISTEMA
-            </button>
-            <button
-              type="button"
-              className={`mil-tab-btn ${activeTab === 'tutorial' ? 'active' : ''}`}
+              className={`mil-tab-btn ${activeTab === 'arsenal_hub' ? 'active' : ''}`}
               onClick={() => setSubTab('tutorial')}
             >
-              📖 TUTORIAL
-            </button>
-            <button
-              type="button"
-              className={`mil-tab-btn ${activeTab === 'multiplayer' ? 'active' : ''}`}
-              onClick={() => setSubTab('multiplayer')}
-            >
-              🌐 MULTIPLAYER
+              🎖️ ARSENAL, TUTORIAL & SISTEMA
             </button>
           </nav>
+
+          {net.currentUser && (
+            <div className="hub-user-badge">
+              <div className="hub-user-info">
+                <strong>{net.currentUser.callsign}</strong>
+                <small>
+                  {net.currentUser.rank} • {net.currentUser.wins || 0}V / {net.currentUser.losses || 0}D
+                </small>
+              </div>
+              <button
+                type="button"
+                className="mil-pill"
+                onClick={() => networkManager.logout()}
+                title="Encerrar sessão do comandante"
+              >
+                Sair
+              </button>
+            </div>
+          )}
         </header>
 
-        {/* CORPO ÚNICO DO PAINEL */}
+        {/* CORPO DO HUB CENTRAL */}
         <main className="mil-menu-body">
-          {activeTab === 'skirmish' && (
+          {activeTab === 'rooms' && (
+            <div className="mil-subpane">
+              <MultiplayerLobby onStartOnlineMatch={onStartOnlineMatch} />
+            </div>
+          )}
+
+          {activeTab === 'campaign' && (
+            <div className="mil-subpane">
+              <div className="mp-card">
+                <div className="mp-card-head">
+                  <div>
+                    <span className="mp-kicker">OPERAÇÕES PERSISTENTES DE 15 DIAS</span>
+                    <h3>CAMPANHAS ATIVAS</h3>
+                  </div>
+                  <div className="mp-join-inline">
+                    <input
+                      type="text"
+                      className="mil-input"
+                      value={newCampName}
+                      onChange={(e) => setNewCampName(e.target.value)}
+                      placeholder="Nome da nova campanha..."
+                    />
+                    <button
+                      type="button"
+                      className="mil-btn-primary"
+                      onClick={() => {
+                        networkManager.createCampaign({ name: newCampName, mapId: selectedMapId });
+                        setNewCampName('');
+                      }}
+                    >
+                      ➕ Criar Nova Campanha de 15 Dias
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mp-campaigns-grid">
+                  {(net.campaigns || []).map((c) => (
+                    <div key={c.id} className="mp-campaign-card">
+                      <div className="mp-card-head">
+                        <strong>{c.name}</strong>
+                        <span className="mp-ping-badge">
+                          Dia {c.day} / {c.totalDays || 15}
+                        </span>
+                      </div>
+                      <div className="mp-campaign-stats">
+                        <span>Aliados: {c.alliesSectors} Setores</span>
+                        <span>Eixo: {c.axisSectors} Setores</span>
+                        <span>Recursos: {c.playerSupplies} SUP</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="mil-btn-primary"
+                        onClick={() =>
+                          onStartOnlineMatch?.({
+                            networkManager,
+                            room: {
+                              roomId: c.id,
+                              mapId: c.mapId || 'normandy_fields',
+                              mapSeed: c.mapSeed || 194406,
+                              startingResources: c.playerSupplies || 1000,
+                            },
+                            localSlot: 1,
+                          })
+                        }
+                      >
+                        ⚔️ Entrar no Front da Campanha
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'arsenal_hub' && (
+            <div className="mil-subpane">
+              <div className="mil-subbar">
+                <button
+                  type="button"
+                  className={`mil-pill ${hubSubTab === 'tutorial' ? 'active' : ''}`}
+                  onClick={() => setSubTab('tutorial')}
+                >
+                  📖 TUTORIAL & ASSALTO
+                </button>
+                <button
+                  type="button"
+                  className={`mil-pill ${hubSubTab === 'skins' ? 'active' : ''}`}
+                  onClick={() => setSubTab('skins')}
+                >
+                  ✦ UNIFORMES & SKINS
+                </button>
+                <button
+                  type="button"
+                  className={`mil-pill ${hubSubTab === 'arsenal' ? 'active' : ''}`}
+                  onClick={() => setSubTab('arsenal')}
+                >
+                  ⚙ ARSENAL DE COMBATE
+                </button>
+                <button
+                  type="button"
+                  className="mil-pill"
+                  style={{ borderColor: '#c28e38', color: '#c28e38' }}
+                  onClick={() => onPlaySandbox?.('1v1', selectedMapId)}
+                >
+                  🛠️ CAMPO DE TREINAMENTO (SANDBOX)
+                </button>
+                <button
+                  type="button"
+                  className={`mil-pill ${hubSubTab === 'saves' ? 'active' : ''}`}
+                  onClick={() => setSubTab('saves')}
+                >
+                  💾 SAVES
+                </button>
+                <button
+                  type="button"
+                  className={`mil-pill ${hubSubTab === 'settings' ? 'active' : ''}`}
+                  onClick={() => setSubTab('settings')}
+                >
+                  ⚙ ÁUDIO/CÂMERA
+                </button>
+                <button
+                  type="button"
+                  className="mil-pill"
+                  onClick={() => {
+                    setFbError('');
+                    setFbModalOpen(true);
+                  }}
+                >
+                  ⚙️ Chaves Firebase
+                </button>
+              </div>
+
+              {hubSubTab === 'tutorial' && (
+                <TutorialModal
+                  embedded
+                  onStartGuided={() => {
+                    try {
+                      localStorage.setItem('frontline_start_guided', '1');
+                    } catch {
+                      // noop
+                    }
+                    if (isPaused) onResume?.();
+                    else onPlaySandbox?.('1v1', selectedMapId);
+                  }}
+                  onStartAssaultDrill={() => {
+                    if (isPaused) {
+                      window.__frontlineGame?.startAssaultSandboxDrill?.();
+                      onResume?.();
+                    } else {
+                      try {
+                        localStorage.setItem('frontline_assault_drill', '1');
+                      } catch {
+                        // noop
+                      }
+                      onPlaySandbox?.('1v1', selectedMapId);
+                    }
+                  }}
+                />
+              )}
+
+              {hubSubTab === 'skins' && (
+                <div className="mil-skins-grid">
+                  {ARMY_SKINS.map((sk) => {
+                    const active = (hud.playerSkinId || 'olive_classic') === sk.id;
+                    return (
+                      <button
+                        key={sk.id}
+                        type="button"
+                        className={`mil-skin-card ${active ? 'active' : ''}`}
+                        onClick={() => onSelectSkin?.(sk.id)}
+                      >
+                        <div className="mil-skin-swatches">
+                          <span style={{ background: sk.swatch }} />
+                          <span style={{ background: sk.accent }} />
+                        </div>
+                        <strong>{sk.name}</strong>
+                        <small>{sk.desc}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {hubSubTab === 'arsenal' && (
+                <div className="mil-arsenal-grid">
+                  {BOTTOM_BAR_CATEGORIES.map((cat) => (
+                    <div key={cat.id} className="mil-arsenal-col">
+                      <div className="mil-section-label">
+                        {cat.icon} {cat.label} ({cat.hotkey})
+                      </div>
+                      {cat.commands.map((cmdId) => {
+                        const cmd = COMMAND_BY_ID[cmdId];
+                        if (!cmd) return null;
+                        return (
+                          <div key={cmdId} className="mil-arsenal-row">
+                            <span>{cmd.name}</span>
+                            <small>{cmd.cost ? `${cmd.cost} SUP` : 'GRÁTIS'}</small>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {hubSubTab === 'saves' && (
+                <div>
+                  <div className="mil-save-bar">
+                    <input
+                      type="text"
+                      className="mil-input"
+                      placeholder={`Nome da Operação (${hud.gameMode.toUpperCase()})`}
+                      value={saveTitleInput}
+                      onChange={(e) => setSaveTitleInput(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="mil-btn-primary"
+                      style={{ minHeight: 44, padding: '0 14px' }}
+                      onClick={() => {
+                        onSaveBattle?.(saveTitleInput.trim() || null);
+                        setSaveTitleInput('');
+                      }}
+                    >
+                      ▪ SALVAR
+                    </button>
+                    <button
+                      type="button"
+                      className="mil-btn-secondary"
+                      onClick={() => onExportBattle?.(null)}
+                    >
+                      ▸ EXPORTAR .JSON
+                    </button>
+                    <button
+                      type="button"
+                      className="mil-btn-secondary"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      ▸ IMPORTAR .JSON
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".json,application/json"
+                      style={{ display: 'none' }}
+                      onChange={handleFileImport}
+                    />
+                  </div>
+                  {savedBattles.length === 0 ? (
+                    <div className="mil-empty-box">Nenhuma batalha salva.</div>
+                  ) : (
+                    <div className="mil-saves-list">
+                      {savedBattles.map((save, idx) => (
+                        <div key={save.id} className="mil-save-row">
+                          <div>
+                            <strong>#{idx + 1} {save.title}</strong>
+                            <span>{(save.gameMode || '1v1').toUpperCase()} • {save.supplies} SUP</span>
+                          </div>
+                          <div className="mil-save-actions">
+                            <button type="button" className="mil-pill active" onClick={() => onLoadBattle?.(save.id)}>▸ CARREGAR</button>
+                            <button type="button" className="mil-pill" onClick={() => onDeleteBattle?.(save.id)}>✕</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {hubSubTab === 'settings' && (
+                <div className="mil-settings-grid">
+                  <label className="mil-range-row">
+                    <span>Velocidade Câmera: <strong>{Math.round((s.camSpeed || 1) * 100)}%</strong></span>
+                    <input type="range" min="0.5" max="2.0" step="0.1" value={s.camSpeed || 1.0} onChange={(e) => onUpdateSettings?.({ camSpeed: Number(e.target.value) })} />
+                  </label>
+                  <label className="mil-range-row">
+                    <span>Volume Geral: <strong>{Math.round((s.volume ?? 0.35) * 100)}%</strong></span>
+                    <input type="range" min="0" max="1" step="0.05" value={s.volume ?? 0.35} onChange={(e) => onUpdateSettings?.({ volume: Number(e.target.value) })} />
+                  </label>
+                  <button type="button" className={`mil-pill ${s.highQuality !== false ? 'active' : ''}`} onClick={() => onUpdateSettings?.({ highQuality: !(s.highQuality !== false) })}>
+                    {s.highQuality !== false ? '☀ SOMBRAS 3D: ATIVADAS' : '☀ SOMBRAS 3D: DESATIVADAS'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {false && activeTab === 'skirmish' && (
             <div className="mil-combat-pane">
               <div className="mil-section-label">▸ TEATRO DE OPERAÇÕES</div>
               <div className="mil-map-list">

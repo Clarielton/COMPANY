@@ -4673,3 +4673,191 @@ body,
   padding: 10px;
   resize: vertical;
 }
+
+/* ============================================================================
+   AUTH GATE + HUB MULTIPLAYER ONLINE + SERVER BROWSER + CAMPANHA 15 DIAS
+   ============================================================================ */
+.auth-gate-overlay {
+  background: radial-gradient(circle at center, #1a1e1a 0%, #121412 100%) !important;
+}
+
+.auth-gate-card {
+  width: min(440px, 94vw);
+  background: #1a1d1a;
+  border: 1px solid #2e332e;
+  border-top: 2px solid #c28e38;
+  border-radius: 6px;
+  padding: 22px;
+  color: #e4e6e4;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.92);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.auth-gate-head h1 {
+  margin: 4px 0 4px;
+  font-size: 20px;
+  letter-spacing: 0.05em;
+  color: #e4e6e4;
+}
+
+.auth-gate-head p {
+  margin: 0;
+  font-size: 12px;
+  color: #8c948c;
+}
+
+.auth-gate-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-gate-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.auth-gate-form label span {
+  font-size: 10.5px;
+  font-weight: 800;
+  color: #8c948c;
+  letter-spacing: 0.06em;
+}
+
+.auth-gate-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.auth-gate-divider {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #8c948c;
+  margin: 4px 0;
+}
+
+.auth-gate-error {
+  background: rgba(185, 28, 28, 0.2);
+  border: 1px solid #991b1b;
+  color: #fca5a5;
+  font-size: 11.5px;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+
+.auth-guest-btn {
+  border-color: #c28e38 !important;
+}
+
+.hub-user-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #121412;
+  border: 1px solid #2e332e;
+  border-radius: 4px;
+  padding: 5px 10px;
+}
+
+.hub-user-info {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.hub-user-info strong {
+  font-size: 12px;
+  color: #c28e38;
+}
+
+.hub-user-info small {
+  font-size: 10px;
+  color: #8c948c;
+}
+
+.mp-top-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.mp-join-inline {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.mp-server-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mp-server-row {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr 1.1fr 0.7fr 0.6fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  background: #121412;
+  border: 1px solid #2e332e;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.mp-server-head {
+  background: transparent;
+  border: none;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #8c948c;
+  padding-bottom: 2px;
+}
+
+.mp-join-row-btn {
+  padding: 5px 10px !important;
+  font-size: 11px !important;
+  min-height: 30px !important;
+}
+
+@media (max-width: 720px) {
+  .mp-server-head {
+    display: none;
+  }
+  .mp-server-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.mp-campaigns-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.mp-campaign-card {
+  background: #121412;
+  border: 1px solid #2e332e;
+  border-radius: 4px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mp-campaign-stats {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #8c948c;
+}
