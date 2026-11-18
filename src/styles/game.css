@@ -4917,3 +4917,138 @@ body,
   padding: 4px 8px;
   border-color: #c28e38;
 }
+
+
+/* =========================================================================
+   PAINEL DE ADMINISTRAÇÃO MILITAR (COMANDO SUPREMO)
+   ========================================================================= */
+.admin-panel-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.admin-header-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: linear-gradient(135deg, rgba(30, 20, 20, 0.95), rgba(20, 15, 15, 0.95));
+  border: 1px solid #7f1d1d;
+  padding: 14px 18px;
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+.admin-header-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.admin-badge-icon {
+  font-size: 2.2rem;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid #ef4444;
+  width: 50px;
+  height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+
+.admin-quick-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.admin-status-toast {
+  background: #14532d;
+  border: 1px solid #4ade80;
+  color: #bbf7d0;
+  padding: 10px 16px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  animation: fadeIn 0.25s ease;
+}
+
+.admin-target-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #18181b;
+  border: 1px solid #3f3f46;
+  padding: 10px 14px;
+  border-radius: 6px;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #d4d4d8;
+}
+
+.admin-content-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 14px;
+}
+
+.admin-player-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 380px;
+  overflow-y: auto;
+  margin-top: 10px;
+  padding-right: 4px;
+}
+
+.admin-player-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #18181b;
+  border: 1px solid #27272a;
+  padding: 10px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.admin-player-row:hover {
+  background: #27272a;
+  border-color: #52525b;
+}
+
+.admin-player-row.selected {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.admin-player-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admin-row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.status-danger {
+  background: rgba(239, 68, 68, 0.2) !important;
+  border-color: #ef4444 !important;
+  color: #fca5a5 !important;
+}
+
+.status-ok {
+  background: rgba(74, 222, 128, 0.15) !important;
+  border-color: #4ade80 !important;
+  color: #86efac !important;
+}

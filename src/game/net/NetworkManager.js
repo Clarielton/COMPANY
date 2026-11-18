@@ -1,4 +1,9 @@
-import { CAMPAIGN_PACKS, computeLevelFromXp } from '../data/accountData.js';
+import {
+  ACCOUNT_RANKS,
+  BATTALION_UNLOCKS,
+  CAMPAIGN_PACKS,
+  computeLevelFromXp,
+} from '../data/accountData.js';
 
 const CONFIG_STORAGE_KEY = 'frontline_firebase_config';
 const USER_STORAGE_KEY = 'COF_AUTH_USER';
@@ -6,6 +11,9 @@ const ACTIVE_ROOMS_KEY = 'COF_ACTIVE_ROOMS';
 const CAMPAIGNS_KEY = 'COF_CAMPAIGNS_V1';
 const LOCAL_CAMPAIGN_SAVES_KEY = 'COF_LOCAL_CAMPAIGN_SAVES';
 const BROADCAST_CHANNEL_NAME = 'cof_multiplayer_v2';
+const MASTER_ADMIN_KEYS = ['FRONT-ADMIN-1944', 'admin', 'ADMIN1944', 'clarielton'];
+const ADMIN_STORAGE_OVERRIDE_KEY = 'COF_ADMIN_ROLE_OVERRIDE';
+const BANNED_PLAYERS_STORAGE_KEY = 'COF_BANNED_PLAYERS';
 
 const DEFAULT_FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCXzNWDYr_w8lsb48UezYv_Yr7YGo9K3Pw',
@@ -155,6 +163,7 @@ export class NetworkManager {
       isOnline: this.isOnline,
       mode: this.mode,
       hasFirebaseConfig: this.hasFirebaseConfig(),
+      isAdmin: this.isAdmin(),
       roomId: this.roomId,
       room: this.room ? { ...this.room } : null,
       localSlot: this.localSlot,
@@ -342,13 +351,88 @@ export class NetworkManager {
   }
 
   // =========================================================================
-  // AUTENTICAÇÃO MILITAR (AUTH GATE)
+  // AUTENTICAÇÃO MILITAR & PERMISSÕES ADMINISTRATIVAS
   // =========================================================================
+  _checkIsAdmin(user) {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    try {
+      if (typeof window !== 'undefined' && localStorage.getItem(ADMIN_STORAGE_OVERRIDE_KEY) === '1') {
+        return true;
+      }
+    } catch {}
+    const name = (user.callsign || '').trim().toLowerCase();
+    const email = (user.email || '').trim().toLowerCase();
+    if (
+      name === 'admin' ||
+      name.startsWith('admin_') ||
+      name === 'clarielton' ||
+      name === 'clarieltonjunior' ||
+      name === 'comando supremo' ||
+      name === 'comandante supremo'
+    ) {
+      return true;
+    }
+    if (email === 'clarielton.empreendimentos@outlook.com') return true;
+    return false;
+  }
+
+  isAdmin() {
+    return Boolean(this.currentUser && this._checkIsAdmin(this.currentUser));
+  }
+
+  claimAdmin(key = '') {
+    const clean = String(key || '').trim();
+    if (MASTER_ADMIN_KEYS.includes(clean) || clean.toLowerCase() === 'admin' || clean === '1944') {
+      try {
+        localStorage.setItem(ADMIN_STORAGE_OVERRIDE_KEY, '1');
+      } catch {}
+      if (this.currentUser) {
+        this.currentUser = {
+          ...this.currentUser,
+          role: 'admin',
+        };
+        this._syncUserToCloud(this.currentUser);
+        this._emit();
+      }
+      return { ok: true, message: 'Privilégios de Administrador ativados com sucesso!' };
+    }
+    return { ok: false, error: 'Chave de segurança administrativa inválida.' };
+  }
+
+  revokeAdmin() {
+    try {
+      localStorage.removeItem(ADMIN_STORAGE_OVERRIDE_KEY);
+    } catch {}
+    if (this.currentUser) {
+      this.currentUser = {
+        ...this.currentUser,
+        role: 'user',
+      };
+      this._syncUserToCloud(this.currentUser);
+      this._emit();
+    }
+  }
+
   _applyAuthenticatedUser({ uid, callsign, email = '', provider = 'guest', idToken = null, isFirebase = false }) {
     const existing = this._loadStoredUser();
     const xp = existing?.xp ?? 0;
     const prog = computeLevelFromXp(xp);
     const ownedPacks = Array.isArray(existing?.ownedCampaignPacks) ? existing.ownedCampaignPacks : [];
+    const unlockedBats = Array.isArray(existing?.unlockedBattalions) ? existing.unlockedBattalions : [];
+    const isAdmin = this._checkIsAdmin({ callsign, email }) || existing?.role === 'admin';
+
+    // Checagem de banimento local
+    let isBanned = Boolean(existing?.banned);
+    let banReason = existing?.banReason || null;
+    try {
+      const bans = JSON.parse(localStorage.getItem(BANNED_PLAYERS_STORAGE_KEY) || '{}');
+      if (bans[uid] || (existing?.uid && bans[existing.uid])) {
+        isBanned = true;
+        banReason = bans[uid]?.banReason || bans[existing.uid]?.banReason || 'Conta suspensa pelo Administrador.';
+      }
+    } catch {}
+
     const user = {
       uid: uid || existing?.uid || `cmd_${Math.random().toString(36).slice(2, 10)}`,
       callsign: (callsign || existing?.callsign || 'Comandante').trim().slice(0, 24),
@@ -357,12 +441,15 @@ export class NetworkManager {
       xp,
       level: prog.level,
       rank: prog.rank,
-      unlockedBattalions: prog.unlockedBattalions,
-      militaryGold: typeof existing?.militaryGold === 'number' ? existing.militaryGold : 1000,
+      unlockedBattalions: unlockedBats,
+      militaryGold: typeof existing?.militaryGold === 'number' ? existing.militaryGold : 0,
       ownedCampaignPacks: ownedPacks,
       hasGoldInsignia: ownedPacks.includes('vip_combo'),
       wins: existing?.wins || 0,
       losses: existing?.losses || 0,
+      role: isAdmin ? 'admin' : (existing?.role || 'user'),
+      banned: isBanned,
+      banReason,
       idToken: idToken || null,
       isFirebase,
     };
@@ -388,20 +475,31 @@ export class NetworkManager {
                 ...(Array.isArray(cloud.ownedCampaignPacks) ? cloud.ownedCampaignPacks : []),
               ])
             );
+            const mergedBats = Array.from(
+              new Set([
+                ...(this.currentUser.unlockedBattalions || []),
+                ...(Array.isArray(cloud.unlockedBattalions) ? cloud.unlockedBattalions : []),
+              ])
+            );
+            const isCloudAdmin = this._checkIsAdmin(cloud) || cloud.role === 'admin' || this._checkIsAdmin(this.currentUser);
+            const isCloudBanned = Boolean(cloud.banned) || this.currentUser.banned;
             this.currentUser = {
               ...this.currentUser,
               xp: mergedXp,
               level: mergedProg.level,
               rank: mergedProg.rank,
-              unlockedBattalions: mergedProg.unlockedBattalions,
+              unlockedBattalions: mergedBats,
               ownedCampaignPacks: mergedPacks,
               hasGoldInsignia: mergedPacks.includes('vip_combo'),
               militaryGold:
                 typeof cloud.militaryGold === 'number'
                   ? cloud.militaryGold
-                  : this.currentUser.militaryGold,
+                  : (this.currentUser.militaryGold ?? 0),
               wins: Math.max(this.currentUser.wins || 0, cloud.wins || 0),
               losses: Math.max(this.currentUser.losses || 0, cloud.losses || 0),
+              role: isCloudAdmin ? 'admin' : (this.currentUser.role || 'user'),
+              banned: isCloudBanned,
+              banReason: cloud.banReason || this.currentUser.banReason,
             };
             this._saveStoredUser(this.currentUser);
             this._emit();
@@ -426,11 +524,14 @@ export class NetworkManager {
         level: user.level || 1,
         rank: user.rank || 'Recruta',
         unlockedBattalions: user.unlockedBattalions || [],
-        militaryGold: user.militaryGold ?? 1000,
+        militaryGold: user.militaryGold ?? 0,
         ownedCampaignPacks: user.ownedCampaignPacks || [],
         hasGoldInsignia: Boolean(user.hasGoldInsignia),
         wins: user.wins || 0,
         losses: user.losses || 0,
+        role: user.role || 'user',
+        banned: Boolean(user.banned),
+        banReason: user.banReason || null,
         lastSeen: Date.now(),
       }).catch(() => {});
     }
@@ -448,7 +549,6 @@ export class NetworkManager {
       xp: nextXp,
       level: prog.level,
       rank: prog.rank,
-      unlockedBattalions: prog.unlockedBattalions,
       wins: (this.currentUser.wins || 0) + (won ? 1 : 0),
     };
     this._syncUserToCloud(this.currentUser);
@@ -464,6 +564,297 @@ export class NetworkManager {
     };
     this._syncUserToCloud(this.currentUser);
     this._emit();
+  }
+
+  unlockBattalion(battalionId) {
+    if (!this.currentUser) return { ok: false, error: 'Faça login primeiro.' };
+    const bat = BATTALION_UNLOCKS.find((b) => b.id === battalionId);
+    if (!bat) return { ok: false, error: 'Batalhão inválido.' };
+    const unlocked = new Set(this.currentUser.unlockedBattalions || []);
+    if (unlocked.has(battalionId)) return { ok: false, error: 'Batalhão já desbloqueado.' };
+    const prog = computeLevelFromXp(this.currentUser.xp || 0);
+    const admin = this.isAdmin();
+    if (!admin && prog.level < bat.requiredLevel) {
+      return { ok: false, error: `Requer Nível ${bat.requiredLevel} (${bat.rankName}) para desbloquear.` };
+    }
+    const gold = this.currentUser.militaryGold || 0;
+    const price = admin ? 0 : (bat.priceGold || 200);
+    if (gold < price) {
+      return { ok: false, error: `Ouro Militar insuficiente (${price} necessários).` };
+    }
+    unlocked.add(battalionId);
+    this.currentUser = {
+      ...this.currentUser,
+      militaryGold: Math.max(0, gold - price),
+      unlockedBattalions: Array.from(unlocked),
+    };
+    this._syncUserToCloud(this.currentUser);
+    this._emit();
+    return { ok: true, battalion: bat };
+  }
+
+  // =========================================================================
+  // MÉTODOS EXCLUSIVOS DO PAINEL DE ADMINISTRAÇÃO MILITAR
+  // =========================================================================
+  async getAllPlayers() {
+    const list = [];
+    if (this.isOnline && this.hasFirebaseConfig()) {
+      try {
+        const cloudPlayers = await this._rtdbGet('players');
+        if (cloudPlayers && typeof cloudPlayers === 'object') {
+          for (const [k, p] of Object.entries(cloudPlayers)) {
+            if (p && typeof p === 'object') {
+              list.push({
+                uid: k,
+                callsign: p.callsign || 'Comandante',
+                level: p.level || 1,
+                rank: p.rank || 'Recruta',
+                xp: p.xp || 0,
+                militaryGold: typeof p.militaryGold === 'number' ? p.militaryGold : 0,
+                banned: Boolean(p.banned),
+                banReason: p.banReason || '',
+                muted: Boolean(p.muted),
+                restricted: Boolean(p.restricted),
+                role: p.role || (this._checkIsAdmin(p) ? 'admin' : 'user'),
+                unlockedBattalions: Array.isArray(p.unlockedBattalions) ? p.unlockedBattalions : [],
+                ownedCampaignPacks: Array.isArray(p.ownedCampaignPacks) ? p.ownedCampaignPacks : [],
+                lastSeen: p.lastSeen || 0,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Erro ao carregar lista de players do Firebase:', err);
+      }
+    }
+    if (this.currentUser && !list.some((p) => p.uid === this.currentUser.uid)) {
+      list.unshift({
+        uid: this.currentUser.uid,
+        callsign: this.currentUser.callsign,
+        level: this.currentUser.level || 1,
+        rank: this.currentUser.rank || 'Recruta',
+        xp: this.currentUser.xp || 0,
+        militaryGold: this.currentUser.militaryGold || 0,
+        banned: Boolean(this.currentUser.banned),
+        banReason: this.currentUser.banReason || '',
+        muted: Boolean(this.currentUser.muted),
+        restricted: Boolean(this.currentUser.restricted),
+        role: this.currentUser.role || 'user',
+        unlockedBattalions: this.currentUser.unlockedBattalions || [],
+        ownedCampaignPacks: this.currentUser.ownedCampaignPacks || [],
+        lastSeen: Date.now(),
+      });
+    }
+    return list;
+  }
+
+  async adminBanPlayer(targetUid, reason = 'Violação das regras de conduta militar.') {
+    if (!this.isAdmin()) return { ok: false, error: 'Acesso negado: requer privilégios de Admin.' };
+    try {
+      const banRecord = { banned: true, banReason: reason, bannedAt: Date.now() };
+      if (this.isOnline && this.hasFirebaseConfig()) {
+        await this._rtdbPut(`players/${targetUid}/banned`, true);
+        await this._rtdbPut(`players/${targetUid}/banReason`, reason);
+      }
+      try {
+        const bans = JSON.parse(localStorage.getItem(BANNED_PLAYERS_STORAGE_KEY) || '{}');
+        bans[targetUid] = banRecord;
+        localStorage.setItem(BANNED_PLAYERS_STORAGE_KEY, JSON.stringify(bans));
+      } catch {}
+      if (this.currentUser?.uid === targetUid) {
+        this.currentUser.banned = true;
+        this.currentUser.banReason = reason;
+        this._saveStoredUser(this.currentUser);
+        this._emit();
+      }
+      return { ok: true, message: `Jogador ${targetUid} banido com sucesso.` };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  async adminUnbanPlayer(targetUid) {
+    if (!this.isAdmin()) return { ok: false, error: 'Acesso negado: requer privilégios de Admin.' };
+    try {
+      if (this.isOnline && this.hasFirebaseConfig()) {
+        await this._rtdbPut(`players/${targetUid}/banned`, false);
+        await this._rtdbPut(`players/${targetUid}/banReason`, null);
+      }
+      try {
+        const bans = JSON.parse(localStorage.getItem(BANNED_PLAYERS_STORAGE_KEY) || '{}');
+        delete bans[targetUid];
+        localStorage.setItem(BANNED_PLAYERS_STORAGE_KEY, JSON.stringify(bans));
+      } catch {}
+      if (this.currentUser?.uid === targetUid) {
+        this.currentUser.banned = false;
+        this.currentUser.banReason = null;
+        this._saveStoredUser(this.currentUser);
+        this._emit();
+      }
+      return { ok: true, message: `Jogador ${targetUid} desbanido.` };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  async adminSetPlayerRestrictions(targetUid, { muted, restricted }) {
+    if (!this.isAdmin()) return { ok: false, error: 'Acesso negado.' };
+    try {
+      if (this.isOnline && this.hasFirebaseConfig()) {
+        if (muted !== undefined) await this._rtdbPut(`players/${targetUid}/muted`, Boolean(muted));
+        if (restricted !== undefined) await this._rtdbPut(`players/${targetUid}/restricted`, Boolean(restricted));
+      }
+      if (this.currentUser?.uid === targetUid) {
+        if (muted !== undefined) this.currentUser.muted = Boolean(muted);
+        if (restricted !== undefined) this.currentUser.restricted = Boolean(restricted);
+        this._saveStoredUser(this.currentUser);
+        this._emit();
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  async adminSetPlayerGold(targetUid, amount) {
+    if (!this.isAdmin()) return { ok: false, error: 'Acesso negado.' };
+    const val = Math.max(0, Math.round(Number(amount) || 0));
+    try {
+      if (this.isOnline && this.hasFirebaseConfig()) {
+        await this._rtdbPut(`players/${targetUid}/militaryGold`, val);
+      }
+      if (this.currentUser?.uid === targetUid) {
+        this.currentUser.militaryGold = val;
+        this._saveStoredUser(this.currentUser);
+        this._emit();
+      }
+      return { ok: true, newGold: val };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  async adminGrantBattalion(targetUid, battalionId) {
+    if (!this.isAdmin()) return { ok: false, error: 'Acesso negado.' };
+    try {
+      let existingBats = [];
+      if (this.currentUser?.uid === targetUid) {
+        existingBats = this.currentUser.unlockedBattalions || [];
+      } else if (this.isOnline && this.hasFirebaseConfig()) {
+        const remote = await this._rtdbGet(`players/${targetUid}/unlockedBattalions`);
+        if (Array.isArray(remote)) existingBats = remote;
+      }
+      const set = new Set(existingBats);
+      if (battalionId === 'ALL') {
+        BATTALION_UNLOCKS.forEach((b) => set.add(b.id));
+      } else {
+        set.add(battalionId);
+      }
+      const arr = Array.from(set);
+      if (this.isOnline && this.hasFirebaseConfig()) {
+        await this._rtdbPut(`players/${targetUid}/unlockedBattalions`, arr);
+      }
+      if (this.currentUser?.uid === targetUid) {
+        this.currentUser.unlockedBattalions = arr;
+        this._saveStoredUser(this.currentUser);
+        this._emit();
+      }
+      return { ok: true, unlockedBattalions: arr };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  async adminGrantCampaignPack(targetUid, packId) {
+    if (!this.isAdmin()) return { ok: false, error: 'Acesso negado.' };
+    try {
+      let existingPacks = [];
+      if (this.currentUser?.uid === targetUid) {
+        existingPacks = this.currentUser.ownedCampaignPacks || [];
+      } else if (this.isOnline && this.hasFirebaseConfig()) {
+        const remote = await this._rtdbGet(`players/${targetUid}/ownedCampaignPacks`);
+        if (Array.isArray(remote)) existingPacks = remote;
+      }
+      const set = new Set(existingPacks);
+      if (packId === 'vip_combo') {
+        set.add('xp_boost');
+        set.add('hq_defense');
+        set.add('vip_combo');
+      } else {
+        set.add(packId);
+      }
+      const arr = Array.from(set);
+      if (this.isOnline && this.hasFirebaseConfig()) {
+        await this._rtdbPut(`players/${targetUid}/ownedCampaignPacks`, arr);
+        if (arr.includes('vip_combo')) {
+          await this._rtdbPut(`players/${targetUid}/hasGoldInsignia`, true);
+        }
+      }
+      if (this.currentUser?.uid === targetUid) {
+        this.currentUser.ownedCampaignPacks = arr;
+        this.currentUser.hasGoldInsignia = arr.includes('vip_combo');
+        this._saveStoredUser(this.currentUser);
+        this._emit();
+      }
+      return { ok: true, ownedCampaignPacks: arr };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  async adminSetPlayerLevel(targetUid, level) {
+    if (!this.isAdmin()) return { ok: false, error: 'Acesso negado.' };
+    const targetRank = ACCOUNT_RANKS.find((r) => r.level === Number(level)) || ACCOUNT_RANKS[0];
+    try {
+      if (this.isOnline && this.hasFirebaseConfig()) {
+        await this._rtdbPut(`players/${targetUid}/xp`, targetRank.minXp);
+        await this._rtdbPut(`players/${targetUid}/level`, targetRank.level);
+        await this._rtdbPut(`players/${targetUid}/rank`, targetRank.rank);
+      }
+      if (this.currentUser?.uid === targetUid) {
+        this.currentUser.xp = targetRank.minXp;
+        this.currentUser.level = targetRank.level;
+        this.currentUser.rank = targetRank.rank;
+        this._saveStoredUser(this.currentUser);
+        this._emit();
+      }
+      return { ok: true, level: targetRank.level, rank: targetRank.rank };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  async adminResetPlayerAccount(targetUid) {
+    if (!this.isAdmin()) return { ok: false, error: 'Acesso negado.' };
+    try {
+      const resetData = {
+        xp: 0,
+        level: 1,
+        rank: 'Recruta',
+        militaryGold: 0,
+        unlockedBattalions: [],
+        ownedCampaignPacks: [],
+        hasGoldInsignia: false,
+        wins: 0,
+        losses: 0,
+      };
+      if (this.isOnline && this.hasFirebaseConfig()) {
+        for (const [k, v] of Object.entries(resetData)) {
+          await this._rtdbPut(`players/${targetUid}/${k}`, v);
+        }
+      }
+      if (this.currentUser?.uid === targetUid) {
+        this.currentUser = {
+          ...this.currentUser,
+          ...resetData,
+        };
+        this._saveStoredUser(this.currentUser);
+        this._emit();
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
   }
 
   purchaseCampaignPack(packId) {

@@ -250,3 +250,31 @@ No **Lobby Skirmish**, escolha o campo de batalha antes de mobilizar o batalhão
      - **3 Mapas Oficiais:** *Campos da Normandia* (Rural), *Deserto de El Alamein* (Árido) e *Bastogne Inverno* (Neve nas Ardenas).
      - **Modos:** `1v1` (Duelo tático direto) e `2v2` (Comandante + IA Aliada vs 2 IAs Inimigas).
      - **Configurações Táticas Rápidas:** Dificuldade da IA (*Recruta*, *Veterano*, *General*), Recursos Iniciais (*450*, *600*, *1000 SUP*), atalho para continuar a última batalha salva e **`🛠️ Modo Caixa de Areia (Sandbox)`** para testes livres com recursos infinitos.
+
+
+---
+
+## 16. Painel de Administração Militar (Comando Supremo) & Economia de Ouro
+
+1. **Economia Militar & Desbloqueio de Batalhões:**
+   - **Saldo Inicial Padronizado:** Todas as contas iniciam com **`0 Ouro Militar`** e **`0 XP`** (Nível 1 - Recruta).
+   - **Fim do Ganho Automático:** Atingir a patente exigida libera a autorização do batalhão, mas sua utilização em combate requer a aquisição com **Ouro Militar** na aba **`🎖️ PATENTE & BATALHÕES`** (ou concessão direta pelo Administrador):
+     - *Engenheiros de Combate Avançados:* `200 Ouro` (Nv. 2)
+     - *Batalhão de Paraquedistas (101st Airborne):* `350 Ouro` (Nv. 4)
+     - *Batalhão de Comandos / Forças Especiais:* `500 Ouro` (Nv. 6)
+     - *Divisão de Blindados Pesados (MBT):* `750 Ouro` (Nv. 8)
+     - *Bateria de Artilharia Pesada:* `1.000 Ouro` (Nv. 10)
+   - Botões públicos de teste de XP e Ouro foram completamente removidos da visão dos jogadores comuns.
+
+2. **Conta de Administrador & Aba `🛡️ PAINEL ADMIN`:**
+   - **Reconhecimento Automático:** Usuários com callsign `admin`, `clarielton`, `clarieltonjunior`, `comando supremo` ou email cadastrado assumem o papel de Administrador automaticamente.
+   - **Chave de Segurança Mestra:** Qualquer comandante pode validar privilégios administrativos no botão **`[🔑 Admin]`** digitando a chave mestra (`FRONT-ADMIN-1944` ou `admin`).
+   - **Funcionalidades do Painel Admin:**
+     - **Punições & Disciplina:** Lista de todas as contas registradas no Firebase RTDB, com ações para **`🚫 Banir Conta`** (bloqueio total de login e multiplayer com tela de aviso), **`✅ Desbanir`**, **`🔇 Silenciar Chat`** e **`⚠️ Bloquear Acesso a Partidas PvP`**.
+     - **Gerador de Recursos & Ouro:** Injeção de quantias predefinidas (`+500`, `+1.000`, `+2.500`, `+10.000`, `+50.000` Ouro) ou definição exata de saldo para si mesmo ou para qualquer jogador cadastrado, incluindo opção de zerar ouro.
+     - **Concessão de Itens:** Liberar individualmente ou conceder **`⭐ TODOS os Batalhões`** e **`👑 COMBO VIP Completo`** para o jogador selecionado.
+     - **Patente & Reset Limpo:** Ajustar patente para qualquer nível (1 ao 10) ou **`⚠️ Resetar Conta para Nv. 1`** (0 Ouro, 0 XP, bloqueando todos os itens) para realização de testes limpos de novos jogadores.
+
+3. **Limpeza da Aba `📖 GUIA / SIST.` & `TUTORIAL`:**
+   - O botão `🛠️ CAMPO DE TREINAMENTO (SANDBOX)` foi totalmente removido do menu de Guia e Sistema.
+   - A sub-aba `⚙ ARSENAL DE COMBATE` foi removida da aba Tutorial/Guia, mantendo o menu enxuto e focado em Doutrina Militar, Uniformes, Saves e Configurações de Áudio/Câmera.

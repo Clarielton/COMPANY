@@ -21,6 +21,7 @@ export const BATTALION_UNLOCKS = [
     desc: 'Reparo acelerado de blindados e construção tática avançada em campo.',
     unitType: 'engineers',
     costSup: 200,
+    priceGold: 200,
   },
   {
     id: 'paratroopers',
@@ -31,6 +32,7 @@ export const BATTALION_UNLOCKS = [
     desc: 'Libera na HUD a habilidade especial de Lançamento Aéreo em qualquer ponto visível do mapa!',
     unitType: 'assault_squad',
     costSup: 320,
+    priceGold: 350,
     isSpecialDrop: true,
   },
   {
@@ -42,6 +44,7 @@ export const BATTALION_UNLOCKS = [
     desc: 'Tropas furtivas de elite com cargas de demolição e submetralhadoras silenciadas.',
     unitType: 'spec_ops_commando',
     costSup: 360,
+    priceGold: 500,
   },
   {
     id: 'heavy_armor',
@@ -52,6 +55,7 @@ export const BATTALION_UNLOCKS = [
     desc: 'Tanque Pesado Elite com blindagem frontal reforçada e canhão 120mm.',
     unitType: 'mbt_tank',
     costSup: 950,
+    priceGold: 750,
   },
   {
     id: 'heavy_artillery',
@@ -62,6 +66,7 @@ export const BATTALION_UNLOCKS = [
     desc: 'Salva de foguetes de longo alcance para demolir fortificações e colunas inimigas.',
     unitType: 'rocket_artillery',
     costSup: 850,
+    priceGold: 1000,
   },
 ];
 
@@ -113,7 +118,7 @@ export function computeLevelFromXp(xp = 0) {
     if (xp >= r.minXp) current = r;
   }
   const next = ACCOUNT_RANKS.find((r) => r.level === current.level + 1) || null;
-  const unlockedBattalions = BATTALION_UNLOCKS.filter((b) => current.level >= b.requiredLevel).map(
+  const eligibleBattalions = BATTALION_UNLOCKS.filter((b) => current.level >= b.requiredLevel).map(
     (b) => b.id
   );
   return {
@@ -121,6 +126,6 @@ export function computeLevelFromXp(xp = 0) {
     rank: current.rank,
     currentMinXp: current.minXp,
     nextLevelXp: next ? next.minXp : current.minXp,
-    unlockedBattalions,
+    eligibleBattalions,
   };
 }

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import TutorialModal from './TutorialModal.jsx';
 import MultiplayerLobby from './MultiplayerLobby.jsx';
 import AuthGate from './AuthGate.jsx';
+import AdminPanel from './AdminPanel.jsx';
 import { loadStoredFirebaseConfig, networkManager } from '../game/net/NetworkManager.js';
 import {
   COMMAND_BY_ID,
@@ -332,11 +333,47 @@ export default function GameMenus({
     return <AuthGate />;
   }
 
+  // TRIBUNAL MILITAR: TELA DE CONTA SUSPENSA / BANIDA
+  if (net.currentUser?.banned) {
+    return (
+      <div className="mil-menu-overlay">
+        <div className="mil-menu-panel" style={{ maxWidth: 520, margin: 'auto', textAlign: 'center', borderColor: '#ef4444' }}>
+          <header className="mil-menu-header" style={{ justifyContent: 'center' }}>
+            <div className="mil-brand">
+              <span className="mil-brand-title" style={{ color: '#ef4444' }}>⛔ ACESSO RESTRITO — CONTA SUSPENSA</span>
+              <span className="mil-brand-sub">TRIBUNAL DE DISCIPLINA MILITAR</span>
+            </div>
+          </header>
+          <div style={{ padding: 24 }}>
+            <p style={{ color: '#fca5a5', fontSize: '1.05rem', marginBottom: 14 }}>
+              Sua conta foi suspensa pelo Administrador por violação das diretrizes de combate.
+            </p>
+            <div style={{ background: '#1c1917', border: '1px solid #7f1d1d', padding: 14, borderRadius: 6, marginBottom: 20 }}>
+              <span style={{ color: '#9ca3af', display: 'block', fontSize: '0.85rem' }}>MOTIVO DA RESTRIÇÃO:</span>
+              <strong style={{ color: '#f87171' }}>{net.currentUser?.banReason || 'Suspensão aplicada pelo comando supremo.'}</strong>
+            </div>
+            <button
+              type="button"
+              className="mil-btn-secondary"
+              style={{ width: '100%', borderColor: '#ef4444', color: '#fca5a5' }}
+              onClick={() => networkManager.logout()}
+            >
+              ▪ ENCERRAR SESSÃO / TROCAR DE CONTA
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const isPaused = gameState === 'PAUSED';
   const s = hud.settings || { camSpeed: 1.0, volume: 0.35, highQuality: true };
+  const isAdmin = Boolean(net.isAdmin || networkManager.isAdmin());
 
   const activeTab =
-    subTab === 'skirmish'
+    subTab === 'admin'
+      ? 'admin'
+      : subTab === 'skirmish'
       ? 'skirmish'
       : subTab === 'campaign'
       ? 'campaign'
@@ -344,15 +381,13 @@ export default function GameMenus({
       ? 'ranks'
       : subTab === 'store'
       ? 'store'
-      : ['skins', 'arsenal', 'tutorial', 'saves', 'settings', 'controls', 'sandbox'].includes(subTab)
+      : ['skins', 'tutorial', 'saves', 'settings', 'controls'].includes(subTab)
       ? 'arsenal_hub'
       : 'rooms';
 
-  const hubSubTab = ['skins', 'arsenal', 'tutorial', 'saves', 'settings', 'controls', 'sandbox'].includes(
-    subTab
-  )
+  const hubSubTab = ['skins', 'tutorial', 'saves', 'settings', 'controls'].includes(subTab)
     ? subTab
-    : 'skins';
+    : 'tutorial';
   const systemSubTab =
     subTab === 'settings' ? 'settings' : subTab === 'controls' ? 'controls' : 'saves';
 
@@ -419,20 +454,64 @@ export default function GameMenus({
             >
               📖 GUIA / SIST.
             </button>
+            {isAdmin && (
+              <button
+                type="button"
+                className={`mil-tab-btn ${activeTab === 'admin' ? 'active' : ''}`}
+                style={{ borderColor: '#ef4444', color: activeTab === 'admin' ? '#fca5a5' : '#ef4444' }}
+                onClick={() => setSubTab('admin')}
+              >
+                🛡️ PAINEL ADMIN
+              </button>
+            )}
           </nav>
 
           {net.currentUser && (
             <div className="hub-user-badge">
               <div className="hub-user-info">
                 <strong>
+                  {isAdmin ? '🛡️ [ADMIN] ' : ''}
                   {net.currentUser.hasGoldInsignia ? '🏅 ' : ''}
                   {net.currentUser.callsign}
                 </strong>
                 <small>
                   Nv.{net.currentUser.level || 1} {net.currentUser.rank} • 💰{' '}
-                  {net.currentUser.militaryGold ?? 1000} Ouro
+                  {net.currentUser.militaryGold ?? 0} Ouro
                 </small>
               </div>
+              {!isAdmin && (
+                <button
+                  type="button"
+                  className="mil-pill"
+                  style={{ borderColor: '#eab308', color: '#fde047' }}
+                  onClick={() => {
+                    const key = window.prompt('Digite a Chave de Administrador:');
+                    if (key) {
+                      const res = networkManager.claimAdmin(key);
+                      if (res.ok) {
+                        alert(res.message);
+                        setSubTab('admin');
+                      } else {
+                        alert(res.error);
+                      }
+                    }
+                  }}
+                  title="Ativar privilégios de Administrador"
+                >
+                  🔑 Admin
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  type="button"
+                  className="mil-pill"
+                  style={{ borderColor: '#ef4444', color: '#fca5a5' }}
+                  onClick={() => setSubTab('admin')}
+                  title="Abrir painel administrativo"
+                >
+                  ⚙️ Painel
+                </button>
+              )}
               <button
                 type="button"
                 className="mil-pill"
@@ -636,6 +715,7 @@ export default function GameMenus({
                   prog.nextLevelXp > prog.currentMinXp
                     ? Math.min(100, Math.round(((xp - prog.currentMinXp) / span) * 100))
                     : 100;
+                const userBats = net.currentUser?.unlockedBattalions || [];
                 return (
                   <div className="mp-card">
                     <div className="mp-card-head">
@@ -645,37 +725,61 @@ export default function GameMenus({
                           PATENTE ATUAL: Nível {prog.level} — {prog.rank.toUpperCase()} ({xp} XP)
                         </h3>
                       </div>
-                      <button
-                        type="button"
-                        className="mil-pill"
-                        onClick={() => networkManager.addAccountXp(250, { isCampaign: true })}
-                        title="Simular ganho de XP de Campanha para testar desbloqueios"
-                      >
-                        ⚡ +250 XP Teste
-                      </button>
+                      <div className="mp-room-meta">
+                        <span className="mp-ping-badge" style={{ color: '#fde047' }}>
+                          💰 {net.currentUser?.militaryGold ?? 0} Ouro
+                        </span>
+                      </div>
                     </div>
                     <div className="struct-ctx-hpbar" style={{ height: 8 }}>
                       <div style={{ width: `${pct}%` }} />
                     </div>
                     <small style={{ color: '#8c948c' }}>
-                      Próximo nível: {xp} / {prog.nextLevelXp} XP • Toda partida concluída e dia sobrevivido na Campanha de 15 Dias concede XP.
+                      Próximo nível: {xp} / {prog.nextLevelXp} XP • Toda partida concluída e dia sobrevivido na Campanha concede XP. Batalhões especiais requerem patente e aquisição via Ouro Militar.
                     </small>
 
                     <div className="mp-campaigns-grid">
                       {BATTALION_UNLOCKS.map((b) => {
-                        const unlocked = prog.level >= b.requiredLevel;
+                        const isUnlocked = userBats.includes(b.id);
+                        const isLevelMet = prog.level >= b.requiredLevel;
+                        const goldPrice = b.priceGold || 200;
                         return (
                           <div
                             key={b.id}
-                            className={`mp-campaign-card ${unlocked ? 'unlocked-bat' : 'locked-bat'}`}
+                            className={`mp-campaign-card ${isUnlocked ? 'unlocked-bat' : 'locked-bat'}`}
                           >
                             <div className="mp-card-head">
                               <strong>
                                 {b.icon} {b.name}
                               </strong>
-                              <span className="mp-ping-badge">
-                                {unlocked ? '✓ LIBERADO' : `🔒 Nv.${b.requiredLevel} (${b.rankName})`}
-                              </span>
+                              {isUnlocked ? (
+                                <span
+                                  className="mp-ping-badge"
+                                  style={{
+                                    background: 'rgba(74, 222, 128, 0.15)',
+                                    borderColor: '#4ade80',
+                                    color: '#4ade80',
+                                  }}
+                                >
+                                  ✓ LIBERADO & EQUIPADO
+                                </span>
+                              ) : isLevelMet ? (
+                                <button
+                                  type="button"
+                                  className="mil-btn-primary"
+                                  style={{ minHeight: 32, padding: '0 10px', fontSize: '0.78rem' }}
+                                  onClick={() => {
+                                    const res = networkManager.unlockBattalion(b.id);
+                                    if (!res.ok) alert(res.error);
+                                  }}
+                                >
+                                  💰 ADQUIRIR ({goldPrice} OURO)
+                                </button>
+                              ) : (
+                                <span className="mp-ping-badge" style={{ color: '#9ca3af' }}>
+                                  🔒 Nv.{b.requiredLevel} ({b.rankName}) • {goldPrice} Ouro
+                                </span>
+                              )}
                             </div>
                             <small style={{ color: '#b7beb7', lineHeight: 1.4 }}>{b.desc}</small>
                           </div>
@@ -698,15 +802,8 @@ export default function GameMenus({
                   </div>
                   <div className="mp-room-meta">
                     <span className="mp-ping-badge">
-                      💰 {net.currentUser?.militaryGold ?? 1000} Ouro Militar
+                      💰 {net.currentUser?.militaryGold ?? 0} Ouro Militar
                     </span>
-                    <button
-                      type="button"
-                      className="mil-pill"
-                      onClick={() => networkManager.addMilitaryGold(500)}
-                    >
-                      +500 Ouro (Teste)
-                    </button>
                   </div>
                 </div>
 
@@ -774,21 +871,6 @@ export default function GameMenus({
                   onClick={() => setSubTab('skins')}
                 >
                   ✦ UNIFORMES & SKINS
-                </button>
-                <button
-                  type="button"
-                  className={`mil-pill ${hubSubTab === 'arsenal' ? 'active' : ''}`}
-                  onClick={() => setSubTab('arsenal')}
-                >
-                  ⚙ ARSENAL DE COMBATE
-                </button>
-                <button
-                  type="button"
-                  className="mil-pill"
-                  style={{ borderColor: '#c28e38', color: '#c28e38' }}
-                  onClick={() => onPlaySandbox?.('1v1', selectedMapId)}
-                >
-                  🛠️ CAMPO DE TREINAMENTO (SANDBOX)
                 </button>
                 <button
                   type="button"
@@ -864,28 +946,6 @@ export default function GameMenus({
                       </button>
                     );
                   })}
-                </div>
-              )}
-
-              {hubSubTab === 'arsenal' && (
-                <div className="mil-arsenal-grid">
-                  {BOTTOM_BAR_CATEGORIES.map((cat) => (
-                    <div key={cat.id} className="mil-arsenal-col">
-                      <div className="mil-section-label">
-                        {cat.icon} {cat.label} ({cat.hotkey})
-                      </div>
-                      {cat.commands.map((cmdId) => {
-                        const cmd = COMMAND_BY_ID[cmdId];
-                        if (!cmd) return null;
-                        return (
-                          <div key={cmdId} className="mil-arsenal-row">
-                            <span>{cmd.name}</span>
-                            <small>{cmd.cost ? `${cmd.cost} SUP` : 'GRÁTIS'}</small>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))}
                 </div>
               )}
 
@@ -968,6 +1028,12 @@ export default function GameMenus({
                   </button>
                 </div>
               )}
+            </div>
+          )}
+
+          {activeTab === 'admin' && (
+            <div className="mil-subpane">
+              <AdminPanel />
             </div>
           )}
 
