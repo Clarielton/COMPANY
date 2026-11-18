@@ -735,81 +735,105 @@ export class Renderer3D {
     return g;
   }
 
-  // Muros de Bloqueio Militar Realistas (Checkpoints com Concreto Desgastado, Sacos de Areia, Ouriços Checos, Placas e Cancela)
+  // Muralha Perimetral Contínua de Concreto Armado (3.2m altura x 1.4m espessura, Pilares de Aço a cada 8m, Ameias e Portão Blindado Automático)
   _createFortifiedWallMesh(wall) {
     const g = new THREE.Group();
     const dx = wall.x2 - wall.x1;
     const dy = wall.y2 - wall.y1;
     const len = Math.max(40, Math.hypot(dx, dy));
     const cx = (wall.x1 + wall.x2) * 0.5;
-    const cy = (wall.y1 + wall.y2) * 0.5;
+    const cy = wall.y1 !== undefined ? (wall.y1 + wall.y2) * 0.5 : 0;
     const ang = Math.atan2(dx, dy);
 
-    g.position.set(cx, 0, cy);
+    g.position.set(cx, getTerrainHeight(cx, cy), cy);
     g.rotation.y = ang;
+    g.userData.version = wall._meshVersion || 1;
 
-    // Deixa brecha central para passagem se o muro for longo, com cancela militar
-    const gapHalf = len > 90 ? 18 : 0;
-    const wingLen = (len - gapHalf * 2) * 0.5;
+    const wallH = wall.height || 46; // ~3.2m
+    const wallT = wall.width || 20; // ~1.4m
+    const bodyMat = wall.reinforced ? this.materials.charredMetal : this.materials.concreteDark;
+    const trimMat = this.materials.gunMetal;
+    const isGate = Boolean(wall.isGate);
+    const gapHalf = isGate ? Math.min(38, len * 0.32) : 0;
 
-    for (const sideDir of [-1, 1]) {
-      const wingCenter = sideDir * (gapHalf + wingLen * 0.5);
-      const count = Math.max(2, Math.floor(wingLen / 24));
-      for (let i = 0; i < count; i++) {
-        const zPos = wingCenter - wingLen * 0.5 + (i + 0.5) * (wingLen / count);
-        // Barreira Jersey de concreto desgastado
-        const jersey = new THREE.Mesh(this.geometries.box, this.materials.masonryStone);
-        jersey.scale.set(12, 11, wingLen / count - 1.5);
-        jersey.position.set(0, 5.5, zPos);
-        jersey.castShadow = true;
-        jersey.receiveShadow = true;
-        g.add(jersey);
+    const buildSpan = (zStart, zEnd) => {
+      const spanLen = zEnd - zStart;
+      if (spanLen < 8) return;
+      const midZ = (zStart + zEnd) * 0.5;
 
-        // Sacos de areia densos nas duas faces
-        for (const face of [-8.5, 8.5]) {
-          for (let row = 0; row < 2; row++) {
-            const sb = new THREE.Mesh(this.geometries.sandbag, this.materials.sandbagOlive);
-            sb.scale.set(4.5, 2.6, 6.4);
-            sb.position.set(face, 2.2 + row * 3.0, zPos);
-            sb.castShadow = true;
-            g.add(sb);
-          }
+      // Corpo principal de Concreto Armado Cinza-Escuro
+      const body = new THREE.Mesh(this.geometries.box, bodyMat);
+      body.scale.set(wallT, wallH, spanLen);
+      body.position.set(0, wallH * 0.5, midZ);
+      body.castShadow = true;
+      body.receiveShadow = true;
+      g.add(body);
+
+      // Passarela superior + Ameias no topo
+      const walkway = new THREE.Mesh(this.geometries.box, this.materials.concrete);
+      walkway.scale.set(wallT + 4, 3.2, spanLen);
+      walkway.position.set(0, wallH + 1.2, midZ);
+      g.add(walkway);
+
+      const merlonCount = Math.max(2, Math.floor(spanLen / 28));
+      for (let m = 0; m < merlonCount; m++) {
+        const mz = zStart + (m + 0.5) * (spanLen / merlonCount);
+        const merlon = new THREE.Mesh(this.geometries.box, bodyMat);
+        merlon.scale.set(wallT + 4.5, 6.5, Math.min(14, (spanLen / merlonCount) * 0.55));
+        merlon.position.set(0, wallH + 5.5, mz);
+        merlon.castShadow = true;
+        g.add(merlon);
+      }
+
+      // Pilares de aço estruturais a cada ~8m (110u) e nas pontas
+      const pillarStep = 110;
+      const numPillars = Math.max(1, Math.round(spanLen / pillarStep));
+      for (let p = 0; p <= numPillars; p++) {
+        const pz = zStart + (p / numPillars) * spanLen;
+        const pillar = new THREE.Mesh(this.geometries.box, trimMat);
+        pillar.scale.set(wallT + 6, wallH + 9, 10);
+        pillar.position.set(0, (wallH + 9) * 0.5, pz);
+        pillar.castShadow = true;
+        g.add(pillar);
+
+        if (wall.isElite && (p === 0 || p === numPillars)) {
+          const spot = new THREE.Mesh(
+            this.geometries.sphere,
+            new THREE.MeshStandardMaterial({ color: 0xfde047, emissive: 0xfacc15, emissiveIntensity: 1.2 })
+          );
+          spot.scale.set(3.2, 3.2, 3.2);
+          spot.position.set(0, wallH + 11, pz);
+          g.add(spot);
         }
       }
-      // Ouriço Checo (vigas de aço cruzadas) na ponta próxima à brecha
-      const hhZ = sideDir * (gapHalf + 6);
-      for (const tilt of [-0.65, 0.65]) {
-        const beam = new THREE.Mesh(this.geometries.box, this.materials.rustMetal);
-        beam.scale.set(1.8, 16, 1.8);
-        beam.position.set(11, 6.5, hhZ);
-        beam.rotation.set(tilt, 0.4, tilt * 0.7);
-        beam.castShadow = true;
-        g.add(beam);
-      }
-    }
+    };
 
-    // Placa "PARE / ZONA MILITAR" + Cancela na brecha central
-    const signPost = new THREE.Mesh(this.geometries.cyl, this.materials.gunMetal);
-    signPost.scale.set(1.0, 18, 1.0);
-    signPost.position.set(9, 9, -gapHalf - 4);
-    g.add(signPost);
-    const signBoard = new THREE.Mesh(
-      this.geometries.box,
-      new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.6 })
-    );
-    signBoard.scale.set(1.2, 6, 8);
-    signBoard.position.set(9, 15, -gapHalf - 4);
-    g.add(signBoard);
+    if (!isGate) {
+      buildSpan(-len * 0.5, len * 0.5);
+    } else {
+      buildSpan(-len * 0.5, -gapHalf);
+      buildSpan(gapHalf, len * 0.5);
 
-    if (gapHalf > 0) {
-      const gateArm = new THREE.Mesh(
-        this.geometries.box,
-        new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.6 })
-      );
-      gateArm.scale.set(1.6, 1.8, gapHalf * 1.9);
-      gateArm.position.set(0, 9.5, 0);
-      gateArm.rotation.x = 0.25;
-      g.add(gateArm);
+      // Viga superior do Portão Blindado + 2 Folhas Deslizantes de Aço
+      const headerBeam = new THREE.Mesh(this.geometries.box, trimMat);
+      headerBeam.scale.set(wallT + 7, 7, gapHalf * 2 + 16);
+      headerBeam.position.set(0, wallH + 6, 0);
+      headerBeam.castShadow = true;
+      g.add(headerBeam);
+
+      const leftDoor = new THREE.Mesh(this.geometries.box, this.materials.charredMetal);
+      leftDoor.scale.set(wallT * 0.65, wallH - 2, gapHalf);
+      leftDoor.position.set(0, (wallH - 2) * 0.5, -gapHalf * 0.5);
+      leftDoor.castShadow = true;
+      g.add(leftDoor);
+
+      const rightDoor = new THREE.Mesh(this.geometries.box, this.materials.charredMetal);
+      rightDoor.scale.set(wallT * 0.65, wallH - 2, gapHalf);
+      rightDoor.position.set(0, (wallH - 2) * 0.5, gapHalf * 0.5);
+      rightDoor.castShadow = true;
+      g.add(rightDoor);
+
+      g.userData.gateDoors = { leftDoor, rightDoor, gapHalf };
     }
 
     return g;
@@ -858,8 +882,9 @@ export class Renderer3D {
   _createBaseBuildingMesh(bld) {
     const g = new THREE.Group();
     const isAlly = bld.team === 'allies';
-    const roofCol = isAlly ? 0x3f5636 : 0x5c3e32;
-    const bannerColor = isAlly ? 0x6b9bd2 : 0xc94a38;
+    const isElite = Boolean(bld.isEliteFortress);
+    const roofCol = isElite ? 0x273024 : isAlly ? 0x3f5636 : 0x5c3e32;
+    const bannerColor = isElite ? 0xd4a338 : isAlly ? 0x6b9bd2 : 0xc94a38;
 
     // Anel de seleção iluminado no chão quando o jogador clica no prédio
     const selRing = new THREE.Mesh(this.geometries.ring, this.materials.buildingSelectRing);
@@ -1007,39 +1032,77 @@ export class Renderer3D {
         g.add(sb);
       }
 
-      // Nível 2: Radar Giratório + Bunkers Laterais
+      // Tenda Tática Lateral (Nível 1)
+      const sideTent = new THREE.Mesh(this.geometries.box, this.materials.sandbagOlive);
+      sideTent.scale.set(36, 15, 28);
+      sideTent.position.set(-76, 9, -22);
+      sideTent.castShadow = true;
+      g.add(sideTent);
+
+      // Nível 2: Segundo Andar Blindado + Torre de Vigia c/ Holofote + Radar Giratório + Casamata Integrada
       const lvl2Group = new THREE.Group();
+      const secondFloor = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+      secondFloor.scale.set(92, 18, 34);
+      secondFloor.position.set(-14, 39, -36);
+      secondFloor.castShadow = true;
+      lvl2Group.add(secondFloor);
+
       for (const bx of [-86, 86]) {
         const bnk = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
-        bnk.scale.set(26, 16, 26);
-        bnk.position.set(bx, 8, 38);
+        bnk.scale.set(28, 18, 28);
+        bnk.position.set(bx, 9, 38);
         bnk.castShadow = true;
         lvl2Group.add(bnk);
       }
-      const radarMast = new THREE.Mesh(this.geometries.cyl, this.materials.gunMetal);
-      radarMast.scale.set(2.4, 20, 2.4);
-      radarMast.position.set(-42, 42, -36);
-      lvl2Group.add(radarMast);
+      const watchTower = new THREE.Mesh(this.geometries.box, this.materials.gunMetal);
+      watchTower.scale.set(16, 36, 16);
+      watchTower.position.set(44, 36, 32);
+      lvl2Group.add(watchTower);
+      const towerSpot = new THREE.Mesh(
+        this.geometries.sphere,
+        new THREE.MeshStandardMaterial({ color: 0xfef08a, emissive: 0xfacc15, emissiveIntensity: 1.3 })
+      );
+      towerSpot.scale.set(4.2, 4.2, 4.2);
+      towerSpot.position.set(44, 56, 32);
+      lvl2Group.add(towerSpot);
+
+      const radarPivot = new THREE.Group();
+      radarPivot.position.set(-42, 52, -36);
       const radarDish = new THREE.Mesh(this.geometries.box, this.materials.whiteFlag);
-      radarDish.scale.set(16, 10, 2);
-      radarDish.position.set(-42, 53, -36);
-      lvl2Group.add(radarDish);
+      radarDish.scale.set(20, 11, 2.5);
+      radarPivot.add(radarDish);
+      lvl2Group.add(radarPivot);
+      g.userData.dishGroup = radarPivot;
+
       lvl2Group.visible = (bld.level || 1) >= 2;
       g.add(lvl2Group);
       g.userData.lvl2Group = lvl2Group;
 
-      // Nível 3: Torre de Comando Supremo
+      // Nível 3: Fortaleza de Comando (Cúpula Blindada + Baterias Antiaéreas + Paredes Laterais de Aço)
       const lvl3Group = new THREE.Group();
-      const supTower = new THREE.Mesh(this.geometries.cyl, this.materials.gunMetal);
-      supTower.scale.set(3.0, 44, 3.0);
-      supTower.position.set(-14, 62, -36);
-      lvl3Group.add(supTower);
+      const commandDome = new THREE.Mesh(this.geometries.sphere, this.materials.charredMetal);
+      commandDome.scale.set(28, 16, 28);
+      commandDome.position.set(-14, 50, -36);
+      lvl3Group.add(commandDome);
+
+      for (const ax of [-48, 20]) {
+        const aaBase = new THREE.Mesh(this.geometries.cyl, this.materials.gunMetal);
+        aaBase.scale.set(8, 7, 8);
+        aaBase.position.set(ax, 50, -36);
+        lvl3Group.add(aaBase);
+        const aaBarrel = new THREE.Mesh(this.geometries.cyl, this.materials.charredMetal);
+        aaBarrel.scale.set(1.6, 18, 1.6);
+        aaBarrel.position.set(ax, 55, -30);
+        aaBarrel.rotation.x = -0.65;
+        lvl3Group.add(aaBarrel);
+      }
+
       const supBeacon = new THREE.Mesh(
         this.geometries.sphere,
-        new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xfacc15, emissiveIntensity: 0.9 })
+        new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xfacc15, emissiveIntensity: 1.1 })
       );
       supBeacon.scale.set(4.5, 4.5, 4.5);
-      supBeacon.position.set(-14, 85, -36);
+      supBeacon.position.set(-14, 68, -36);
       lvl3Group.add(supBeacon);
       lvl3Group.visible = (bld.level || 1) >= 3;
       g.add(lvl3Group);
@@ -4122,15 +4185,27 @@ export class Renderer3D {
       }
     }
 
-    // 5b. Muros Fortificados de Concreto/Sacos de Areia 3D
+    // 5b. Muros Fortificados de Concreto Armado 3D (com Portão Blindado Automático)
     const activeWallIds = new Set();
     for (const wall of game.fortifiedWalls || []) {
+      if (wall.hp !== undefined && wall.hp <= 0) continue;
       activeWallIds.add(wall.id);
       let wm = this.wallMeshes.get(wall.id);
+      if (wm && wm.userData.version !== (wall._meshVersion || 1)) {
+        this.dynamicGroup.remove(wm);
+        this.wallMeshes.delete(wall.id);
+        wm = null;
+      }
       if (!wm) {
         wm = this._createFortifiedWallMesh(wall);
         this.dynamicGroup.add(wm);
         this.wallMeshes.set(wall.id, wm);
+      }
+      if (wm.userData.gateDoors) {
+        const { leftDoor, rightDoor, gapHalf } = wm.userData.gateDoors;
+        const openSlide = (wall.gateOpenProgress || 0) * (gapHalf * 0.88);
+        leftDoor.position.z = -gapHalf * 0.5 - openSlide;
+        rightDoor.position.z = gapHalf * 0.5 + openSlide;
       }
       wm.visible =
         wall.team === 'allies' ||
@@ -4704,17 +4779,34 @@ export class Renderer3D {
       ctx.save();
       ctx.strokeStyle =
         game.activeCommandMode === 'build_wall'
-          ? 'rgba(163, 190, 140, 0.92)'
+          ? 'rgba(74, 222, 128, 0.92)'
           : 'rgba(200, 125, 40, 0.92)';
-      ctx.lineWidth = 5;
+      ctx.lineWidth = game.activeCommandMode === 'build_wall' ? 9 : 5;
       ctx.setLineDash([10, 6]);
       ctx.beginPath();
       pts.forEach((pt, idx) => {
-        const sc = this.worldToScreen(pt.x, pt.y, 2);
+        const sc = this.worldToScreen(pt.x, pt.y, 4);
         if (idx === 0) ctx.moveTo(sc.x, sc.y);
         else ctx.lineTo(sc.x, sc.y);
       });
       ctx.stroke();
+
+      // Desenha os pilares verdes de prévia da Muralha Contínua a cada ~8m
+      if (game.activeCommandMode === 'build_wall' && pts.length >= 2) {
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(74, 222, 128, 0.85)';
+        const a = pts[0];
+        const b = pts[pts.length - 1];
+        const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+        const pCount = Math.max(1, Math.round(segLen / 110));
+        for (let i = 0; i <= pCount; i++) {
+          const t = i / pCount;
+          const sc = this.worldToScreen(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, 6);
+          if (sc.visible) {
+            ctx.fillRect(sc.x - 4, sc.y - 4, 8, 8);
+          }
+        }
+      }
       ctx.restore();
     } else if ((game.activeCommandMode || game.activeAirStrikeMode) && game.worldMouse) {
       const sc = this.worldToScreen(game.worldMouse.x, game.worldMouse.y, 2);

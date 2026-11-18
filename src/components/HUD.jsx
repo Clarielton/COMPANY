@@ -766,6 +766,18 @@ export default function HUD({
               />
             </div>
 
+            <div style={{ marginBottom: 8 }}>
+              <button
+                type="button"
+                className="hud-btn"
+                style={{ width: '100%' }}
+                disabled={selectedBld.hp >= selectedBld.maxHp}
+                onClick={() => gameRef.current?.repairSelectedWallOrBuilding()}
+              >
+                🔧 Reparar Estrutura ({hud.sandboxMode ? '0' : '60'} SUP)
+              </button>
+            </div>
+
             {/* Fila de Produção Visual 1 a 5 Slots + Barra de Progresso (Clique Direito cancela e reembolsa 100%) */}
             <div className="bprod-queue-box">
               <div className="bprod-progress-head">
@@ -1645,6 +1657,74 @@ export default function HUD({
                 🚪 PAUSAR / ABANDONAR OPERAÇÃO [ESC]
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MENU INTERATIVO DA MURALHA / PORTÃO SELECIONADO */}
+      {hud.selectedWall && (
+        <div className="structure-context-menu">
+          <div className="struct-ctx-head">
+            <div>
+              <strong>
+                {hud.selectedWall.isGate ? '🚧 Portão Blindado Automático' : '🧱 Muralha Defensiva'}
+              </strong>
+              <small>
+                Integridade: {hud.selectedWall.hp}/{hud.selectedWall.maxHp} HP
+                {hud.selectedWall.reinforced ? ' • Blindada' : ''}
+              </small>
+            </div>
+            <button
+              type="button"
+              className="hud-btn"
+              onClick={() => {
+                if (gameRef.current) {
+                  gameRef.current.selectedWallId = null;
+                  gameRef.current._emitHud();
+                }
+              }}
+            >
+              ✕
+            </button>
+          </div>
+          <div className="struct-ctx-hpbar">
+            <div
+              style={{
+                width: `${Math.max(
+                  0,
+                  Math.min(100, (hud.selectedWall.hp / Math.max(1, hud.selectedWall.maxHp)) * 100)
+                )}%`,
+              }}
+            />
+          </div>
+          <div className="struct-ctx-actions">
+            <button
+              type="button"
+              className="hud-btn"
+              disabled={hud.selectedWall.hp >= hud.selectedWall.maxHp}
+              onClick={() => gameRef.current?.repairSelectedWallOrBuilding()}
+            >
+              🔧 Reparar Estrutura ({hud.sandboxMode ? '0' : '60'} SUP)
+            </button>
+            <button
+              type="button"
+              className="hud-btn active"
+              onClick={() => gameRef.current?.convertSelectedWallToGate()}
+            >
+              {hud.selectedWall.isGate
+                ? '🧱 Converter em Muro Fechado'
+                : '🚧 Converter Trecho em Portão'}
+            </button>
+            <button
+              type="button"
+              className="hud-btn"
+              disabled={hud.selectedWall.reinforced}
+              onClick={() => gameRef.current?.reinforceSelectedWall()}
+            >
+              {hud.selectedWall.reinforced
+                ? '✓ Muralha Reforçada (+50% HP)'
+                : `⬆️ Reforçar Muralha (+50% HP • ${hud.sandboxMode ? '0' : '80'} SUP)`}
+            </button>
           </div>
         </div>
       )}

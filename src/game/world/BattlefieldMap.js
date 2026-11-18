@@ -2113,8 +2113,10 @@ export class BattlefieldMap {
       ry = res.y;
     }
 
-    // 3. Colisão contra Muros Fortificados Construídos (Concreto / Sacos de Areia)
+    // 3. Colisão contra Muros Fortificados Construídos (Concreto Armado — Portão abre para aliados)
     for (const cw of customWalls) {
+      if (cw.hp !== undefined && cw.hp <= 0) continue;
+      if (cw.isGate && cw.gateOpen) continue;
       const res = this._pushFromSegment(
         rx,
         ry,
@@ -2719,6 +2721,7 @@ export class BattlefieldMap {
 
     const pushWallBoxes = (list, defaultThick) => {
       for (const w of list || []) {
+        if (w.hp !== undefined && w.hp <= 0) continue;
         const halfT = (w.thickness || w.width || defaultThick) * 0.5;
         const dx = Math.abs(w.x2 - w.x1);
         const dz = Math.abs(w.y2 - w.y1);
@@ -2807,7 +2810,8 @@ export class BattlefieldMap {
     for (const box of boxes) {
       if (
         currentSquad &&
-        (currentSquad.targetBuilding === box.ref ||
+        ((box.ref?.isGate && box.ref.team === currentSquad.team) ||
+          currentSquad.targetBuilding === box.ref ||
           currentSquad.garrisonedBuilding === box.ref ||
           (currentSquad.order?.type === 'garrison_building' &&
             box.ref?.id &&

@@ -521,23 +521,31 @@ export class Game {
       const hqBld = this.baseBuildings.find((b) => b.faction === 'player' && b.isMainHQ);
 
       if (packs.includes('hq_defense') || packs.includes('vip_combo')) {
-        // 2 Bunkers de Concreto nas entradas da base
-        this.spawnUnit('player', 'concrete_bunker', hq.x + 190, hq.y - 125, 0);
-        this.spawnUnit('player', 'concrete_bunker', hq.x + 190, hq.y + 125, 0);
-        // Perímetro de Sacos de Areia + Arame Farpado + Ouriços Checos Antitanque
+        const isVip = packs.includes('vip_combo');
+        // Anel Perimetral Fechado com Muros Altos de Concreto + 2 Portões Blindados Automáticos nas saídas
+        const wx1 = hq.x - 165;
+        const wx2 = hq.x + 215;
+        const wy1 = hq.y - 195;
+        const wy2 = hq.y + 195;
         this.fortifiedWalls.push(
-          new FortifiedWallLine({ x1: hq.x + 150, y1: hq.y - 190, x2: hq.x + 210, y2: hq.y - 60, team: 'allies' }),
-          new FortifiedWallLine({ x1: hq.x + 210, y1: hq.y + 60, x2: hq.x + 150, y2: hq.y + 190, team: 'allies' })
+          new FortifiedWallLine({ x1: wx2, y1: wy1, x2: wx2, y2: wy2, team: 'allies', isGate: true, isElite: isVip }),
+          new FortifiedWallLine({ x1: wx1, y1: wy2, x2: wx2, y2: wy2, team: 'allies', isGate: true, isElite: isVip }),
+          new FortifiedWallLine({ x1: wx1, y1: wy1, x2: wx2, y2: wy1, team: 'allies', isGate: false, isElite: isVip }),
+          new FortifiedWallLine({ x1: wx1, y1: wy1, x2: wx1, y2: wy2, team: 'allies', isGate: false, isElite: isVip })
         );
-        this.barbedWires.push(
-          new BarbedWireLine({ x1: hq.x + 245, y1: hq.y - 170, x2: hq.x + 245, y2: hq.y + 170, team: 'allies' })
-        );
+        // 2 Bunkers de Concreto com Metralhadoras Pesadas nos flancos + Ouriços Checos externos
+        this.spawnUnit('player', 'concrete_bunker', wx2 + 28, hq.y - 125, 0);
+        this.spawnUnit('player', 'concrete_bunker', wx2 + 28, hq.y + 125, 0);
         this.barricades.push(
-          new BarricadeLine({ x1: hq.x + 270, y1: hq.y - 95, x2: hq.x + 270, y2: hq.y + 95, team: 'allies' })
+          new BarricadeLine({ x1: wx2 + 58, y1: hq.y - 110, x2: wx2 + 58, y2: hq.y + 110, team: 'allies' })
         );
-        if (hqBld) {
-          hqBld.maxHp += 500;
-          hqBld.hp += 500;
+        // +1000 HP Estrutural a todas as construções da base aliada + acabamento Elite
+        for (const b of this.baseBuildings) {
+          if (b.team === 'allies') {
+            b.maxHp += 1000;
+            b.hp += 1000;
+            if (isVip) b.isEliteFortress = true;
+          }
         }
         // +1 Esquadrão de Engenheiros de Guarda inicial
         this.spawnUnit('player', 'engineers', hq.x + 115, hq.y + 40, 0);
@@ -2782,6 +2790,10 @@ export class Game {
     const allyCount = this.units.filter((u) => u.alive && u.team === 'allies').length;
     const enemyCount = this.units.filter((u) => u.alive && u.team === 'enemies').length;
 
+    const selectedWallObj = this.selectedWallId
+      ? (this.fortifiedWalls || []).find((w) => w.id === this.selectedWallId && (w.hp ?? 2500) > 0)
+      : null;
+
     return {
       version: 1,
       id: `save_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
@@ -3335,9 +3347,17 @@ export class Game {
       }
     }
     if (nearestEnemy && bestD < 2600) {
-      return { x: nearestEnemy.x, y: nearestEnemy.y };
+      const selectedWallObj = this.selectedWallId
+      ? (this.fortifiedWalls || []).find((w) => w.id === this.selectedWallId && (w.hp ?? 2500) > 0)
+      : null;
+
+    return { x: nearestEnemy.x, y: nearestEnemy.y };
     }
     const fallbackHq = team === 'allies' ? this.map.hqs.enemy_1 : this.map.hqs.player;
+    const selectedWallObj = this.selectedWallId
+      ? (this.fortifiedWalls || []).find((w) => w.id === this.selectedWallId && (w.hp ?? 2500) > 0)
+      : null;
+
     return { x: fallbackHq ? fallbackHq.x : 8450, y: fallbackHq ? fallbackHq.y : 4800 };
   }
 
@@ -3385,6 +3405,10 @@ export class Game {
   _createPrisonerDossier(unit) {
     const ranks = ['Tenente', 'Capitão', 'Major', 'Sargento-Mor'];
     const names = ['H. Weber', 'K. Richter', 'M. Vogel', 'F. Becker', 'E. Hartmann', 'L. Hoffmann'];
+    const selectedWallObj = this.selectedWallId
+      ? (this.fortifiedWalls || []).find((w) => w.id === this.selectedWallId && (w.hp ?? 2500) > 0)
+      : null;
+
     return {
       id: unit.id,
       name: unit.name,
@@ -3870,45 +3894,95 @@ export class Game {
     ) {
       if (input.mouse.rightClicked) {
         this.activeCommandMode = null;
+        this.trenchStartWorld = null;
         this.trenchPreview = null;
         return;
       }
+      const snapWallPt = (wx, wy) => {
+        if (this.activeCommandMode !== 'build_wall') return { x: wx, y: wy };
+        let best = { x: wx, y: wy };
+        let bestD = 42;
+        for (const w of this.fortifiedWalls || []) {
+          if ((w.hp ?? 2500) <= 0) continue;
+          const d1 = dist(wx, wy, w.x1, w.y1);
+          if (d1 < bestD) {
+            bestD = d1;
+            best = { x: w.x1, y: w.y1 };
+          }
+          const d2 = dist(wx, wy, w.x2, w.y2);
+          if (d2 < bestD) {
+            bestD = d2;
+            best = { x: w.x2, y: w.y2 };
+          }
+        }
+        return best;
+      };
       if (input.mouse.clicked) {
-        this.trenchStartWorld = { ...this.worldMouse };
+        this.trenchStartWorld = snapWallPt(this.worldMouse.x, this.worldMouse.y);
       }
       if (input.mouse.down && this.trenchStartWorld) {
-        const pts = this._buildTrenchPoints(
-          this.trenchStartWorld.x,
-          this.trenchStartWorld.y,
-          this.worldMouse.x,
-          this.worldMouse.y,
-          false
-        );
+        const endSnap = snapWallPt(this.worldMouse.x, this.worldMouse.y);
+        const pts =
+          this.activeCommandMode === 'build_wall'
+            ? [
+                { x: clamp(this.trenchStartWorld.x, 90, BATTLEFIELD_SIZE - 90), y: clamp(this.trenchStartWorld.y, 90, BATTLEFIELD_SIZE - 90) },
+                { x: clamp(endSnap.x, 90, BATTLEFIELD_SIZE - 90), y: clamp(endSnap.y, 90, BATTLEFIELD_SIZE - 90) },
+              ]
+            : this._buildTrenchPoints(
+                this.trenchStartWorld.x,
+                this.trenchStartWorld.y,
+                this.worldMouse.x,
+                this.worldMouse.y,
+                false
+              );
         this.trenchPreview = { points: pts, isLShape: false, mode: this.activeCommandMode };
       }
       if (input.mouse.released && this.trenchStartWorld) {
+        const endSnap = snapWallPt(this.worldMouse.x, this.worldMouse.y);
+        const pts =
+          this.activeCommandMode === 'build_wall'
+            ? [
+                { x: clamp(this.trenchStartWorld.x, 90, BATTLEFIELD_SIZE - 90), y: clamp(this.trenchStartWorld.y, 90, BATTLEFIELD_SIZE - 90) },
+                { x: clamp(endSnap.x, 90, BATTLEFIELD_SIZE - 90), y: clamp(endSnap.y, 90, BATTLEFIELD_SIZE - 90) },
+              ]
+            : this._buildTrenchPoints(
+                this.trenchStartWorld.x,
+                this.trenchStartWorld.y,
+                this.worldMouse.x,
+                this.worldMouse.y,
+                false
+              );
+        const segLen = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
         const cmd = COMMAND_BY_ID[this.activeCommandMode];
-        const cost = cmd ? cmd.cost : 60;
-        if (this.supplies >= cost) {
-          const pts = this._buildTrenchPoints(
-            this.trenchStartWorld.x,
-            this.trenchStartWorld.y,
-            this.worldMouse.x,
-            this.worldMouse.y,
-            false
-          );
+        const cost = this.sandboxMode
+          ? 0
+          : this.activeCommandMode === 'build_wall'
+          ? Math.max(45, Math.round((segLen / 180) * 55))
+          : cmd
+          ? cmd.cost
+          : 60;
+        if (this.supplies >= cost && segLen >= 28) {
           this.supplies -= cost;
           if (this.activeCommandMode === 'build_wall') {
-            this.fortifiedWalls.push(
-              new FortifiedWallLine({
-                x1: pts[0].x,
-                y1: pts[0].y,
-                x2: pts[1].x,
-                y2: pts[1].y,
-                team: 'allies',
-              })
+            const midX = (pts[0].x + pts[1].x) * 0.5;
+            const midY = (pts[0].y + pts[1].y) * 0.5;
+            const autoGate = Boolean(this.map?.isOnRoad?.(midX, midY, 45));
+            const newWall = new FortifiedWallLine({
+              x1: pts[0].x,
+              y1: pts[0].y,
+              x2: pts[1].x,
+              y2: pts[1].y,
+              team: 'allies',
+              isGate: autoGate,
+            });
+            this.fortifiedWalls.push(newWall);
+            this.selectedWallId = newWall.id;
+            this.spawnText(
+              midX,
+              midY - 18,
+              autoGate ? '🚧 PORTÃO BLINDADO AUTOMÁTICO' : `🧱 MURALHA CONSTRUÍDA (-${cost} SUP)`,
+              '#a3be8c'
             );
-            this.spawnText(pts[0].x, pts[0].y, '🧱 MURO FORTIFICADO (+75% COBERTURA PESADA)', '#a3be8c');
           } else if (this.activeCommandMode === 'build_wire') {
             this.barbedWires.push(
               new BarbedWireLine({
@@ -4136,6 +4210,16 @@ export class Game {
             ? this.map.findStructureAt(this.worldMouse.x, this.worldMouse.y, 82)
             : null;
 
+        const clickedWall =
+          !clickedUnit && !clickedAlliedBuilding && !clickedStructure
+            ? (this.fortifiedWalls || []).find(
+                (w) =>
+                  w.team === 'allies' &&
+                  (w.hp ?? 2500) > 0 &&
+                  w.containsPoint(this.worldMouse.x, this.worldMouse.y, 24)
+              )
+            : null;
+
         const currentlySelected = this.units.filter(
           (u) => u.alive && u.faction === 'player' && u.selected && !u.embarkedInId
         );
@@ -4158,9 +4242,19 @@ export class Game {
           return;
         }
 
+        if (clickedWall) {
+          this.selectedWallId = clickedWall.id;
+          this.selectedStructureId = null;
+          this.selectedBuildingId = null;
+          this.audio.play('switch');
+          this._emitHud();
+          return;
+        }
+
         if (clickedStructure) {
           this.selectedStructureId = clickedStructure.id;
           this.selectedBuildingId = null;
+          this.selectedWallId = null;
           this.audio.play('switch');
           this._emitHud();
           return;
@@ -4551,6 +4645,70 @@ export class Game {
       this.audio.play('pickup');
       this.spawnText(sq.x, sq.y - 22, `🎖️ BATALHÃO MOBILIZADO!`, '#c28e38');
     }
+    this._emitHud();
+    return true;
+  }
+
+  repairSelectedWallOrBuilding() {
+    const cost = this.sandboxMode ? 0 : 60;
+    const bld = this.selectedBuildingId
+      ? this.baseBuildings.find((b) => b.id === this.selectedBuildingId && b.alive !== false)
+      : null;
+    const wall = this.selectedWallId
+      ? (this.fortifiedWalls || []).find((w) => w.id === this.selectedWallId && (w.hp ?? 2500) > 0)
+      : null;
+    const target = wall || bld;
+    if (!target) return false;
+    if (this.supplies < cost) {
+      this.notify('SUPRIMENTOS INSUFICIENTES', `Necessário ${cost} SUP para reparo.`, '#c94a38');
+      return false;
+    }
+    this.supplies -= cost;
+    target.hp = target.maxHp || 2500;
+    const pos = wall ? wall.getCenter() : { x: bld.x, y: bld.y };
+    this.audio.play('reload');
+    this.spawnText(pos.x, pos.y - 20, '🔧 ESTRUTURA REPARADA 100%', '#4ade80');
+    this._emitHud();
+    return true;
+  }
+
+  convertSelectedWallToGate() {
+    const wall = this.selectedWallId
+      ? (this.fortifiedWalls || []).find((w) => w.id === this.selectedWallId && (w.hp ?? 2500) > 0)
+      : null;
+    if (!wall) return false;
+    wall.isGate = !wall.isGate;
+    wall._meshVersion = (wall._meshVersion || 1) + 1;
+    const c = wall.getCenter();
+    this.audio.play('door');
+    this.spawnText(
+      c.x,
+      c.y - 20,
+      wall.isGate ? '🚧 PORTÃO BLINDADO ATIVADO!' : '🧱 CONVERTIDO EM MURO FECHADO',
+      '#c28e38'
+    );
+    this._emitHud();
+    return true;
+  }
+
+  reinforceSelectedWall() {
+    const wall = this.selectedWallId
+      ? (this.fortifiedWalls || []).find((w) => w.id === this.selectedWallId && (w.hp ?? 2500) > 0)
+      : null;
+    if (!wall || wall.reinforced) return false;
+    const cost = this.sandboxMode ? 0 : 80;
+    if (this.supplies < cost) {
+      this.notify('SUPRIMENTOS INSUFICIENTES', `Necessário ${cost} SUP para reforçar muralha.`, '#c94a38');
+      return false;
+    }
+    this.supplies -= cost;
+    wall.reinforced = true;
+    wall.maxHp = Math.round((wall.maxHp || 2500) * 1.5);
+    wall.hp = wall.maxHp;
+    wall._meshVersion = (wall._meshVersion || 1) + 1;
+    const c = wall.getCenter();
+    this.audio.play('reload');
+    this.spawnText(c.x, c.y - 20, '⬆️ MURALHA BLINDADA (+50% HP)!', '#a3be8c');
     this._emitHud();
     return true;
   }
@@ -5282,6 +5440,17 @@ export class Game {
 
   _updateUnitsAndCombat(dt) {
     this._frameSolidBoxes = this.getSolidBuildingBoxes();
+    // Animação automática dos Portões Blindados nas muralhas quando aliados se aproximam
+    for (const w of this.fortifiedWalls || []) {
+      if (!w.isGate || (w.hp ?? 2500) <= 0) continue;
+      const c = w.getCenter();
+      const nearAlly = this.units.some(
+        (u) => u.alive && u.team === w.team && !u.embarkedInId && dist(u.x, u.y, c.x, c.y) <= 125
+      );
+      w.gateOpen = nearAlly;
+      const targetProg = nearAlly ? 1 : 0;
+      w.gateOpenProgress = (w.gateOpenProgress || 0) + (targetProg - (w.gateOpenProgress || 0)) * Math.min(1, dt * 4.5);
+    }
     if (this.paradropCooldown > 0) this.paradropCooldown = Math.max(0, this.paradropCooldown - dt);
     this.vehicleExhaustTimer -= dt;
     const emitVehicleExhaust = this.vehicleExhaustTimer <= 0;
@@ -6468,6 +6637,10 @@ export class Game {
       ? this.units.find((u) => u.id === selectedStructObj.garrisonUnitId && u.alive)
       : null;
 
+    const selectedWallObj = this.selectedWallId
+      ? (this.fortifiedWalls || []).find((w) => w.id === this.selectedWallId && (w.hp ?? 2500) > 0)
+      : null;
+
     return {
       gameMode: this.gameMode,
       mapId: this.mapId || 'normandy_fields',
@@ -6521,6 +6694,15 @@ export class Game {
             garrisonTeam: selectedStructObj.garrisonTeam || null,
             garrisonUnitName: garrisonedInStruct ? garrisonedInStruct.name : null,
             observationBoosted: Boolean(selectedStructObj.observationBoosted),
+          }
+        : null,
+      selectedWall: selectedWallObj
+        ? {
+            id: selectedWallObj.id,
+            hp: Math.round(selectedWallObj.hp ?? 2500),
+            maxHp: Math.round(selectedWallObj.maxHp ?? 2500),
+            isGate: Boolean(selectedWallObj.isGate),
+            reinforced: Boolean(selectedWallObj.reinforced),
           }
         : null,
       hasPowCamp: this.baseBuildings.some(
@@ -6627,7 +6809,11 @@ export class Game {
           .map((sid) => this.units.find((c) => c.id === sid && c.alive))
           .filter(Boolean);
         const cargoSoldiersCount = cargoSquads.reduce((acc, c) => acc + (c.soldiersAlive || 0), 0);
-        return {
+        const selectedWallObj = this.selectedWallId
+      ? (this.fortifiedWalls || []).find((w) => w.id === this.selectedWallId && (w.hp ?? 2500) > 0)
+      : null;
+
+    return {
           id: u.id,
           unitType: u.unitType,
           isInfantry: u.spec.type === 'infantry',

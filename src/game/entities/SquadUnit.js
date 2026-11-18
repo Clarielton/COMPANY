@@ -1048,14 +1048,41 @@ let NEXT_WALL_ID = 1;
 let NEXT_WIRE_ID = 1;
 
 export class FortifiedWallLine {
-  constructor({ x1, y1, x2, y2, team = 'allies' }) {
+  constructor({
+    x1,
+    y1,
+    x2,
+    y2,
+    team = 'allies',
+    isGate = false,
+    reinforced = false,
+    isElite = false,
+    maxHp = 2500,
+  }) {
     this.id = NEXT_WALL_ID++;
     this.x1 = x1;
     this.y1 = y1;
     this.x2 = x2;
     this.y2 = y2;
     this.team = team;
-    this.width = 24;
+    this.width = 22; // ~1.4m de espessura
+    this.height = 46; // ~3.2m de altura
+    this.maxHp = reinforced ? Math.round(maxHp * 1.5) : maxHp;
+    this.hp = this.maxHp;
+    this.isGate = Boolean(isGate);
+    this.gateOpen = false;
+    this.gateOpenProgress = 0;
+    this.reinforced = Boolean(reinforced);
+    this.isElite = Boolean(isElite);
+    this._meshVersion = 1;
+  }
+
+  getCenter() {
+    return { x: (this.x1 + this.x2) * 0.5, y: (this.y1 + this.y2) * 0.5 };
+  }
+
+  getLength() {
+    return Math.hypot(this.x2 - this.x1, this.y2 - this.y1);
   }
 
   containsPoint(px, py, extraRadius = 18) {
