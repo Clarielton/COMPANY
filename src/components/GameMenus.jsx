@@ -89,9 +89,7 @@ export default function GameMenus({
   onInstallPwa,
   onResolveInterrogation,
 }) {
-  const [subTab, setSubTab] = useState(
-    initialTab && initialTab !== 'skirmish' ? initialTab : 'rooms'
-  );
+  const [subTab, setSubTab] = useState(initialTab || 'skirmish');
   const [net, setNet] = useState(() => networkManager.getStatusSnapshot());
   const [newCampName, setNewCampName] = useState('');
   const [storeMsg, setStoreMsg] = useState('');
@@ -117,7 +115,7 @@ export default function GameMenus({
 
   useEffect(() => {
     if (initialTab && (gameState === 'PAUSED' || gameState === 'MENU')) {
-      setSubTab(initialTab === 'skirmish' ? 'rooms' : initialTab);
+      setSubTab(initialTab);
     }
   }, [initialTab, gameState]);
 
@@ -338,7 +336,9 @@ export default function GameMenus({
   const s = hud.settings || { camSpeed: 1.0, volume: 0.35, highQuality: true };
 
   const activeTab =
-    subTab === 'campaign'
+    subTab === 'skirmish'
+      ? 'skirmish'
+      : subTab === 'campaign'
       ? 'campaign'
       : subTab === 'ranks'
       ? 'ranks'
@@ -379,10 +379,17 @@ export default function GameMenus({
           <nav className="mil-tabs" aria-label="Hub Principal">
             <button
               type="button"
+              className={`mil-tab-btn ${activeTab === 'skirmish' ? 'active' : ''}`}
+              onClick={() => setSubTab('skirmish')}
+            >
+              ⚔️ CAMPANHA / 1v1 & 2v2
+            </button>
+            <button
+              type="button"
               className={`mil-tab-btn ${activeTab === 'rooms' ? 'active' : ''}`}
               onClick={() => setSubTab('rooms')}
             >
-              📡 PAINEL DE SALAS
+              📡 SALAS ONLINE
             </button>
             <button
               type="button"
@@ -964,7 +971,7 @@ export default function GameMenus({
             </div>
           )}
 
-          {false && activeTab === 'skirmish' && (
+          {activeTab === 'skirmish' && (
             <div className="mil-combat-pane">
               <div className="mil-section-label">▸ TEATRO DE OPERAÇÕES</div>
               <div className="mil-map-list">

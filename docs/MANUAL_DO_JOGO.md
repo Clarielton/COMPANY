@@ -224,3 +224,29 @@ No **Lobby Skirmish**, escolha o campo de batalha antes de mobilizar o batalhão
    - Jogador 1 controla os **Aliados** (Sul/Oeste) e Jogador 2 controla o **Eixo** (Norte/Leste), com câmera e Névoa de Guerra individuais.
 3. **Configuração para Vercel / Firebase:**
    - Suporta variáveis de ambiente `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_DATABASE_URL`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_AUTH_DOMAIN` ou colagem direta via **`⚙️ Configurar Chaves Firebase`** na aba **Sistema**.
+
+
+---
+
+## 15. Bases Militares 3D Evolutivas, Muralhas Contínuas e Modos Clássicos 1v1 / 2v2
+
+1. **Evolução Visual e Funcional das Instalações da Base:**
+   - **Quartel-General (QG) Nível 1:** Estrutura reforçada em concreto armado cinza-escuro com sacos de areia frontais, tenda tática de estado-maior lateral, mastro com bandeira da facção ondulante e antena de rádio militar.
+   - **Quartel-General (QG) Nível 2:** Segundo pavimento blindado, torre de vigia com holofote tático, radar giratório contínuo no telhado e casamata defensiva integrada.
+   - **Quartel-General (QG) Nível 3:** Cúpula de comando supremo blindada, baterias antiaéreas duplas decorativas no teto, contrafortes de aço estrutural e heliponto/pátio iluminado por balizas âmbar.
+   - **Fábrica de Blindados (Tank Depot):** Galpão industrial pesado com estrutura arqueada de vigas de aço, guindaste pórtico frontal amarelo, 2 portas amplas de hangar com faixas zebradas de segurança, chaminés industriais com fumaça e pátio demarcado.
+   - **Comando Aéreo & Radar:** Torre de controle elevada com prato de radar rotativo de alta potência (`rotation.y += dt * 1.25`), sinalizadores luminosos vermelhos de aviação e geradores auxiliares de energia.
+   - **Operações Especiais:** Barracão camuflado com caixotes de munição, cobertura em rede de camuflagem militar e torre de treinamento tático.
+   - **Campo de Prisioneiros (POW Camp):** Perímetro com arame farpado duplo, guaritas elevadas de madeira nos cantos e pátio central de detenção e interrogatório de comandantes inimigos.
+
+2. **Muralha Perimetral Contínua por Arrasto (Click & Drag) & Portões Blindados:**
+   - **Geometria de Alto Porte:** Muros de concreto armado com `3.2m` de altura (`46u`) e `1.4m` de espessura (`20u`), pilares de aço estruturais a cada `8m` (`110u`), passarela superior com ameias/merlões defensivos e resistência elevada (`2.500 HP` por segmento) para absorver impactos de canhões e blindados.
+   - **Construção Contínua (Ponto A ➔ Ponto B):** Ao selecionar `[🧱 Construir Muralha Defensiva]` em `[F3]` ou `[F4]`, o primeiro clique define o ponto inicial e o arrasto do mouse exibe o preview verde translúcido com pilares automáticos e encaixe magnético (*snap* a `<= 42u`) nas pontas de muros já erguidos, permitindo fechar o perímetro sem frestas. O segundo clique consagra a muralha inteira com custo proporcional em SUP e registra a caixa AABB orientada na física.
+   - **Portão Blindado Automático:** Gerado automaticamente ao cruzar vias ou através do comando contextual `[🚧 Transformar em Portão Blindado]` ao clicar em um segmento de muro existente. Possui folhas metálicas corrediças que se abrem suavemente na aproximação de aliados (`< 5.5m`) e permanecem travadas contra o inimigo.
+   - **Reparo e Reforço de Muros:** Painel contextual com `[🔧 Reparar Estrutura (60 SUP)]` e `[🛡️ Reforçar Muro (80 SUP)]` para restaurar e ampliar a blindagem perimetral.
+
+3. **Preservação Integral dos Modos Clássicos de Campanha / Escaramuça (1v1 & 2v2):**
+   - Disponível na aba **`⚔️ CAMPANHA / 1v1 & 2v2`** no topo do menu:
+     - **3 Mapas Oficiais:** *Campos da Normandia* (Rural), *Deserto de El Alamein* (Árido) e *Bastogne Inverno* (Neve nas Ardenas).
+     - **Modos:** `1v1` (Duelo tático direto) e `2v2` (Comandante + IA Aliada vs 2 IAs Inimigas).
+     - **Configurações Táticas Rápidas:** Dificuldade da IA (*Recruta*, *Veterano*, *General*), Recursos Iniciais (*450*, *600*, *1000 SUP*), atalho para continuar a última batalha salva e **`🛠️ Modo Caixa de Areia (Sandbox)`** para testes livres com recursos infinitos.
