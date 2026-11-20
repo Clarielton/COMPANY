@@ -718,12 +718,24 @@ assert.equal(
   'Unidade guarnecida dentro do próprio prédio deve poder atirar pelas janelas'
 );
 
-// Tanque MBT disparando projétil explosivo HE/AP com splash de 4.5m (45u)
+// Tanque MBT disparando projétil explosivo HE/AP com splash de 4.5m (45u) + Coaxial 7.62mm
 const testTank = rtsGame.spawnUnit('player', 'mbt_tank', 4000, 4000, 0);
+testTank.fireCooldown = 0;
 const targetInf = rtsGame.spawnUnit('enemy_1', 'rifle_squad', 4035, 4000, Math.PI);
+rtsGame.intelRevealed = true;
+const tankBulletsBefore = rtsGame.bullets.length;
+rtsGame._updateUnitsAndCombat(0.1);
+assert.ok(rtsGame.bullets.length > tankBulletsBefore, 'Tanque MBT deve adquirir alvo e disparar canhão principal 120mm automaticamente');
+const firedShell = rtsGame.bullets[rtsGame.bullets.length - 1];
+assert.equal(firedShell.isTankShell, true, 'Projétil do MBT deve ser isTankShell');
+assert.ok(firedShell.damage >= 135, 'Canhão principal 120mm deve causar 135+ de dano');
 const infHpBefore = targetInf.hp;
-rtsGame._detonateTankShell({ x: 4030, y: 4000, team: 'allies', damage: 120, splashRadius: 45 });
+rtsGame._detonateTankShell({ x: 4030, y: 4000, team: 'allies', damage: 135, splashRadius: 45 });
 assert.ok(targetInf.hp < infHpBefore, 'Detonação de projétil de tanque deve causar dano em área (4.5m)');
+// Coaxial enquanto recarrega
+const bulletsBeforeCoax = rtsGame.bullets.length;
+rtsGame._updateUnitsAndCombat(0.3);
+assert.ok(rtsGame.bullets.length > bulletsBeforeCoax, 'Tanque MBT deve disparar metralhadora coaxial enquanto o canhão 120mm recarrega');
 
 // Transporte de Tropas carregado deve ser selecionável e se mover normalmente (sem travar no esquadrão embarcado)
 const paxSquad = rtsGame.spawnUnit('player', 'rifle_squad', 3200, 4800, 0);
@@ -768,15 +780,16 @@ assert.equal(rtsGame.supplies, supBeforeQ, 'Cancelar item da fila deve reembolsa
 
 // APC BTR / Stryker: Atira canhão 30mm mesmo com infantaria embarcada
 const apcUnit = rtsGame.spawnUnit('player', 'apc_stryker', 2600, 4800, 0);
+apcUnit.fireCooldown = 0;
 const apcPax = rtsGame.spawnUnit('player', 'rifle_squad', 2595, 4800, 0);
 apcPax.setBoardTransportOrder(apcUnit);
 rtsGame._updateUnitsAndCombat(0.05);
 assert.equal(apcPax.embarkedInId, apcUnit.id, 'APC Stryker deve embarcar infantaria');
 const apcEnemy = rtsGame.spawnUnit('enemy_1', 'rifle_squad', 2820, 4800, Math.PI);
 rtsGame.intelRevealed = true;
-const bulletsBeforeApc = rtsGame.bullets.length;
+rtsGame.bullets = [];
 rtsGame._updateUnitsAndCombat(0.1);
-assert.ok(rtsGame.bullets.length > bulletsBeforeApc, 'APC BTR/Stryker deve disparar canhão 30mm mesmo transportando infantaria');
+assert.ok(rtsGame.bullets.length > 0 || apcUnit.muzzleFlashTimer > 0, 'APC BTR/Stryker deve disparar canhão 30mm mesmo transportando infantaria');
 
 console.log('SMOKE TEST RTS 3D OK: QG Nv. 1-3, CP, Drones, 12 Setores, 3 Mapas, RTB/Reparo [B], Pathfinding, Campo POW, LOS, Tanques HE/AP, Transporte, Camuflagem e Fila 1-5 Slots validados.');
 

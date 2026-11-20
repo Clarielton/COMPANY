@@ -316,3 +316,8 @@ No **Lobby Skirmish**, escolha o campo de batalha antes de mobilizar o batalhão
 - **Sistema de Armamento & Transporte:**
   - Canhão Automático 30mm / Metralhadora Pesada (`range: 34m / 476u`, `fireRate: 0.35s`, `damage: 24`, rajadas de 6 disparos com recarga de `1.8s`, traçantes visíveis e som dedicado `'autocannon'`).
   - Rotação independente da torre superior (`turret`) na direção do alvo inimigo e suporte a transporte de até `2` esquadrões embarcados (`isTransport: true`), mantendo disparos ativos mesmo com infantaria embarcada.
+
+### 22.3 Tanque de Batalha Principal (MBT 120mm)
+- **Custo de Produção Atualizado:** `1150 SUP + 280 MUN + 260 COMB` • Tempo de Construção: `26s` (Fábrica de Blindados, QG Nv. 3).
+- **Canhão Principal 120mm (HE/AP):** Alcance de `42m` (`588u`), cadência de `2.6s` por disparo, `135` de dano base (com multiplicador crítico contra blindados e construções) e dano em área (`4.5m` / `45u`), com traçante pesado, clarão, recuo do cano e explosão.
+- **Metralhadora Coaxial 7.62mm:** Dispara rajadas rápidas (`0.25s`, `10` de dano) contra infantaria próxima (`<= 28m`) enquanto o canhão principal recarrega.

@@ -188,6 +188,8 @@ export class SquadUnit {
     this.maxCargoSquads = this.spec.transportCapacitySquads || 2;
     this.maxCargoSoldiers = this.spec.transportCapacitySoldiers || 12;
     this.rampOpenTimer = 0;
+    this.cannonCooldown = 0;
+    this.coaxialCooldown = 0;
 
     this.inTrench = false;
     this.inTrenchId = null;

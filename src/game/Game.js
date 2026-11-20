@@ -6070,8 +6070,9 @@ export class Game {
       const isApcOrArmedVehicle =
         u.spec.type === 'vehicle' &&
         (u.spec.weaponModel === 'autocannon' ||
-          /apc|btr|stryker|humvee|tank|mbt|rocket/.test(u.spec.subType || u.unitType || ''));
-      if (activeTarget && (u.spec.damage > 0 || isApcOrArmedVehicle)) {
+          u.spec.weaponModel === 'tank_cannon' ||
+          /apc|btr|stryker|humvee|tank|mbt|artillery|rocket/.test(u.spec.subType || u.unitType || ''));
+      if (activeTarget && !(u.spec.type === 'vehicle' && u.isBrokenDown) && (u.spec.damage > 0 || isApcOrArmedVehicle)) {
         const targetRadius = targetEnemyBuilding ? targetEnemyBuilding.radius || 90 : 0;
         const dToTarget = dist(u.x, u.y, activeTarget.x, activeTarget.y);
         if (dToTarget <= effectiveRange + targetRadius) {
@@ -6100,19 +6101,19 @@ export class Game {
             u.unitType === 'watchtower_emplacement' &&
             this.enemySabotageTimer > 0;
 
-          // Metralhadora Coaxial Secundária do Tanque enquanto o canhão principal recarrega (4.0s)
-          if (u.cannonCooldown > 0) u.cannonCooldown = Math.max(0, u.cannonCooldown - dt);
-          if (u.coaxialCooldown > 0) u.coaxialCooldown = Math.max(0, u.coaxialCooldown - dt);
+          // Metralhadora Coaxial Secundária 7.62mm do Tanque enquanto o canhão principal recarrega (2.6s)
+          if ((u.cannonCooldown || 0) > 0) u.cannonCooldown = Math.max(0, u.cannonCooldown - dt);
+          if ((u.coaxialCooldown || 0) > 0) u.coaxialCooldown = Math.max(0, u.coaxialCooldown - dt);
           if (
             !losBlocked &&
             u.spec.weaponModel === 'tank_cannon' &&
-            u.cannonCooldown > 0 &&
-            u.coaxialCooldown <= 0 &&
+            (u.cannonCooldown || 0) > 0 &&
+            (u.coaxialCooldown || 0) <= 0 &&
             targetEnemy &&
             targetEnemy.spec.type === 'infantry' &&
-            dToTarget <= 280
+            dToTarget <= 392
           ) {
-            u.coaxialCooldown = 0.24;
+            u.coaxialCooldown = 0.25;
             u.muzzleFlashTimer = 0.06;
             const coaxAngle = aimAngle + (Math.random() - 0.5) * 0.09;
             const cx = u.x + Math.cos(coaxAngle) * 20;
@@ -6134,15 +6135,15 @@ export class Game {
               vy: Math.sin(coaxAngle) * 680,
               angle: coaxAngle,
               team: u.team,
-              damage: 14,
+              damage: 10,
               explosive: false,
-              life: 0.48,
+              life: 0.6,
             });
             this.playSoundAt('hmg', u.x, u.y, 0.35);
           }
 
           const isTankMainReady =
-            u.spec.weaponModel === 'tank_cannon' ? u.cannonCooldown <= 0 : true;
+            u.spec.weaponModel === 'tank_cannon' ? (u.cannonCooldown || 0) <= 0 : true;
 
           if (
             !losBlocked &&
@@ -6160,7 +6161,7 @@ export class Game {
             const supRateMult = u.suppressionMode ? 2.0 : 1.0;
             const brokenFireMult = u.isBrokenDown ? 0.5 : 1.0;
             if (isTankCannon) {
-              u.cannonCooldown = (4.0 / autoloaderMult) / brokenFireMult;
+              u.cannonCooldown = (2.6 / autoloaderMult) / brokenFireMult;
               u.fireCooldown = 0.35;
               u.muzzleFlashTimer = 0.16;
               u.recoilTimer = 0.38;
@@ -6265,10 +6266,10 @@ export class Game {
               vy: Math.sin(shotAngle) * bSpeed,
               angle: shotAngle,
               team: u.team,
-              damage: u.spec.weaponModel === 'tank_cannon' ? dmg * 1.35 : dmg,
+              damage: dmg,
               explosive: Boolean(u.spec.explosiveShots || u.spec.weaponModel === 'tank_cannon'),
               isTankShell: u.spec.weaponModel === 'tank_cannon',
-              splashRadius: u.spec.weaponModel === 'tank_cannon' ? 45 : 0,
+              splashRadius: u.spec.weaponModel === 'tank_cannon' ? (u.spec.explosiveSplash || 45) : 0,
               life: (effectiveRange + targetRadius + 75) / bSpeed,
             });
 
