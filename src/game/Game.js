@@ -1528,7 +1528,12 @@ export class Game {
     this.map.syncAllColliders?.(this.baseBuildings);
     this.selectedBuildingId = newBld.id;
 
-    this.audio.play('win');
+    if (buildingId === 'air_command') {
+      this.audio.play('radio');
+      this.spawnText(bx, by - 46, '✈ COMANDO AÉREO DESBLOQUEADO [V]', '#38bdf8');
+    } else {
+      this.audio.play('win');
+    }
     this.spawnText(bx, by - 28, `🏗 ${spec.short.toUpperCase()} OPERACIONAL`, '#a3be8c');
     this.notify(
       `${spec.name.toUpperCase()} CONSTRUÍDO!`,

@@ -247,7 +247,6 @@ export const AIR_DOCTRINES = [
     short: 'Bombardeio Tático',
     subtitle: 'Bomba guiada que destrói trincheiras, bunkers, torres ou tanques inimigos',
     cost: 550,
-    ammoCost: 180,
     ammoCost: 70,
     cooldown: 45,
     radius: 220,

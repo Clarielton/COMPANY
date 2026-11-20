@@ -321,3 +321,10 @@ No **Lobby Skirmish**, escolha o campo de batalha antes de mobilizar o batalhão
 - **Custo de Produção Atualizado:** `1150 SUP + 280 MUN + 260 COMB` • Tempo de Construção: `26s` (Fábrica de Blindados, QG Nv. 3).
 - **Canhão Principal 120mm (HE/AP):** Alcance de `42m` (`588u`), cadência de `2.6s` por disparo, `135` de dano base (com multiplicador crítico contra blindados e construções) e dano em área (`4.5m` / `45u`), com traçante pesado, clarão, recuo do cano e explosão.
 - **Metralhadora Coaxial 7.62mm:** Dispara rajadas rápidas (`0.25s`, `10` de dano) contra infantaria próxima (`<= 28m`) enquanto o canhão principal recarrega.
+
+---
+
+## 23. Barra Lateral Reestruturada: Construções da Base & Comando Aéreo Bloqueado
+- **Barra de Acesso Rápido Lateral Esquerda (2 Botões Principais):**
+  - `[ 🏗️ CONSTRUÇÕES DA BASE ]` (`B` / `ESC`): Abre/fecha o menu dedicado com 3 abas limpas (**🏢 COMANDO** com evolução visual do QG Nv. 1 ➔ 2 ➔ 3 e os 4 prédios táticos, **🧱 DEFESAS** com muralhas contínuas/bunkers/trincheiras e **⚡ LOGÍSTICA** com postos de suprimentos), sem truncamento de texto e com botão `[ ✕ Fechar ]`.
+  - `[ 🔒 COMANDO AÉREO (Requer Radar) ]` (`V`): Permanece bloqueado até a construção do prédio **Comando Aéreo / Radar**, exibindo aviso ao passar o mouse ou clicar. Após construir o Radar, acende como `[ ✈️ COMANDO AÉREO (ATIVO) ]` com confirmação por rádio e abre o painel exclusivo de suporte aéreo (`[Z]` Reconhecimento Aéreo, `[X]` Rasante Caça A-10 e `[C]` Bombardeio Tático) com barra visual de Cooldown da pista.

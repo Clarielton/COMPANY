@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Minimap from './Minimap.jsx';
 import TutorialModal from './TutorialModal.jsx';
 import { BATTALION_UNLOCKS } from '../game/data/accountData.js';
@@ -29,12 +29,51 @@ export default function HUD({
   onOpenSaves,
   onToggleMute,
 }) {
-  const [activeBaseTab, setActiveBaseTab] = useState('buildings'); // 'buildings' | 'spec_ops' | 'armor'
+  const [activeBaseTab, setActiveBaseTab] = useState('command'); // 'command' | 'defenses' | 'logistics'
   const [baseDrawerOpen, setBaseDrawerOpen] = useState(false);
+  const [airDrawerOpen, setAirDrawerOpen] = useState(false);
+  const [airLockNotice, setAirLockNotice] = useState(false);
   const [showTransferPicker, setShowTransferPicker] = useState(false);
   const [systemMenuOpen, setSystemMenuOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const layoutApi = useHudLayout(); // Menus responsivos, redimensionáveis e fixáveis
+
+  const hasAirCommand = Boolean(hud?.builtBuildings?.includes('air_command'));
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      const tag = e.target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      const k = e.key?.toLowerCase();
+      if (k === 'v') {
+        if (hasAirCommand) {
+          setAirDrawerOpen((prev) => {
+            const next = !prev;
+            if (next) setBaseDrawerOpen(false);
+            return next;
+          });
+        } else {
+          setAirLockNotice(true);
+          gameRef.current?.notify(
+            'COMANDO AÉREO BLOQUEADO',
+            'Construa o Comando Aéreo / Radar no Menu de Construções para desbloquear os ataques aéreos!',
+            '#fbbf24'
+          );
+        }
+      } else if (k === 'b' && !(hud?.selectedUnits?.length > 0)) {
+        setBaseDrawerOpen((prev) => {
+          const next = !prev;
+          if (next) setAirDrawerOpen(false);
+          return next;
+        });
+      } else if (e.key === 'Escape') {
+        setBaseDrawerOpen(false);
+        setAirDrawerOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [hasAirCommand, hud?.selectedUnits?.length, gameRef]);
 
   if (!hud) return null;
 
@@ -469,180 +508,300 @@ export default function HUD({
           </div>
         )}
 
-        {/* PAINEL DE CONSTRUÇÃO DE BASE MILITAR & UNIDADES DE ELITE / TANQUES (Minimiza para [–]) */}
-        <div className="base-command-card">
-          <div className="base-tabs">
-            <button
-              type="button"
-              className={`base-tab-btn ${baseDrawerOpen && activeBaseTab === 'buildings' ? 'active' : ''}`}
-              onClick={() => {
-                setActiveBaseTab('buildings');
-                setBaseDrawerOpen(true);
-              }}
-            >
-              🏗 BASE ({Math.max(0, builtSet.size - 1)}/3)
-            </button>
-            <button
-              type="button"
-              className={`base-tab-btn ${baseDrawerOpen && activeBaseTab === 'spec_ops' ? 'active' : ''}`}
-              onClick={() => {
-                setActiveBaseTab('spec_ops');
-                setBaseDrawerOpen(true);
-              }}
-            >
-              🎯 OP. ESPECIAIS
-            </button>
-            <button
-              type="button"
-              className={`base-tab-btn ${baseDrawerOpen && activeBaseTab === 'armor' ? 'active' : ''}`}
-              onClick={() => {
-                setActiveBaseTab('armor');
-                setBaseDrawerOpen(true);
-              }}
-            >
-              🛡 BLINDADOS
-            </button>
-            <button
-              type="button"
-              className="base-tab-btn base-collapse-btn"
-              onClick={() => setBaseDrawerOpen((v) => !v)}
-              title={baseDrawerOpen ? 'Minimizar painel da Base' : 'Expandir painel da Base & Comando Aéreo'}
-            >
-              {baseDrawerOpen ? '–' : '+'}
-            </button>
-          </div>
+        {/* BARRA DE ACESSO RÁPIDO NA LATERAL ESQUERDA (2 BOTÕES PRINCIPAIS) */}
+        <div className="left-quick-bar">
+          <button
+            type="button"
+            className={`quick-access-btn ${baseDrawerOpen ? 'active' : ''}`}
+            onClick={() => {
+              setBaseDrawerOpen((v) => {
+                const next = !v;
+                if (next) setAirDrawerOpen(false);
+                return next;
+              });
+            }}
+            title="Abrir / Fechar Menu de Construções da Base (Atalho B)"
+          >
+            <span>🏗️ CONSTRUÇÕES DA BASE</span>
+            <small>[B] ({Math.max(0, builtSet.size - 1)}/4)</small>
+          </button>
 
-          {baseDrawerOpen && activeBaseTab === 'buildings' && (
-            <div className="base-grid">
-              {BASE_BUILDINGS.map((b) => {
-                const isBuilt = builtSet.has(b.id);
-                const canAfford = hud.supplies >= b.cost && hud.fuel >= (b.fuelCost || 0);
-                return (
-                  <button
-                    key={b.id}
-                    type="button"
-                    className={`base-item-btn ${isBuilt ? 'built' : ''} ${!canAfford && !isBuilt ? 'locked' : ''
-                      }`}
-                    onClick={() => gameRef.current?.constructBaseBuilding(b.id)}
-                    title={`${b.name} — ${b.subtitle}`}
-                  >
-                    <div className="base-item-top">
-                      <strong>{b.short}</strong>
-                      <span>
-                        {isBuilt ? '✓ SELECIONAR PRÉDIO' : `${b.cost} SUP • ${b.fuelCost} COMB`}
-                      </span>
-                    </div>
-                    <div className="base-item-sub">{b.subtitle}</div>
-                  </button>
+          <button
+            type="button"
+            className={`quick-access-btn ${
+              hasAirCommand ? (airDrawerOpen ? 'air-active active' : 'air-active') : 'air-locked'
+            }`}
+            onMouseEnter={() => {
+              if (!hasAirCommand) setAirLockNotice(true);
+            }}
+            onMouseLeave={() => setAirLockNotice(false)}
+            onClick={() => {
+              if (!hasAirCommand) {
+                setAirLockNotice(true);
+                gameRef.current?.notify(
+                  'COMANDO AÉREO BLOQUEADO',
+                  'Construa o Comando Aéreo / Radar no Menu de Construções para desbloquear os ataques aéreos!',
+                  '#fbbf24'
                 );
-              })}
-            </div>
-          )}
-
-          {baseDrawerOpen && activeBaseTab === 'spec_ops' && (
-            <div className="base-grid">
-              {!builtSet.has('spec_ops_center') && (
-                <div className="base-req-warn">
-                  Requer construir <strong>Quartel Op. Especiais</strong> na aba Base.
-                </div>
-              )}
-              {specOpsUnits.map((u) => {
-                const unlocked = builtSet.has('spec_ops_center');
-                const canAfford =
-                  unlocked && hud.supplies >= u.cost && hud.ammo >= (u.ammoCost || 0);
-                return (
-                  <button
-                    key={u.id}
-                    type="button"
-                    className={`base-item-btn ${!canAfford ? 'locked' : ''}`}
-                    onClick={() => gameRef.current?.queueUnitAtBuilding(null, u.id)}
-                    title={`${u.name} — ${u.subtitle}`}
-                  >
-                    <div className="base-item-top">
-                      <strong>{u.short}</strong>
-                      <span>
-                        {u.cost} SUP{u.ammoCost ? ` • ${u.ammoCost} MUN` : ''}
-                      </span>
-                    </div>
-                    <div className="base-item-sub">{u.subtitle}</div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {baseDrawerOpen && activeBaseTab === 'armor' && (
-            <div className="base-grid">
-              {!builtSet.has('motor_pool') && (
-                <div className="base-req-warn">
-                  Requer construir <strong>Fábrica de Blindados</strong> na aba Base.
-                </div>
-              )}
-              {armorUnits.map((u) => {
-                const unlocked = builtSet.has('motor_pool');
-                const canAfford =
-                  unlocked && hud.supplies >= u.cost && hud.fuel >= (u.fuelCost || 0);
-                return (
-                  <button
-                    key={u.id}
-                    type="button"
-                    className={`base-item-btn ${!canAfford ? 'locked' : ''}`}
-                    onClick={() => gameRef.current?.queueUnitAtBuilding(null, u.id)}
-                    title={`${u.name} — ${u.subtitle}`}
-                  >
-                    <div className="base-item-top">
-                      <strong>{u.short}</strong>
-                      <span>
-                        {u.cost} SUP • {u.fuelCost} COMB
-                      </span>
-                    </div>
-                    <div className="base-item-sub">{u.subtitle}</div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+                return;
+              }
+              setAirDrawerOpen((v) => {
+                const next = !v;
+                if (next) setBaseDrawerOpen(false);
+                return next;
+              });
+            }}
+            title={
+              hasAirCommand
+                ? 'Abrir Painel Exclusivo de Ataques Aéreos (Atalho V)'
+                : 'Construa o Comando Aéreo / Radar no Menu de Construções para desbloquear os ataques aéreos!'
+            }
+          >
+            <span>{hasAirCommand ? '✈️ COMANDO AÉREO (ATIVO)' : '🔒 COMANDO AÉREO (Requer Radar)'}</span>
+            <small>[V]</small>
+          </button>
         </div>
 
-        {/* BARRA LATERAL DE SUPORTE AÉREO E RECONHECIMENTO (COMANDO AÉREO / RADAR) */}
+        {!hasAirCommand && airLockNotice && (
+          <div className="air-lock-warning">
+            Construa o <strong>Comando Aéreo / Radar</strong> no Menu de Construções para desbloquear os ataques aéreos!
+          </div>
+        )}
+
+        {/* MENU DE CONSTRUÇÕES DA BASE (ABERTO AO CLICAR EM CONSTRUÇÕES DA BASE) */}
         {baseDrawerOpen && (
-        <div className="air-doctrine-card">
-          <div className="air-doctrine-title">
-            <span>✈ COMANDO AÉREO & RADAR</span>
-            <small>{builtSet.has('air_command') ? 'ONLINE' : 'REQUER RADAR'}</small>
-          </div>
-          <div className="air-doctrine-list">
-            {AIR_DOCTRINES.map((doc) => {
-              const unlocked = builtSet.has('air_command');
-              const cd = hud.airCooldowns?.[doc.id] || 0;
-              const isTargeting = hud.activeAirStrikeMode === doc.id;
-              const canUse =
-                unlocked &&
-                cd <= 0 &&
-                hud.supplies >= (doc.cost || 0) &&
-                hud.ammo >= (doc.ammoCost || 0);
-              return (
-                <button
-                  key={doc.id}
-                  type="button"
-                  className={`air-btn ${isTargeting ? 'active' : ''} ${!canUse ? 'locked' : ''}`}
-                  onClick={() => gameRef.current?.triggerAirDoctrine(doc.id)}
-                  title={`${doc.name} — ${doc.subtitle}`}
-                >
-                  <div className="air-btn-top">
-                    <strong>
-                      [{doc.key}] {doc.short}
-                    </strong>
-                    <span>
-                      {cd > 0 ? `⏳ ${cd}s` : `${doc.cost} SUP • ${doc.ammoCost} MUN`}
-                    </span>
+          <div className="base-command-card">
+            <div className="drawer-header-bar">
+              <span>🏗️ CONSTRUÇÕES DA BASE</span>
+              <button
+                type="button"
+                className="drawer-close-btn"
+                onClick={() => setBaseDrawerOpen(false)}
+                title="Fechar painel (ESC)"
+              >
+                ✕ Fechar
+              </button>
+            </div>
+
+            <div className="base-tabs">
+              <button
+                type="button"
+                className={`base-tab-btn ${activeBaseTab === 'command' ? 'active' : ''}`}
+                onClick={() => setActiveBaseTab('command')}
+              >
+                🏢 COMANDO
+              </button>
+              <button
+                type="button"
+                className={`base-tab-btn ${activeBaseTab === 'defenses' ? 'active' : ''}`}
+                onClick={() => setActiveBaseTab('defenses')}
+              >
+                🧱 DEFESAS
+              </button>
+              <button
+                type="button"
+                className={`base-tab-btn ${activeBaseTab === 'logistics' ? 'active' : ''}`}
+                onClick={() => setActiveBaseTab('logistics')}
+              >
+                ⚡ LOGÍSTICA
+              </button>
+            </div>
+
+            {activeBaseTab === 'command' && (
+              <div className="base-grid">
+                {/* QUARTEL-GENERAL: EVOLUÇÃO NÍVEL 1 -> 2 -> 3 */}
+                <div className="hq-progress-card">
+                  <div className="hq-progress-top">
+                    <strong>🏛️ Quartel-General (QG Nv. {hud.hqLevel || 1}/3)</strong>
+                    <span>{Math.round(((hud.hqLevel || 1) / 3) * 100)}%</span>
                   </div>
-                  <div className="air-btn-sub">{doc.subtitle}</div>
-                </button>
-              );
-            })}
+                  <div className="hq-progress-track">
+                    <div
+                      className="hq-progress-fill"
+                      style={{ width: `${((hud.hqLevel || 1) / 3) * 100}%` }}
+                    />
+                  </div>
+                  <div className="hq-unlock-list">
+                    <div className={(hud.hqLevel || 1) >= 1 ? 'done' : ''}>
+                      Nv. 1: Infantaria Básica, Transporte, Trincheiras e Muros
+                    </div>
+                    <div className={(hud.hqLevel || 1) >= 2 ? 'done' : ''}>
+                      Nv. 2: Snipers, Antitanque, Humvee, APC Stryker e Bunkers
+                    </div>
+                    <div className={(hud.hqLevel || 1) >= 3 ? 'done' : ''}>
+                      Nv. 3: Tanque MBT 120mm, Artilharia e Ataques Aéreos
+                    </div>
+                  </div>
+                  {(hud.hqLevel || 1) < 3 && HQ_UPGRADES[(hud.hqLevel || 1) + 1] && (
+                    <button
+                      type="button"
+                      className="base-item-btn hq-up-btn"
+                      onClick={() => gameRef.current?.upgradeHq()}
+                    >
+                      <div className="base-item-top">
+                        <strong>⬆ Evoluir para QG Nível {(hud.hqLevel || 1) + 1}</strong>
+                        <span>
+                          {HQ_UPGRADES[(hud.hqLevel || 1) + 1].supplyCost} SUP •{' '}
+                          {HQ_UPGRADES[(hud.hqLevel || 1) + 1].fuelCost} COMB
+                        </span>
+                      </div>
+                    </button>
+                  )}
+                </div>
+
+                {BASE_BUILDINGS.map((b) => {
+                  const isBuilt = builtSet.has(b.id);
+                  const canAfford = hud.supplies >= b.cost && hud.fuel >= (b.fuelCost || 0);
+                  const customDesc =
+                    b.id === 'spec_ops_center'
+                      ? 'Libera Snipers, Equipe Antitanque e Paraquedistas.'
+                      : b.id === 'motor_pool'
+                      ? 'Libera Caminhão, Humvee, APC Stryker e Tanque MBT.'
+                      : b.id === 'air_command'
+                      ? 'Revela radar no minimapa e DESBLOQUEIA o Menu de Ataques Aéreos.'
+                      : b.id === 'pow_camp'
+                      ? 'Permite escoltar e interrogar Comandantes rendidos.'
+                      : b.subtitle;
+                  return (
+                    <button
+                      key={b.id}
+                      type="button"
+                      className={`base-item-btn ${isBuilt ? 'built' : ''} ${
+                        !canAfford && !isBuilt ? 'locked' : ''
+                      }`}
+                      onClick={() => gameRef.current?.constructBaseBuilding(b.id)}
+                      title={`${b.name} — ${customDesc}`}
+                    >
+                      <div className="base-item-top">
+                        <strong>{b.short}</strong>
+                        <span>
+                          {isBuilt ? '✓ OPERACIONAL' : `${b.cost} SUP • ${b.fuelCost} COMB`}
+                        </span>
+                      </div>
+                      <div className="base-item-sub">{customDesc}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {activeBaseTab === 'defenses' && (
+              <div className="base-grid">
+                {['build_wall', 'build_bunker', 'build_trench', 'build_watchtower', 'build_wire', 'build_barricade'].map(
+                  (id) => {
+                    const cmd = COMMAND_BY_ID[id];
+                    if (!cmd) return null;
+                    const canAfford =
+                      hud.supplies >= (cmd.cost || 0) &&
+                      hud.ammo >= (cmd.ammoCost || 0) &&
+                      hud.fuel >= (cmd.fuelCost || 0);
+                    return (
+                      <button
+                        key={cmd.id}
+                        type="button"
+                        className={`base-item-btn ${!canAfford ? 'locked' : ''}`}
+                        onClick={() => gameRef.current?.triggerActionById(cmd.id)}
+                      >
+                        <div className="base-item-top">
+                          <strong>{cmd.short || cmd.name}</strong>
+                          <span>
+                            {cmd.cost || 0} SUP{cmd.ammoCost ? ` • ${cmd.ammoCost} MUN` : ''}
+                          </span>
+                        </div>
+                        <div className="base-item-sub">{cmd.subtitle}</div>
+                      </button>
+                    );
+                  }
+                )}
+              </div>
+            )}
+
+            {activeBaseTab === 'logistics' && (
+              <div className="base-grid">
+                {['build_outpost', 'build_emplacement'].map((id) => {
+                  const cmd = COMMAND_BY_ID[id];
+                  if (!cmd) return null;
+                  const canAfford =
+                    hud.supplies >= (cmd.cost || 0) &&
+                    hud.ammo >= (cmd.ammoCost || 0) &&
+                    hud.fuel >= (cmd.fuelCost || 0);
+                  return (
+                    <button
+                      key={cmd.id}
+                      type="button"
+                      className={`base-item-btn ${!canAfford ? 'locked' : ''}`}
+                      onClick={() => gameRef.current?.triggerActionById(cmd.id)}
+                    >
+                      <div className="base-item-top">
+                        <strong>{cmd.short || cmd.name}</strong>
+                        <span>
+                          {cmd.cost || 0} SUP{cmd.fuelCost ? ` • ${cmd.fuelCost} COMB` : ''}
+                        </span>
+                      </div>
+                      <div className="base-item-sub">{cmd.subtitle}</div>
+                    </button>
+                  );
+                })}
+                <div className="base-req-warn">
+                  💡 Capture <strong>Setores de Suprimento, Munição e Combustível</strong> no mapa ou construa o <strong>Campo de Prisioneiros</strong> (+5 SUP/s por cela) para expandir sua economia de guerra.
+                </div>
+              </div>
+            )}
           </div>
-        </div>
+        )}
+
+        {/* PAINEL EXCLUSIVO DE ATAQUES AÉREOS (SÓ ABRE APÓS CONSTRUIR O COMANDO AÉREO / RADAR) */}
+        {hasAirCommand && airDrawerOpen && (
+          <div className="air-doctrine-card">
+            <div className="drawer-header-bar">
+              <span style={{ color: '#38bdf8' }}>✈️ COMANDO AÉREO & RADAR</span>
+              <button
+                type="button"
+                className="drawer-close-btn"
+                onClick={() => setAirDrawerOpen(false)}
+                title="Fechar painel aéreo (ESC)"
+              >
+                ✕ Fechar
+              </button>
+            </div>
+            <div className="air-doctrine-list">
+              {AIR_DOCTRINES.map((doc) => {
+                const cd = hud.airCooldowns?.[doc.id] || 0;
+                const maxCd = doc.cooldown || 30;
+                const readyPct = cd > 0 ? Math.max(0, Math.min(100, ((maxCd - cd) / maxCd) * 100)) : 100;
+                const isTargeting = hud.activeAirStrikeMode === doc.id;
+                const canUse =
+                  cd <= 0 &&
+                  hud.supplies >= (doc.cost || 0) &&
+                  hud.ammo >= (doc.ammoCost || 0);
+                return (
+                  <button
+                    key={doc.id}
+                    type="button"
+                    className={`air-btn ${isTargeting ? 'active' : ''} ${!canUse ? 'locked' : ''}`}
+                    onClick={() => gameRef.current?.triggerAirDoctrine(doc.id)}
+                    title={`${doc.name} — ${doc.subtitle}`}
+                  >
+                    <div className="air-btn-top">
+                      <strong>
+                        [{doc.key}] {doc.short}
+                      </strong>
+                      <span>
+                        {cd > 0 ? `⏳ ${Math.ceil(cd)}s` : `${doc.cost} SUP • ${doc.ammoCost} MUN`}
+                      </span>
+                    </div>
+                    <div className="air-btn-sub">{doc.subtitle}</div>
+                    <div className="air-cooldown-track">
+                      <div
+                        className={`air-cooldown-fill ${cd > 0 ? 'recharging' : 'ready'}`}
+                        style={{ width: `${readyPct}%` }}
+                      />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         )}
       </HudPanel>
 
