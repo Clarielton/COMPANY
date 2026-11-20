@@ -302,3 +302,17 @@ No **Lobby Skirmish**, escolha o campo de batalha antes de mobilizar o batalhão
 ### 21.3 Status e Validação do Banco de Dados Firebase Realtime Database
 - **URL Ativa:** `https://companyoffrontline-default-rtdb.firebaseio.com/`.
 - **Modo Seguro REST com Autenticação Anônima:** As regras de segurança exigem autenticação ativa (`auth != null`). Ao efetuar o login anônimo ou Google pelo jogo, as requisições incluem o token de autorização. Caso o jogador esteja offline ou em rede local, o motor comuta suavemente para o canal de sincronização `BroadcastChannel`, mantendo a jogabilidade ininterrupta.
+
+---
+
+## 22. Segurança do Painel Administrativo & APC BTR/Stryker (Canhão 30mm)
+
+### 22.1 Acesso Administrativo Oculto e Exclusivo
+- O botão `🔑 Admin` e a ação `Revogar Modo Admin` foram removidos 100% da interface pública para que nenhum jogador ou convidado visualize opções administrativas.
+- O acesso ao painel administrativo (`#admin-panel`) é validado estritamente pela conta mestre autenticada (`clarielton` / `clarielton.empreendimentos@outlook.com`) ou pelo atalho secreto exclusivo do proprietário (`Ctrl + Shift + L` com senha mestre).
+
+### 22.2 APC Blindado BTR / Stryker (8x8)
+- **Custo de Produção Atualizado:** `680 SUP + 160 MUN + 140 COMB` • Tempo de Construção: `18s` (Fábrica de Blindados, QG Nv. 2).
+- **Sistema de Armamento & Transporte:**
+  - Canhão Automático 30mm / Metralhadora Pesada (`range: 34m / 476u`, `fireRate: 0.35s`, `damage: 24`, rajadas de 6 disparos com recarga de `1.8s`, traçantes visíveis e som dedicado `'autocannon'`).
+  - Rotação independente da torre superior (`turret`) na direção do alvo inimigo e suporte a transporte de até `2` esquadrões embarcados (`isTransport: true`), mantendo disparos ativos mesmo com infantaria embarcada.

@@ -5756,6 +5756,12 @@ export class Game {
 
       const activeTarget = u.order.type === 'rtb' ? null : targetEnemy || targetEnemyBuilding;
       u.activeCombatTarget = activeTarget ? { x: activeTarget.x, y: activeTarget.y } : null;
+      if (!activeTarget && u.spec.type === 'vehicle') {
+        let tDiff = u.angle - u.turretAngle;
+        while (tDiff > Math.PI) tDiff -= Math.PI * 2;
+        while (tDiff < -Math.PI) tDiff += Math.PI * 2;
+        u.turretAngle += tDiff * Math.min(1, dt * 4.5);
+      }
 
       // 2b. Chegada de RTB / Recuo à Base e Reparo/Cura Automática (+15 HP/s veículos, +12 HP/s infantaria)
       if (u.order.type === 'rtb' && dist(u.x, u.y, u.order.targetX, u.order.targetY) <= 75) {
@@ -6061,7 +6067,11 @@ export class Game {
       }
 
       // 4. Combate Cadenciado com Rajadas e Pausas de Recarga (contra Tropas ou Prédios de Base Inimiga)
-      if (activeTarget && u.damage !== 0) {
+      const isApcOrArmedVehicle =
+        u.spec.type === 'vehicle' &&
+        (u.spec.weaponModel === 'autocannon' ||
+          /apc|btr|stryker|humvee|tank|mbt|rocket/.test(u.spec.subType || u.unitType || ''));
+      if (activeTarget && (u.spec.damage > 0 || isApcOrArmedVehicle)) {
         const targetRadius = targetEnemyBuilding ? targetEnemyBuilding.radius || 90 : 0;
         const dToTarget = dist(u.x, u.y, activeTarget.x, activeTarget.y);
         if (dToTarget <= effectiveRange + targetRadius) {
@@ -6265,7 +6275,9 @@ export class Game {
             const snd =
               u.spec.weaponModel === 'tank_cannon' || u.spec.weaponModel === 'rocket_pod'
                 ? 'tank_cannon'
-                : u.spec.weaponModel === 'hmg' || u.spec.weaponModel === 'at_mg' || u.spec.weaponModel === 'autocannon'
+                : u.spec.weaponModel === 'autocannon'
+                ? 'autocannon'
+                : u.spec.weaponModel === 'hmg' || u.spec.weaponModel === 'at_mg'
                 ? 'hmg'
                 : u.spec.weaponModel === 'sniper'
                 ? 'sniper'

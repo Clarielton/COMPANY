@@ -84,19 +84,6 @@ export default function AdminPanel() {
           >
             {loading ? '⟳ Atualizando...' : '⟳ Atualizar Lista de Players'}
           </button>
-          <button
-            type="button"
-            className="mil-pill"
-            style={{ borderColor: '#eab308', color: '#fde047' }}
-            onClick={() => {
-              if (window.confirm('Deseja desativar o modo Admin nesta sessão?')) {
-                networkManager.revokeAdmin();
-                window.location.reload();
-              }
-            }}
-          >
-            Revogar Modo Admin
-          </button>
         </div>
       </div>
 

@@ -11,7 +11,9 @@ const ACTIVE_ROOMS_KEY = 'COF_ACTIVE_ROOMS';
 const CAMPAIGNS_KEY = 'COF_CAMPAIGNS_V1';
 const LOCAL_CAMPAIGN_SAVES_KEY = 'COF_LOCAL_CAMPAIGN_SAVES';
 const BROADCAST_CHANNEL_NAME = 'cof_multiplayer_v2';
-const MASTER_ADMIN_KEYS = ['FRONT-ADMIN-1944', 'admin', 'ADMIN1944', 'clarielton'];
+const MASTER_ADMIN_KEYS = ['FRONT-ADMIN-1944', 'ADMIN1944', 'clarielton'];
+const ADMIN_EMAILS = ['clarielton.empreendimentos@outlook.com'];
+const ADMIN_CALLSIGNS = ['clarielton', 'clarieltonjunior'];
 const ADMIN_STORAGE_OVERRIDE_KEY = 'COF_ADMIN_ROLE_OVERRIDE';
 const BANNED_PLAYERS_STORAGE_KEY = 'COF_BANNED_PLAYERS';
 
@@ -355,7 +357,6 @@ export class NetworkManager {
   // =========================================================================
   _checkIsAdmin(user) {
     if (!user) return false;
-    if (user.role === 'admin') return true;
     try {
       if (typeof window !== 'undefined' && localStorage.getItem(ADMIN_STORAGE_OVERRIDE_KEY) === '1') {
         return true;
@@ -363,17 +364,11 @@ export class NetworkManager {
     } catch {}
     const name = (user.callsign || '').trim().toLowerCase();
     const email = (user.email || '').trim().toLowerCase();
-    if (
-      name === 'admin' ||
-      name.startsWith('admin_') ||
-      name === 'clarielton' ||
-      name === 'clarieltonjunior' ||
-      name === 'comando supremo' ||
-      name === 'comandante supremo'
-    ) {
-      return true;
+    if (!name || name === 'comandante' || user.provider === 'anonymous' || user.provider === 'guest_local') {
+      return false;
     }
-    if (email === 'clarielton.empreendimentos@outlook.com') return true;
+    if (ADMIN_EMAILS.includes(email)) return true;
+    if (ADMIN_CALLSIGNS.includes(name)) return true;
     return false;
   }
 
@@ -383,7 +378,7 @@ export class NetworkManager {
 
   claimAdmin(key = '') {
     const clean = String(key || '').trim();
-    if (MASTER_ADMIN_KEYS.includes(clean) || clean.toLowerCase() === 'admin' || clean === '1944') {
+    if (MASTER_ADMIN_KEYS.includes(clean)) {
       try {
         localStorage.setItem(ADMIN_STORAGE_OVERRIDE_KEY, '1');
       } catch {}

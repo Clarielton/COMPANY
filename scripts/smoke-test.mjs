@@ -756,6 +756,7 @@ assert.ok(hpForestBefore - ambushSq.hp <= 55, 'Camuflagem na floresta deve conce
 
 // Fila de Produção 1-5 Slots com cancelamento e reembolso 100%
 rtsGame.supplies = 2000;
+rtsGame.ammo = 500;
 rtsGame.fuel = 500;
 rtsGame.constructBaseBuilding('motor_pool');
 const motorPool = rtsGame.baseBuildings.find((b) => b.faction === 'player' && b.buildingType === 'motor_pool');
@@ -764,6 +765,18 @@ assert.equal(rtsGame.queueUnitAtBuilding(motorPool.id, 'apc_stryker'), true, 'De
 assert.equal(motorPool.productionQueue.length, 1, 'Fila deve conter 1 item');
 assert.equal(rtsGame.cancelBuildingQueueItem(motorPool.id, 0), true, 'Botão direito deve cancelar item da fila');
 assert.equal(rtsGame.supplies, supBeforeQ, 'Cancelar item da fila deve reembolsar 100% dos recursos');
+
+// APC BTR / Stryker: Atira canhão 30mm mesmo com infantaria embarcada
+const apcUnit = rtsGame.spawnUnit('player', 'apc_stryker', 2600, 4800, 0);
+const apcPax = rtsGame.spawnUnit('player', 'rifle_squad', 2595, 4800, 0);
+apcPax.setBoardTransportOrder(apcUnit);
+rtsGame._updateUnitsAndCombat(0.05);
+assert.equal(apcPax.embarkedInId, apcUnit.id, 'APC Stryker deve embarcar infantaria');
+const apcEnemy = rtsGame.spawnUnit('enemy_1', 'rifle_squad', 2820, 4800, Math.PI);
+rtsGame.intelRevealed = true;
+const bulletsBeforeApc = rtsGame.bullets.length;
+rtsGame._updateUnitsAndCombat(0.1);
+assert.ok(rtsGame.bullets.length > bulletsBeforeApc, 'APC BTR/Stryker deve disparar canhão 30mm mesmo transportando infantaria');
 
 console.log('SMOKE TEST RTS 3D OK: QG Nv. 1-3, CP, Drones, 12 Setores, 3 Mapas, RTB/Reparo [B], Pathfinding, Campo POW, LOS, Tanques HE/AP, Transporte, Camuflagem e Fila 1-5 Slots validados.');
 

@@ -114,6 +114,30 @@ export default function GameMenus({
     return () => unsub();
   }, []);
 
+  // Atalho secreto exclusivo do proprietário: Ctrl + Shift + L
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.ctrlKey && e.shiftKey && e.key?.toLowerCase() === 'l') {
+        e.preventDefault();
+        if (networkManager.isAdmin()) {
+          setSubTab('admin');
+          return;
+        }
+        const key = window.prompt('Acesso Restrito — Digite a Senha Mestre:');
+        if (key) {
+          const res = networkManager.claimAdmin(key);
+          if (res.ok) {
+            setSubTab('admin');
+          } else {
+            alert(res.error);
+          }
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   useEffect(() => {
     if (initialTab && (gameState === 'PAUSED' || gameState === 'MENU')) {
       setSubTab(initialTab);
@@ -479,28 +503,6 @@ export default function GameMenus({
                   {net.currentUser.militaryGold ?? 0} Ouro
                 </small>
               </div>
-              {!isAdmin && (
-                <button
-                  type="button"
-                  className="mil-pill"
-                  style={{ borderColor: '#eab308', color: '#fde047' }}
-                  onClick={() => {
-                    const key = window.prompt('Digite a Chave de Administrador:');
-                    if (key) {
-                      const res = networkManager.claimAdmin(key);
-                      if (res.ok) {
-                        alert(res.message);
-                        setSubTab('admin');
-                      } else {
-                        alert(res.error);
-                      }
-                    }
-                  }}
-                  title="Ativar privilégios de Administrador"
-                >
-                  🔑 Admin
-                </button>
-              )}
               {isAdmin && (
                 <button
                   type="button"
@@ -1031,8 +1033,8 @@ export default function GameMenus({
             </div>
           )}
 
-          {activeTab === 'admin' && (
-            <div className="mil-subpane">
+          {activeTab === 'admin' && isAdmin && (
+            <div id="admin-panel" className="mil-subpane">
               <AdminPanel />
             </div>
           )}
