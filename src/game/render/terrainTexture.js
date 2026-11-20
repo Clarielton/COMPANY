@@ -67,42 +67,103 @@ export function createOrganicBattlefieldTextures(map) {
   bctx.fillStyle = '#808080';
   bctx.fillRect(0, 0, bumpSize, bumpSize);
 
-  // Manchas orgânicas irregulares
-  const ruralTones = [
-    'rgba(86, 108, 46, 0.16)',
-    'rgba(45, 62, 28, 0.18)',
-    'rgba(122, 118, 58, 0.14)',
-    'rgba(66, 82, 38, 0.15)',
-  ];
-  const desertTones = [
-    'rgba(218, 190, 136, 0.18)',
-    'rgba(146, 114, 68, 0.15)',
-    'rgba(180, 146, 94, 0.16)',
-    'rgba(125, 102, 68, 0.12)',
-  ];
-  const winterTones = [
-    'rgba(255, 255, 255, 0.25)',
-    'rgba(168, 186, 204, 0.2)',
-    'rgba(116, 108, 96, 0.12)',
-    'rgba(210, 224, 236, 0.22)',
-  ];
-  const tones = isDesert ? desertTones : isWinter ? winterTones : ruralTones;
+function valueNoise2D(x, y, seed = 1944) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const xf = x - xi;
+  const yf = y - yi;
+  const hash = (ix, iy) => {
+    let n = (ix * 374761393 + iy * 668265263 + seed * 1442695041) | 0;
+    n = (n ^ (n >> 13)) * 1274126177;
+    return ((n ^ (n >> 16)) >>> 0) / 4294967295;
+  };
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  const a = hash(xi, yi);
+  const b = hash(xi + 1, yi);
+  const c = hash(xi, yi + 1);
+  const d = hash(xi + 1, yi + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
 
-  for (let i = 0; i < 6500; i++) {
+function fbm2D(x, y, seed = 1944) {
+  let val = 0;
+  let amp = 0.5;
+  let freq = 1;
+  for (let o = 0; o < 4; o++) {
+    val += amp * valueNoise2D(x * freq, y * freq, seed + o * 97);
+    freq *= 2.05;
+    amp *= 0.5;
+  }
+  return val;
+}
+
+  // Manchas orgânicas multicamadas com ruído FBM (3 tons de oliva/musgo, terra batida, raízes e pedras)
+  const noiseGrid = 128;
+  const cellPx = size / noiseGrid;
+  const bumpCellPx = bumpSize / noiseGrid;
+  for (let gy = 0; gy < noiseGrid; gy++) {
+    for (let gx = 0; gx < noiseGrid; gx++) {
+      const n = fbm2D(gx * 0.14, gy * 0.14, map.seed || 1944);
+      const n2 = fbm2D(gx * 0.38 + 11, gy * 0.38 + 7, (map.seed || 1944) + 55);
+      if (isDesert) {
+        ctx.fillStyle =
+          n > 0.62
+            ? 'rgba(214, 184, 128, 0.28)'
+            : n < 0.38
+            ? 'rgba(138, 108, 66, 0.28)'
+            : 'rgba(176, 144, 92, 0.20)';
+      } else if (isWinter) {
+        ctx.fillStyle =
+          n > 0.58
+            ? 'rgba(244, 249, 255, 0.32)'
+            : n < 0.38
+            ? 'rgba(130, 138, 132, 0.26)'
+            : 'rgba(182, 200, 218, 0.22)';
+      } else {
+        // 3 tons de grama oliva/musgo + manchas de terra batida/lama
+        ctx.fillStyle =
+          n > 0.63
+            ? 'rgba(92, 114, 52, 0.30)'
+            : n < 0.34
+            ? 'rgba(72, 58, 40, 0.34)'
+            : n2 > 0.56
+            ? 'rgba(56, 76, 32, 0.26)'
+            : 'rgba(104, 112, 58, 0.22)';
+      }
+      ctx.fillRect(gx * cellPx, gy * cellPx, cellPx + 1, cellPx + 1);
+
+      const bv = Math.round(108 + n * 48 + (n2 - 0.5) * 24);
+      bctx.fillStyle = `rgb(${bv},${bv},${bv})`;
+      bctx.fillRect(gx * bumpCellPx, gy * bumpCellPx, bumpCellPx + 1, bumpCellPx + 1);
+    }
+  }
+
+  // Pequenas pedras, raízes e micro-variação orgânica no solo
+  for (let i = 0; i < 4200; i++) {
     const x = rng() * size;
     const y = rng() * size;
-    const rx = 10 + rng() * 38;
-    const ry = 8 + rng() * 28;
+    const rx = 2 + rng() * 8;
+    const ry = 1.5 + rng() * 5;
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(rng() * Math.PI);
-    ctx.fillStyle = tones[i % tones.length];
+    ctx.fillStyle =
+      i % 5 === 0
+        ? isDesert
+          ? 'rgba(122, 98, 66, 0.34)'
+          : 'rgba(76, 72, 62, 0.34)'
+        : i % 3 === 0
+        ? isDesert
+          ? 'rgba(220, 194, 144, 0.22)'
+          : 'rgba(46, 62, 28, 0.24)'
+        : 'rgba(84, 68, 46, 0.22)';
     ctx.beginPath();
     ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
-    if (i % 2 === 0) {
+    if (i % 3 === 0) {
       bctx.fillStyle = i % 4 === 0 ? 'rgba(205,205,205,0.12)' : 'rgba(65,65,65,0.12)';
       bctx.beginPath();
       bctx.arc((x / size) * bumpSize, (y / size) * bumpSize, 3 + rng() * 8, 0, Math.PI * 2);
@@ -419,22 +480,56 @@ export function createRoadSurfaceTexture(theme = 'rural') {
     ctx.fillRect(x, y, sz, sz);
   }
 
-  // Marcas sinuosas e falhadas de esteiras de tanque + poças escuras de lama (sem linhas retas)
-  for (let y = 0; y < h; y += 16) {
-    const wave = Math.sin(y * 0.032) * 14 + Math.cos(y * 0.014) * 8;
-    for (const baseTx of [w * 0.34, w * 0.66]) {
-      if (rng() < 0.25) continue;
-      const tx = baseTx + wave;
-      ctx.fillStyle = isDesert ? 'rgba(128, 98, 60, 0.35)' : 'rgba(38, 28, 18, 0.38)';
-      ctx.fillRect(tx - 6, y, 12, 7);
-    }
+  // Trilhos contínuos paralelos de pneus e esteiras de tanque + cascalho fino no centro + bumpMap
+  const bCanvas = document.createElement('canvas');
+  bCanvas.width = w;
+  bCanvas.height = h;
+  const bctx = bCanvas.getContext('2d');
+  bctx.fillStyle = '#848484';
+  bctx.fillRect(0, 0, w, h);
+
+  // Cascalho fino e compactado no eixo central
+  for (let i = 0; i < 1600; i++) {
+    const gx = w * 0.38 + rng() * (w * 0.24);
+    const gy = rng() * h;
+    const gs = 1 + rng() * 2.1;
+    ctx.fillStyle = isDesert ? 'rgba(212, 184, 134, 0.36)' : 'rgba(148, 136, 118, 0.36)';
+    ctx.fillRect(gx, gy, gs, gs);
+    bctx.fillStyle = 'rgba(210, 210, 210, 0.35)';
+    bctx.fillRect(gx, gy, gs, gs);
   }
-  for (let k = 0; k < 10; k++) {
-    const px = w * 0.22 + rng() * w * 0.56;
+
+  // Trilhos contínuos paralelos de pneus e esteiras (sem pontinhos repetidos)
+  for (const baseTx of [w * 0.33, w * 0.67]) {
+    ctx.strokeStyle = isDesert ? 'rgba(122, 92, 54, 0.44)' : 'rgba(42, 32, 22, 0.46)';
+    ctx.lineWidth = 14;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let y = 0; y <= h; y += 8) {
+      const wave = Math.sin((y / h) * Math.PI * 2) * 4 + Math.cos((y / h) * Math.PI * 4) * 2.5;
+      if (y === 0) ctx.moveTo(baseTx + wave, y);
+      else ctx.lineTo(baseTx + wave, y);
+    }
+    ctx.stroke();
+
+    // Sulco rebaixado no bumpMap para os trilhos de tanque/pneu
+    bctx.strokeStyle = 'rgba(48, 48, 48, 0.65)';
+    bctx.lineWidth = 15;
+    bctx.beginPath();
+    for (let y = 0; y <= h; y += 8) {
+      const wave = Math.sin((y / h) * Math.PI * 2) * 4 + Math.cos((y / h) * Math.PI * 4) * 2.5;
+      if (y === 0) bctx.moveTo(baseTx + wave, y);
+      else bctx.lineTo(baseTx + wave, y);
+    }
+    bctx.stroke();
+  }
+
+  for (let k = 0; k < 8; k++) {
+    const px = w * 0.24 + rng() * w * 0.52;
     const py = rng() * h;
-    const pr = 10 + rng() * 16;
+    const pr = 10 + rng() * 14;
     const puddle = ctx.createRadialGradient(px, py, 2, px, py, pr);
-    puddle.addColorStop(0, isDesert ? 'rgba(110, 84, 52, 0.45)' : 'rgba(22, 24, 28, 0.62)');
+    puddle.addColorStop(0, isDesert ? 'rgba(110, 84, 52, 0.35)' : 'rgba(28, 24, 20, 0.42)');
     puddle.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = puddle;
     ctx.beginPath();
@@ -450,5 +545,15 @@ export function createRoadSurfaceTexture(theme = 'rural') {
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
   tex.anisotropy = 16;
+
+  const bumpTex = new THREE.CanvasTexture(bCanvas);
+  bumpTex.wrapS = THREE.RepeatWrapping;
+  bumpTex.wrapT = THREE.RepeatWrapping;
+  bumpTex.repeat.set(1, 40);
+  bumpTex.minFilter = THREE.LinearMipmapLinearFilter;
+  bumpTex.magFilter = THREE.LinearFilter;
+  bumpTex.anisotropy = 8;
+
+  tex.userData = { bumpMap: bumpTex };
   return tex;
 }

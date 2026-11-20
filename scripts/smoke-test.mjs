@@ -791,6 +791,25 @@ rtsGame.bullets = [];
 rtsGame._updateUnitsAndCombat(0.1);
 assert.ok(rtsGame.bullets.length > 0 || apcUnit.muzzleFlashTimer > 0, 'APC BTR/Stryker deve disparar canhão 30mm mesmo transportando infantaria');
 
+// Limite de 3 Postos de Suprimentos por Setor Capturado
+const capSec = rtsGame.map.sectors[0];
+capSec.owner = 'neutral';
+const statusNeutral = rtsGame.getOutpostPlacementStatus(capSec.x + 40, capSec.y, 'allies');
+assert.equal(statusNeutral.ok, false, 'Não deve permitir Posto de Suprimento em setor neutro');
+capSec.owner = 'allies';
+const outposts = [];
+for (let k = 0; k < 3; k++) {
+  const st = rtsGame.getOutpostPlacementStatus(capSec.x + 20 * k, capSec.y, 'allies');
+  assert.equal(st.ok, true, `Deve permitir construir posto ${k + 1}/3 no setor capturado`);
+  outposts.push(rtsGame.spawnUnit('player', 'build_outpost', capSec.x + 20 * k, capSec.y, 0));
+}
+const statusFull = rtsGame.getOutpostPlacementStatus(capSec.x + 80, capSec.y, 'allies');
+assert.equal(statusFull.ok, false, 'Deve bloquear 4º posto no mesmo setor (limite 3/3)');
+assert.equal(statusFull.reason, 'cap_reached', 'Motivo deve ser cap_reached');
+outposts[0].alive = false;
+const statusFreed = rtsGame.getOutpostPlacementStatus(capSec.x + 80, capSec.y, 'allies');
+assert.equal(statusFreed.ok, true, 'Destruir 1 posto deve liberar a vaga (2/3)');
+
 console.log('SMOKE TEST RTS 3D OK: QG Nv. 1-3, CP, Drones, 12 Setores, 3 Mapas, RTB/Reparo [B], Pathfinding, Campo POW, LOS, Tanques HE/AP, Transporte, Camuflagem e Fila 1-5 Slots validados.');
 
 

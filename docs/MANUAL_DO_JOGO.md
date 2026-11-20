@@ -328,3 +328,9 @@ No **Lobby Skirmish**, escolha o campo de batalha antes de mobilizar o batalhão
 - **Barra de Acesso Rápido Lateral Esquerda (2 Botões Principais):**
   - `[ 🏗️ CONSTRUÇÕES DA BASE ]` (`B` / `ESC`): Abre/fecha o menu dedicado com 3 abas limpas (**🏢 COMANDO** com evolução visual do QG Nv. 1 ➔ 2 ➔ 3 e os 4 prédios táticos, **🧱 DEFESAS** com muralhas contínuas/bunkers/trincheiras e **⚡ LOGÍSTICA** com postos de suprimentos), sem truncamento de texto e com botão `[ ✕ Fechar ]`.
   - `[ 🔒 COMANDO AÉREO (Requer Radar) ]` (`V`): Permanece bloqueado até a construção do prédio **Comando Aéreo / Radar**, exibindo aviso ao passar o mouse ou clicar. Após construir o Radar, acende como `[ ✈️ COMANDO AÉREO (ATIVO) ]` com confirmação por rádio e abre o painel exclusivo de suporte aéreo (`[Z]` Reconhecimento Aéreo, `[X]` Rasante Caça A-10 e `[C]` Bombardeio Tático) com barra visual de Cooldown da pista.
+
+---
+
+## 24. Limite de 3 Postos por Setor Capturado & Terreno/Estradas Realistas
+- **Limite por Setor (`Sector Outpost Cap = 3`):** Só é permitido construir até **3 Postos de Suprimentos** (`build_outpost`) dentro do raio (`<= 22m`) de cada setor dominado pela sua equipe, com contador ao vivo (`📦 Postos no Setor: X / 3`) no preview e próximo às bandeiras aliadas. Se um posto for destruído, a vaga reabre (`2 / 3`).
+- **Terreno Procedural & Estradas Realistas:** Solo gerado com ruído multicamadas FBM (3 tons de oliva/musgo, terra batida, raízes e pedras) + `bumpMap` (`roughness: 0.92`) + `InstancedMesh` de vegetação rasteira fora das estradas. As estradas possuem trilhos paralelos contínuos de pneus/esteiras, cascalho central, `bumpMap` próprio e detalhes de sinalização militar, cascalho e manchas de óleo nos acessos de setores.

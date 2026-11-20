@@ -504,8 +504,8 @@ export class Renderer3D {
     const groundMat = new THREE.MeshStandardMaterial({
       map: groundTex,
       bumpMap: groundBump,
-      bumpScale: 3.4,
-      roughness: 0.94,
+      bumpScale: 3.6,
+      roughness: 0.92,
       metalness: 0.02,
     });
     const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -534,8 +534,9 @@ export class Renderer3D {
     detailMesh.receiveShadow = true;
     this.worldGroup.add(detailMesh);
 
-    // 1c. Malha Dedicada de Estradas Nítidas (Repeat 1x40 ao longo do comprimento)
+    // 1c. Malha Dedicada de Estradas Nítidas (Repeat 1x40 ao longo do comprimento) + Tufos de Vegetação Rasteira (InstancedMesh)
     this._buildRoadMeshes(map, maxAniso);
+    this._buildGrassTuftsInstanced(map);
     this._buildRailways(map);
 
     // 2. Malha 3D de Névoa de Guerra (128x128 acompanhando o relevo + depthTest:false para nunca cortar crateras/estradas)
@@ -1442,9 +1443,53 @@ export class Renderer3D {
     return g;
   }
 
+  _buildGrassTuftsInstanced(map) {
+    const isDesert = map.theme === 'desert';
+    const isWinter = map.theme === 'winter';
+    const count = 1200;
+    const tuftGeo = new THREE.ConeGeometry(3.2, 6.5, 4);
+    tuftGeo.translate(0, 3.0, 0);
+    const tuftMat = new THREE.MeshStandardMaterial({
+      color: isDesert ? 0x9b8c59 : isWinter ? 0x7c8f78 : 0x4b632d,
+      roughness: 0.95,
+      metalness: 0.0,
+    });
+    const inst = new THREE.InstancedMesh(tuftGeo, tuftMat, count);
+    inst.receiveShadow = true;
+
+    const dummy = new THREE.Object3D();
+    let placed = 0;
+    let seed = (map.seed || 1944) + 7919;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+
+    for (let attempt = 0; attempt < count * 3 && placed < count; attempt++) {
+      const wx = 180 + rand() * (map.size - 360);
+      const wz = 180 + rand() * (map.size - 360);
+      if (map.isOnRoad?.(wx, wz, 54)) continue;
+      if (map.structures?.some((s) => Math.hypot(wx - s.x, wz - s.y) < Math.max(s.w, s.d || 60) * 0.7)) {
+        continue;
+      }
+      const gy = getTerrainHeight(wx, wz, map);
+      dummy.position.set(wx, gy - 0.3, wz);
+      dummy.rotation.set((rand() - 0.5) * 0.25, rand() * Math.PI * 2, (rand() - 0.5) * 0.25);
+      const sc = 0.65 + rand() * 0.9;
+      dummy.scale.set(sc, 0.75 + rand() * 0.65, sc);
+      dummy.updateMatrix();
+      inst.setMatrixAt(placed++, dummy.matrix);
+    }
+    inst.count = placed;
+    inst.instanceMatrix.needsUpdate = true;
+    this.worldGroup.add(inst);
+  }
+
   _buildRoadMeshes(map, maxAniso = 8) {
     const roadTex = createRoadSurfaceTexture(map.theme || 'rural');
     roadTex.anisotropy = maxAniso;
+    const roadBump = roadTex.userData?.bumpMap || null;
+    if (roadBump) roadBump.anisotropy = maxAniso;
 
     // AlphaMap para misturar suavemente as bordas irregulares da estrada na grama
     const aCanvas = document.createElement('canvas');
@@ -1462,14 +1507,50 @@ export class Renderer3D {
 
     const roadMat = new THREE.MeshStandardMaterial({
       map: roadTex,
+      bumpMap: roadBump,
+      bumpScale: 2.2,
       alphaMap: alphaTex,
       transparent: true,
-      roughness: 0.78,
-      metalness: 0.04,
+      roughness: 0.88,
+      metalness: 0.02,
       polygonOffset: true,
       polygonOffsetFactor: -4,
       polygonOffsetUnits: -4,
     });
+
+    // Detalhes nos cruzamentos e entradas de setores: placas de sinalização militar, montes de cascalho e manchas de óleo
+    const signGroup = new THREE.Group();
+    const postMat = this.materials.wood || this.materials.gunMetal;
+    const signMat = new THREE.MeshStandardMaterial({ color: 0xd4b483, roughness: 0.85 });
+    const gravelMat = new THREE.MeshStandardMaterial({ color: 0x7c7467, roughness: 0.95 });
+    const oilMat = new THREE.MeshBasicMaterial({ color: 0x161412, transparent: true, opacity: 0.45, depthWrite: false });
+    for (const sec of (map.sectors || []).slice(0, 8)) {
+      const sx = sec.x + 62;
+      const sz = sec.y + 52;
+      const sy = getTerrainHeight(sx, sz, map);
+      const post = new THREE.Mesh(this.geometries.box, postMat);
+      post.scale.set(2.2, 22, 2.2);
+      post.position.set(sx, sy + 11, sz);
+      post.castShadow = true;
+      signGroup.add(post);
+
+      const board = new THREE.Mesh(this.geometries.box, signMat);
+      board.scale.set(14, 5.2, 1.2);
+      board.position.set(sx, sy + 19, sz);
+      board.rotation.y = 0.45;
+      signGroup.add(board);
+
+      const gravel = new THREE.Mesh(this.geometries.sphere, gravelMat);
+      gravel.scale.set(9, 3.2, 7.5);
+      gravel.position.set(sx - 10, sy + 0.6, sz + 6);
+      signGroup.add(gravel);
+
+      const oil = new THREE.Mesh(this.geometries.plane || this.geometries.box, oilMat);
+      oil.scale.set(14, 0.2, 11);
+      oil.position.set(sx - 24, sy + 1.35, sz - 12);
+      signGroup.add(oil);
+    }
+    this.worldGroup.add(signGroup);
 
     for (const rd of map.roads || []) {
       if (!rd.points || rd.points.length < 2) continue;
@@ -4812,12 +4893,58 @@ export class Renderer3D {
     } else if ((game.activeCommandMode || game.activeAirStrikeMode) && game.worldMouse) {
       const sc = this.worldToScreen(game.worldMouse.x, game.worldMouse.y, 2);
       ctx.save();
-      ctx.strokeStyle = game.activeAirStrikeMode ? '#ef4444' : '#c87d28';
-      ctx.lineWidth = 2.2;
+      const isOutpostMode = game.activeCommandMode === 'build_outpost';
+      const outpostStatus = isOutpostMode
+        ? game.getOutpostPlacementStatus?.(game.worldMouse.x, game.worldMouse.y, 'allies')
+        : null;
+      const previewColor = game.activeAirStrikeMode
+        ? '#ef4444'
+        : isOutpostMode
+        ? outpostStatus?.ok
+          ? '#4ade80'
+          : '#ef4444'
+        : '#c87d28';
+      ctx.strokeStyle = previewColor;
+      ctx.lineWidth = 2.4;
       ctx.setLineDash([6, 4]);
       ctx.beginPath();
       ctx.arc(sc.x, sc.y, game.activeAirStrikeMode ? 54 : 32, 0, Math.PI * 2);
       ctx.stroke();
+
+      if (isOutpostMode && outpostStatus) {
+        ctx.setLineDash([]);
+        ctx.font = "700 12px 'Inter', 'Segoe UI', sans-serif";
+        ctx.textAlign = 'center';
+        const tw = ctx.measureText(outpostStatus.message).width + 18;
+        ctx.fillStyle = outpostStatus.ok ? 'rgba(15, 23, 18, 0.88)' : 'rgba(69, 10, 10, 0.92)';
+        ctx.fillRect(sc.x - tw * 0.5, sc.y - 58, tw, 24);
+        ctx.strokeStyle = previewColor;
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(sc.x - tw * 0.5, sc.y - 58, tw, 24);
+        ctx.fillStyle = previewColor;
+        ctx.fillText(outpostStatus.message, sc.x, sc.y - 42);
+
+        // Contador ao vivo nos setores dominados pelos aliados
+        for (const sec of game.map?.sectors || []) {
+          if (sec.owner !== 'allies') continue;
+          const secSc = this.worldToScreen(sec.x, sec.y, 16);
+          if (!secSc.visible) continue;
+          const secR = Math.max(308, sec.radius || 308);
+          const cnt = game.units.filter(
+            (u) =>
+              u.alive &&
+              u.team === 'allies' &&
+              (u.unitType === 'build_outpost' || u.spec?.subType === 'supply_outpost') &&
+              Math.hypot(u.x - sec.x, u.y - sec.y) <= secR
+          ).length;
+          const badge = `📦 Postos no Setor: ${cnt} / 3`;
+          const bw = ctx.measureText(badge).width + 14;
+          ctx.fillStyle = cnt >= 3 ? 'rgba(69, 10, 10, 0.88)' : 'rgba(15, 23, 18, 0.85)';
+          ctx.fillRect(secSc.x - bw * 0.5, secSc.y - 36, bw, 20);
+          ctx.fillStyle = cnt >= 3 ? '#fca5a5' : '#bbf7d0';
+          ctx.fillText(badge, secSc.x, secSc.y - 22);
+        }
+      }
       ctx.restore();
     }
 

@@ -1545,6 +1545,57 @@ export class Game {
     return true;
   }
 
+  getOutpostPlacementStatus(wx, wy, team = 'allies') {
+    const sectors = this.map?.sectors || [];
+    let nearestSector = null;
+    let nearestDist = Infinity;
+    for (const sec of sectors) {
+      if (sec.owner !== team) continue;
+      const limitRadius = Math.max(308, sec.radius || 308); // 22m = 308u
+      const d = dist(wx, wy, sec.x, sec.y);
+      if (d <= limitRadius && d < nearestDist) {
+        nearestDist = d;
+        nearestSector = sec;
+      }
+    }
+    if (!nearestSector) {
+      return {
+        ok: false,
+        reason: 'no_sector',
+        sector: null,
+        count: 0,
+        max: 3,
+        message: '⚠️ Construa dentro de um Setor Capturado pela sua equipe!',
+      };
+    }
+    const secR = Math.max(308, nearestSector.radius || 308);
+    const count = this.units.filter(
+      (u) =>
+        u.alive &&
+        u.team === team &&
+        (u.unitType === 'build_outpost' || u.spec?.subType === 'supply_outpost') &&
+        dist(u.x, u.y, nearestSector.x, nearestSector.y) <= secR
+    ).length;
+    if (count >= 3) {
+      return {
+        ok: false,
+        reason: 'cap_reached',
+        sector: nearestSector,
+        count,
+        max: 3,
+        message: '🚫 Limite atingido (3/3 Postos neste local)! Capture outro setor.',
+      };
+    }
+    return {
+      ok: true,
+      reason: 'ok',
+      sector: nearestSector,
+      count,
+      max: 3,
+      message: `📦 Postos no Setor: ${count} / 3`,
+    };
+  }
+
   addCommandPoints(amount, reason = '') {
     if (!Number.isFinite(amount) || amount <= 0) return;
     this.commandPoints = (this.commandPoints || 0) + Math.round(amount);
@@ -4107,10 +4158,22 @@ export class Game {
           (this.activeEngineeringActionId && COMMAND_BY_ID[this.activeEngineeringActionId]) ||
           COMMAND_ACTIONS.find((c) => c.category === this.activeCommandMode) ||
           COMMAND_BY_ID[this.activeCommandMode];
+        const cx = clamp(this.worldMouse.x, 140, BATTLEFIELD_SIZE - 140);
+        const cy = clamp(this.worldMouse.y, 140, BATTLEFIELD_SIZE - 140);
+        if (cmd && (cmd.id === 'build_outpost' || this.activeCommandMode === 'build_outpost')) {
+          const outpostStatus = this.getOutpostPlacementStatus(cx, cy, 'allies');
+          if (!outpostStatus.ok) {
+            this.audio.play('empty');
+            this.notify(
+              outpostStatus.reason === 'cap_reached' ? 'LIMITE DE POSTOS ATINGIDO' : 'SETOR NÃO DOMINADO',
+              outpostStatus.message,
+              '#ef4444'
+            );
+            return;
+          }
+        }
         if (cmd && this.supplies >= cmd.cost) {
           this.supplies -= cmd.cost;
-          const cx = clamp(this.worldMouse.x, 140, BATTLEFIELD_SIZE - 140);
-          const cy = clamp(this.worldMouse.y, 140, BATTLEFIELD_SIZE - 140);
           const unitTypeId =
             cmd.id === 'build_watchtower' ? 'watchtower_emplacement' : cmd.id;
           this.spawnUnit('player', unitTypeId, cx, cy, 0);
