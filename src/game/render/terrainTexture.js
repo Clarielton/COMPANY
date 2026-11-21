@@ -67,112 +67,219 @@ export function createOrganicBattlefieldTextures(map) {
   bctx.fillStyle = '#808080';
   bctx.fillRect(0, 0, bumpSize, bumpSize);
 
-function valueNoise2D(x, y, seed = 1944) {
-  const xi = Math.floor(x);
-  const yi = Math.floor(y);
-  const xf = x - xi;
-  const yf = y - yi;
-  const hash = (ix, iy) => {
-    let n = (ix * 374761393 + iy * 668265263 + seed * 1442695041) | 0;
-    n = (n ^ (n >> 13)) * 1274126177;
-    return ((n ^ (n >> 16)) >>> 0) / 4294967295;
-  };
-  const u = xf * xf * (3 - 2 * xf);
-  const v = yf * yf * (3 - 2 * yf);
-  const a = hash(xi, yi);
-  const b = hash(xi + 1, yi);
-  const c = hash(xi, yi + 1);
-  const d = hash(xi + 1, yi + 1);
-  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
-}
+  const seedBase = (map.seed || 1944) | 0;
 
-function fbm2D(x, y, seed = 1944) {
-  let val = 0;
-  let amp = 0.5;
-  let freq = 1;
-  for (let o = 0; o < 4; o++) {
-    val += amp * valueNoise2D(x * freq, y * freq, seed + o * 97);
-    freq *= 2.05;
-    amp *= 0.5;
+  function valueNoise2D(x, y, seed = 1944) {
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    const xf = x - xi;
+    const yf = y - yi;
+    const hash = (ix, iy) => {
+      let n = (ix * 374761393 + iy * 668265263 + seed * 1442695041) | 0;
+      n = (n ^ (n >> 13)) * 1274126177;
+      return ((n ^ (n >> 16)) >>> 0) / 4294967295;
+    };
+    const u = xf * xf * (3 - 2 * xf);
+    const v = yf * yf * (3 - 2 * yf);
+    const a = hash(xi, yi);
+    const b = hash(xi + 1, yi);
+    const c = hash(xi, yi + 1);
+    const d = hash(xi + 1, yi + 1);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
   }
-  return val;
-}
 
-  // Manchas orgânicas multicamadas com ruído FBM (3 tons de oliva/musgo, terra batida, raízes e pedras)
-  const noiseGrid = 128;
-  const cellPx = size / noiseGrid;
-  const bumpCellPx = bumpSize / noiseGrid;
-  for (let gy = 0; gy < noiseGrid; gy++) {
-    for (let gx = 0; gx < noiseGrid; gx++) {
-      const n = fbm2D(gx * 0.14, gy * 0.14, map.seed || 1944);
-      const n2 = fbm2D(gx * 0.38 + 11, gy * 0.38 + 7, (map.seed || 1944) + 55);
+  function fbm2D(x, y, seed = 1944, octaves = 4) {
+    let val = 0;
+    let amp = 0.5;
+    let freq = 1;
+    for (let o = 0; o < octaves; o++) {
+      val += amp * valueNoise2D(x * freq, y * freq, seed + o * 97);
+      freq *= 2.03;
+      amp *= 0.5;
+    }
+    return val;
+  }
+
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const smoothstep = (e0, e1, x) => {
+    const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
+  };
+
+  // 1. Síntese Contínua por Pixel (ImageData 512x512 com Domain Warping + Interpolação Bicúbica/Bilinear)
+  // Elimina 100% qualquer efeito de blocos quadrados (checkerboard) e cria transições suaves de bioma
+  const synthSize = 512;
+  const synthCanvas = document.createElement('canvas');
+  synthCanvas.width = synthSize;
+  synthCanvas.height = synthSize;
+  const sctx = synthCanvas.getContext('2d');
+  const imgData = sctx.createImageData(synthSize, synthSize);
+  const data = imgData.data;
+
+  const bumpSynthCanvas = document.createElement('canvas');
+  bumpSynthCanvas.width = synthSize;
+  bumpSynthCanvas.height = synthSize;
+  const bsctx = bumpSynthCanvas.getContext('2d');
+  const bumpImgData = bsctx.createImageData(synthSize, synthSize);
+  const bData = bumpImgData.data;
+
+  for (let py = 0; py < synthSize; py++) {
+    const ny = py / synthSize;
+    for (let px = 0; px < synthSize; px++) {
+      const nx = px / synthSize;
+
+      // Domain Warping para formas naturais sinuosas de vegetação e solo
+      const warpX = fbm2D(nx * 6.5, ny * 6.5, seedBase + 13, 3) - 0.5;
+      const warpY = fbm2D(nx * 6.5 + 5.2, ny * 6.5 + 1.3, seedBase + 29, 3) - 0.5;
+      const wx = nx * 11.5 + warpX * 1.45;
+      const wy = ny * 11.5 + warpY * 1.45;
+
+      const macro = fbm2D(wx, wy, seedBase, 4);
+      const meso = fbm2D(nx * 28.0 + warpY * 2.0, ny * 28.0 - warpX * 2.0, seedBase + 71, 3);
+      const micro = valueNoise2D(nx * 110.0, ny * 110.0, seedBase + 199);
+
+      let r, g, b;
       if (isDesert) {
-        ctx.fillStyle =
-          n > 0.62
-            ? 'rgba(214, 184, 128, 0.28)'
-            : n < 0.38
-            ? 'rgba(138, 108, 66, 0.28)'
-            : 'rgba(176, 144, 92, 0.20)';
+        // Areia dourada, ocre quente, calcário seco e cascalho do deserto
+        r = 182;
+        g = 150;
+        b = 98;
+        const duneT = smoothstep(0.32, 0.72, macro);
+        r = lerp(154, 212, duneT);
+        g = lerp(122, 178, duneT);
+        b = lerp(78, 120, duneT);
+        const rockT = smoothstep(0.58, 0.82, meso);
+        r = lerp(r, 136, rockT * 0.45);
+        g = lerp(g, 112, rockT * 0.45);
+        b = lerp(b, 80, rockT * 0.45);
       } else if (isWinter) {
-        ctx.fillStyle =
-          n > 0.58
-            ? 'rgba(244, 249, 255, 0.32)'
-            : n < 0.38
-            ? 'rgba(130, 138, 132, 0.26)'
-            : 'rgba(182, 200, 218, 0.22)';
+        // Neve fresca, geada azulada, terra congelada e musgo boreal
+        const snowT = smoothstep(0.28, 0.68, macro);
+        r = lerp(164, 236, snowT);
+        g = lerp(176, 243, snowT);
+        b = lerp(184, 250, snowT);
+        const mudT = smoothstep(0.62, 0.85, 1.0 - meso);
+        r = lerp(r, 112, mudT * 0.5);
+        g = lerp(g, 108, mudT * 0.5);
+        b = lerp(b, 98, mudT * 0.5);
       } else {
-        // 3 tons de grama oliva/musgo + manchas de terra batida/lama
-        ctx.fillStyle =
-          n > 0.63
-            ? 'rgba(92, 114, 52, 0.30)'
-            : n < 0.34
-            ? 'rgba(72, 58, 40, 0.34)'
-            : n2 > 0.56
-            ? 'rgba(56, 76, 32, 0.26)'
-            : 'rgba(104, 112, 58, 0.22)';
-      }
-      ctx.fillRect(gx * cellPx, gy * cellPx, cellPx + 1, cellPx + 1);
+        // Normandia / Rural: 5 camadas contínuas (grama oliva, musgo úmido, capim dourado seco e húmus/terra)
+        const lushT = smoothstep(0.26, 0.72, macro);
+        // Base entre verde-musgo profundo (#364924) e verde-prado vivo (#586f36)
+        r = lerp(54, 88, lushT);
+        g = lerp(73, 111, lushT);
+        b = lerp(36, 54, lushT);
 
-      const bv = Math.round(108 + n * 48 + (n2 - 0.5) * 24);
-      bctx.fillStyle = `rgb(${bv},${bv},${bv})`;
-      bctx.fillRect(gx * bumpCellPx, gy * bumpCellPx, bumpCellPx + 1, bumpCellPx + 1);
+        // Manchas naturais de capim queimado pelo sol / feno silvestre (#7c7840)
+        const dryGrassT = smoothstep(0.54, 0.78, meso) * smoothstep(0.38, 0.75, macro);
+        r = lerp(r, 124, dryGrassT * 0.58);
+        g = lerp(g, 120, dryGrassT * 0.58);
+        b = lerp(b, 62, dryGrassT * 0.58);
+
+        // Veios sutis de terra úmida / húmus orgânico (#4a3c2a)
+        const loamT = smoothstep(0.62, 0.84, 1.0 - macro) * smoothstep(0.42, 0.76, 1.0 - meso);
+        r = lerp(r, 76, loamT * 0.65);
+        g = lerp(g, 62, loamT * 0.65);
+        b = lerp(b, 43, loamT * 0.65);
+
+        // Sombreamento rico de trevo/folhagem rasteira escura (#2c3d1e)
+        const cloverT = smoothstep(0.58, 0.82, 1.0 - meso) * lushT;
+        r = lerp(r, 44, cloverT * 0.45);
+        g = lerp(g, 61, cloverT * 0.45);
+        b = lerp(b, 30, cloverT * 0.45);
+      }
+
+      // Micro-variação de grão orgânico por pixel
+      const grain = (micro - 0.5) * 18;
+      const idx = (py * synthSize + px) * 4;
+      data[idx] = Math.max(0, Math.min(255, Math.round(r + grain)));
+      data[idx + 1] = Math.max(0, Math.min(255, Math.round(g + grain)));
+      data[idx + 2] = Math.max(0, Math.min(255, Math.round(b + grain * 0.8)));
+      data[idx + 3] = 255;
+
+      // Relevo contínuo para o BumpMap (sem degraus quadrados)
+      const bumpVal = Math.max(
+        0,
+        Math.min(255, Math.round(128 + (macro - 0.5) * 52 + (meso - 0.5) * 44 + (micro - 0.5) * 34))
+      );
+      bData[idx] = bumpVal;
+      bData[idx + 1] = bumpVal;
+      bData[idx + 2] = bumpVal;
+      bData[idx + 3] = 255;
     }
   }
 
-  // Pequenas pedras, raízes e micro-variação orgânica no solo
-  for (let i = 0; i < 4200; i++) {
+  sctx.putImageData(imgData, 0, 0);
+  bsctx.putImageData(bumpImgData, 0, 0);
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(synthCanvas, 0, 0, size, size);
+
+  bctx.imageSmoothingEnabled = true;
+  bctx.imageSmoothingQuality = 'high';
+  bctx.drawImage(bumpSynthCanvas, 0, 0, bumpSize, bumpSize);
+
+  // Micro-tufos orgânicos, raízes e pequenas pedras naturais espalhadas com transição suave
+  for (let i = 0; i < 4800; i++) {
     const x = rng() * size;
     const y = rng() * size;
-    const rx = 2 + rng() * 8;
-    const ry = 1.5 + rng() * 5;
+    const rx = 2.5 + rng() * 9;
+    const ry = 1.5 + rng() * 5.5;
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(rng() * Math.PI);
     ctx.fillStyle =
       i % 5 === 0
         ? isDesert
-          ? 'rgba(122, 98, 66, 0.34)'
-          : 'rgba(76, 72, 62, 0.34)'
+          ? 'rgba(122, 98, 66, 0.24)'
+          : isWinter
+          ? 'rgba(138, 148, 156, 0.22)'
+          : 'rgba(72, 66, 54, 0.22)'
         : i % 3 === 0
         ? isDesert
-          ? 'rgba(220, 194, 144, 0.22)'
-          : 'rgba(46, 62, 28, 0.24)'
-        : 'rgba(84, 68, 46, 0.22)';
+          ? 'rgba(220, 194, 144, 0.18)'
+          : isWinter
+          ? 'rgba(248, 252, 255, 0.25)'
+          : 'rgba(42, 58, 25, 0.20)'
+        : isDesert
+        ? 'rgba(156, 124, 82, 0.18)'
+        : 'rgba(94, 108, 48, 0.18)';
     ctx.beginPath();
     ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
-    if (i % 3 === 0) {
-      bctx.fillStyle = i % 4 === 0 ? 'rgba(205,205,205,0.12)' : 'rgba(65,65,65,0.12)';
+    if (i % 2 === 0) {
+      bctx.fillStyle = i % 4 === 0 ? 'rgba(200,200,200,0.10)' : 'rgba(68,68,68,0.10)';
       bctx.beginPath();
-      bctx.arc((x / size) * bumpSize, (y / size) * bumpSize, 3 + rng() * 8, 0, Math.PI * 2);
+      bctx.arc((x / size) * bumpSize, (y / size) * bumpSize, 2 + rng() * 6, 0, Math.PI * 2);
       bctx.fill();
     }
   }
 
-  // 2. Campos Agrícolas / Regiões Naturais com Bordas Orgânicas (Sem retângulos duros)
-  for (const f of map.fields) {
+  // 1b. Margens Úmidas de Rios e Poeira Natural ao Longo de Estradas/Ferrovias
+  if (Array.isArray(map.roads)) {
+    for (const road of map.roads) {
+      if (!road.points || road.points.length < 2) continue;
+      ctx.save();
+      drawSmoothRoadPath(ctx, road.points, scale);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = ((road.width || 65) + 46) * scale;
+      ctx.strokeStyle = isDesert
+        ? 'rgba(148, 118, 76, 0.26)'
+        : isWinter
+        ? 'rgba(118, 112, 104, 0.28)'
+        : 'rgba(78, 64, 44, 0.28)';
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // 2. Campos Agrícolas / Regiões Naturais com Bordas Esfumadas Orgânicas (Sem aparência de adesivo colado)
+  for (let fi = 0; fi < map.fields.length; fi++) {
+    const f = map.fields[fi];
     ctx.save();
     const cx = (f.x + f.w * 0.5) * scale;
     const cy = (f.y + f.h * 0.5) * scale;
@@ -181,64 +288,109 @@ function fbm2D(x, y, seed = 1944) {
     ctx.translate(cx, cy);
     ctx.rotate(f.angle || 0);
 
-    // Máscara suave com cantos arredondados orgânicos
-    const r = Math.min(fw, fh) * 0.12;
-    ctx.beginPath();
-    ctx.roundRect(-fw / 2, -fh / 2, fw, fh, r);
+    // Perímetro orgânico perturbado por ruído
+    const buildOrganicFieldPath = (targetCtx, wScale = 1) => {
+      const hw = (fw * 0.5) * wScale;
+      const hh = (fh * 0.5) * wScale;
+      const stepsPerSide = 14;
+      const pts = [];
+      const jitter = (idx) =>
+        (Math.sin(idx * 2.3 + fi * 5.7) * 0.5 + Math.cos(idx * 4.1 + fi * 1.9) * 0.5) *
+        Math.min(hw, hh) *
+        0.12;
+      for (let i = 0; i < stepsPerSide; i++) {
+        const t = -1 + (2 * i) / stepsPerSide;
+        pts.push({ x: t * hw, y: -hh + jitter(i) });
+      }
+      for (let i = 0; i < stepsPerSide; i++) {
+        const t = -1 + (2 * i) / stepsPerSide;
+        pts.push({ x: hw + jitter(i + 20), y: t * hh });
+      }
+      for (let i = 0; i < stepsPerSide; i++) {
+        const t = 1 - (2 * i) / stepsPerSide;
+        pts.push({ x: t * hw, y: hh + jitter(i + 40) });
+      }
+      for (let i = 0; i < stepsPerSide; i++) {
+        const t = 1 - (2 * i) / stepsPerSide;
+        pts.push({ x: -hw + jitter(i + 60), y: t * hh });
+      }
+      targetCtx.beginPath();
+      targetCtx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) {
+        const prev = pts[i - 1];
+        const cur = pts[i];
+        targetCtx.quadraticCurveTo(prev.x, prev.y, (prev.x + cur.x) * 0.5, (prev.y + cur.y) * 0.5);
+      }
+      targetCtx.closePath();
+    };
+
+    // Transição suave de terra nas bordas do campo
+    if (f.type === 'wheat' || f.type === 'pasture' || f.type === 'plowed') {
+      buildOrganicFieldPath(ctx, 1.05);
+      ctx.strokeStyle = isDesert ? 'rgba(138, 108, 66, 0.24)' : 'rgba(64, 52, 36, 0.26)';
+      ctx.lineWidth = 10;
+      ctx.stroke();
+    }
+
+    buildOrganicFieldPath(ctx, 1.0);
     ctx.clip();
 
+    // Gradiente radial suave do centro para as bordas para fundir o campo com o terreno ao redor
+    const maxR = Math.max(fw, fh) * 0.62;
+    const drawSoftFieldBase = (innerCol, outerCol) => {
+      const fg = ctx.createRadialGradient(0, 0, maxR * 0.15, 0, 0, maxR);
+      fg.addColorStop(0, innerCol);
+      fg.addColorStop(0.75, outerCol);
+      fg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = fg;
+      ctx.fillRect(-fw * 0.6, -fh * 0.6, fw * 1.2, fh * 1.2);
+    };
+
     if (f.type === 'wheat') {
-      ctx.fillStyle = 'rgba(168, 138, 56, 0.85)';
-      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
-      ctx.strokeStyle = 'rgba(118, 92, 28, 0.42)';
-      ctx.lineWidth = 2.5;
-      for (let sy = -fh / 2 + 6; sy < fh / 2; sy += 9) {
+      drawSoftFieldBase('rgba(148, 124, 54, 0.64)', 'rgba(118, 102, 46, 0.34)');
+      ctx.strokeStyle = 'rgba(102, 82, 30, 0.28)';
+      ctx.lineWidth = 2.0;
+      for (let sy = -fh / 2 + 6; sy < fh / 2; sy += 8) {
         ctx.beginPath();
-        ctx.moveTo(-fw / 2, sy);
-        ctx.lineTo(fw / 2, sy);
+        ctx.moveTo(-fw * 0.46, sy);
+        ctx.bezierCurveTo(-fw * 0.15, sy + 1.5, fw * 0.15, sy - 1.5, fw * 0.46, sy);
         ctx.stroke();
       }
     } else if (f.type === 'pasture') {
-      ctx.fillStyle = 'rgba(79, 104, 50, 0.72)';
-      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
-      for (let p = 0; p < 120; p++) {
-        ctx.fillStyle = p % 2 === 0 ? 'rgba(98, 122, 58, 0.22)' : 'rgba(56, 76, 36, 0.22)';
+      drawSoftFieldBase('rgba(78, 102, 48, 0.55)', 'rgba(66, 88, 42, 0.24)');
+      for (let p = 0; p < 90; p++) {
+        ctx.fillStyle = p % 2 === 0 ? 'rgba(98, 122, 58, 0.18)' : 'rgba(52, 72, 32, 0.18)';
         ctx.beginPath();
-        ctx.ellipse((rng() - 0.5) * fw, (rng() - 0.5) * fh, 14 + rng() * 24, 9 + rng() * 18, rng() * 3, 0, Math.PI * 2);
+        ctx.ellipse((rng() - 0.5) * fw * 0.85, (rng() - 0.5) * fh * 0.85, 12 + rng() * 22, 8 + rng() * 16, rng() * 3, 0, Math.PI * 2);
         ctx.fill();
       }
     } else if (f.type === 'plowed') {
-      ctx.fillStyle = 'rgba(84, 62, 42, 0.88)';
-      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
-      ctx.strokeStyle = 'rgba(52, 36, 22, 0.62)';
-      ctx.lineWidth = 3.5;
-      for (let sy = -fh / 2 + 6; sy < fh / 2; sy += 10) {
+      drawSoftFieldBase('rgba(78, 58, 40, 0.68)', 'rgba(68, 52, 36, 0.35)');
+      ctx.strokeStyle = 'rgba(48, 34, 22, 0.38)';
+      ctx.lineWidth = 2.6;
+      for (let sy = -fh / 2 + 6; sy < fh / 2; sy += 9) {
         ctx.beginPath();
-        ctx.moveTo(-fw / 2, sy);
-        ctx.lineTo(fw / 2, sy);
+        ctx.moveTo(-fw * 0.46, sy);
+        ctx.bezierCurveTo(-fw * 0.15, sy - 1.5, fw * 0.15, sy + 1.5, fw * 0.46, sy);
         ctx.stroke();
       }
     } else if (f.type === 'mud') {
-      ctx.fillStyle = 'rgba(70, 61, 46, 0.85)';
-      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
+      drawSoftFieldBase('rgba(70, 60, 44, 0.62)', 'rgba(62, 54, 40, 0.28)');
     } else if (f.type === 'dune') {
-      ctx.fillStyle = 'rgba(202, 168, 110, 0.78)';
-      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
-      ctx.strokeStyle = 'rgba(164, 128, 72, 0.36)';
-      ctx.lineWidth = 4;
-      for (let sy = -fh / 2 + 12; sy < fh / 2; sy += 22) {
+      drawSoftFieldBase('rgba(202, 168, 110, 0.62)', 'rgba(184, 150, 96, 0.28)');
+      ctx.strokeStyle = 'rgba(156, 122, 68, 0.26)';
+      ctx.lineWidth = 3.5;
+      for (let sy = -fh / 2 + 12; sy < fh / 2; sy += 20) {
         ctx.beginPath();
-        ctx.moveTo(-fw / 2, sy);
-        ctx.quadraticCurveTo(0, sy - 9, fw / 2, sy);
+        ctx.moveTo(-fw * 0.45, sy);
+        ctx.quadraticCurveTo(0, sy - 9, fw * 0.45, sy);
         ctx.stroke();
       }
     } else if (f.type === 'rock') {
-      ctx.fillStyle = 'rgba(139, 118, 89, 0.75)';
-      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
+      drawSoftFieldBase('rgba(136, 116, 88, 0.58)', 'rgba(124, 104, 78, 0.26)');
     } else if (f.type === 'oasis') {
-      ctx.fillStyle = 'rgba(145, 138, 86, 0.7)';
-      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
-      const og = ctx.createRadialGradient(0, 0, 10, 0, 0, Math.min(fw, fh) * 0.44);
+      drawSoftFieldBase('rgba(116, 126, 72, 0.58)', 'rgba(136, 128, 82, 0.24)');
+      const og = ctx.createRadialGradient(0, 0, 8, 0, 0, Math.min(fw, fh) * 0.44);
       og.addColorStop(0, '#2d7a78');
       og.addColorStop(0.55, '#4b7b44');
       og.addColorStop(1, 'rgba(145, 138, 86, 0)');
@@ -247,29 +399,25 @@ function fbm2D(x, y, seed = 1944) {
       ctx.arc(0, 0, Math.min(fw, fh) * 0.44, 0, Math.PI * 2);
       ctx.fill();
     } else if (f.type === 'wadi') {
-      ctx.fillStyle = 'rgba(150, 122, 82, 0.78)';
-      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
+      drawSoftFieldBase('rgba(146, 118, 78, 0.60)', 'rgba(136, 108, 72, 0.26)');
     } else if (f.type === 'snow_field') {
-      ctx.fillStyle = 'rgba(232, 240, 247, 0.85)';
-      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
+      drawSoftFieldBase('rgba(234, 242, 248, 0.68)', 'rgba(218, 228, 238, 0.30)');
     } else if (f.type === 'frozen_mud') {
-      ctx.fillStyle = 'rgba(130, 126, 118, 0.72)';
-      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
+      drawSoftFieldBase('rgba(124, 120, 112, 0.58)', 'rgba(114, 110, 102, 0.26)');
     } else if (f.type === 'ice_lake') {
-      ctx.fillStyle = 'rgba(165, 206, 232, 0.82)';
-      ctx.fillRect(-fw / 2, -fh / 2, fw, fh);
+      drawSoftFieldBase('rgba(165, 206, 232, 0.72)', 'rgba(150, 190, 218, 0.32)');
     }
     ctx.restore();
 
-    // Sulcos no BumpMap para terra arada / trigo
+    // Sulcos suaves no BumpMap para terra arada / trigo
     if (f.type === 'plowed' || f.type === 'wheat') {
       bctx.save();
       bctx.translate((f.x + f.w * 0.5) * bScale, (f.y + f.h * 0.5) * bScale);
       bctx.rotate(f.angle || 0);
-      bctx.strokeStyle = 'rgba(215, 215, 215, 0.35)';
-      bctx.lineWidth = 2;
-      const bfw = f.w * bScale;
-      const bfh = f.h * bScale;
+      bctx.strokeStyle = 'rgba(195, 195, 195, 0.24)';
+      bctx.lineWidth = 1.6;
+      const bfw = f.w * bScale * 0.86;
+      const bfh = f.h * bScale * 0.86;
       for (let sy = -bfh / 2 + 4; sy < bfh / 2; sy += 6) {
         bctx.beginPath();
         bctx.moveTo(-bfw / 2, sy);
@@ -303,6 +451,31 @@ function fbm2D(x, y, seed = 1944) {
         0,
         Math.PI * 2
       );
+      ctx.fill();
+    }
+  }
+
+  // 3b. Solo de Floresta (Forest Floor: terra escura de húmus, folhas secas, raízes e samambaias sob bosques)
+  for (const fz of map.forestZones || []) {
+    const fx = fz.x * scale;
+    const fy = fz.y * scale;
+    const fr = (fz.radius || 180) * scale;
+    const fg = ctx.createRadialGradient(fx, fy, fr * 0.18, fx, fy, fr * 1.08);
+    fg.addColorStop(0, isDesert ? 'rgba(92, 82, 46, 0.58)' : 'rgba(34, 42, 20, 0.72)');
+    fg.addColorStop(0.65, isDesert ? 'rgba(104, 90, 52, 0.36)' : 'rgba(46, 48, 24, 0.48)');
+    fg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = fg;
+    ctx.beginPath();
+    ctx.arc(fx, fy, fr * 1.08, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Folhas secas e raízes espalhadas na base da floresta
+    for (let li = 0; li < 42; li++) {
+      const ang = rng() * Math.PI * 2;
+      const distR = rng() * fr * 0.88;
+      ctx.fillStyle = li % 3 === 0 ? 'rgba(94, 70, 36, 0.48)' : 'rgba(40, 54, 22, 0.45)';
+      ctx.beginPath();
+      ctx.ellipse(fx + Math.cos(ang) * distR, fy + Math.sin(ang) * distR, 2.5 + rng() * 4, 1.5 + rng() * 2.5, ang, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -370,48 +543,69 @@ export function createGroundDetailTexture(theme = 'rural') {
   const ctx = c.getContext('2d');
   const rng = mulberry32(isDesert ? 7711 : isWinter ? 9933 : 4499);
 
-  ctx.fillStyle = isDesert ? '#d7c8ab' : isWinter ? '#eef4f8' : '#96a882';
+  // Base neutra clara para MultiplyBlending sem escurecer artificialmente a grama
+  ctx.fillStyle = isDesert ? '#e4d8c0' : isWinter ? '#f3f7fa' : '#c8d6b6';
   ctx.fillRect(0, 0, size, size);
 
-  // Grãos de terra / areia / cristais de neve nítidos
-  for (let i = 0; i < 6000; i++) {
+  // 1. Poros e micro-grãos orgânicos do solo (seamlessly wrapped nas bordas 512x512)
+  for (let i = 0; i < 8500; i++) {
     const x = rng() * size;
     const y = rng() * size;
-    const s = 1 + rng() * 2.2;
+    const r = 0.7 + rng() * 1.8;
     ctx.fillStyle =
       i % 3 === 0
         ? isDesert
-          ? 'rgba(138, 108, 68, 0.42)'
+          ? 'rgba(138, 108, 68, 0.34)'
           : isWinter
-          ? 'rgba(150, 174, 198, 0.36)'
-          : 'rgba(42, 58, 24, 0.42)'
-        : isDesert
-        ? 'rgba(242, 224, 186, 0.35)'
-        : isWinter
-        ? 'rgba(255, 255, 255, 0.48)'
-        : 'rgba(176, 194, 128, 0.32)';
-    ctx.fillRect(x, y, s, s);
+          ? 'rgba(155, 178, 200, 0.30)'
+          : 'rgba(52, 72, 30, 0.32)'
+        : i % 2 === 0
+        ? isDesert
+          ? 'rgba(250, 236, 204, 0.34)'
+          : isWinter
+          ? 'rgba(255, 255, 255, 0.45)'
+          : 'rgba(218, 232, 184, 0.34)'
+        : 'rgba(92, 76, 52, 0.24)';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
   }
 
-  // Fios de grama fina ou pedrinhas
-  ctx.lineWidth = 1.4;
-  for (let i = 0; i < 1600; i++) {
-    const x = rng() * size;
-    const y = rng() * size;
-    const len = 3 + rng() * 6;
-    const ang = (rng() - 0.5) * 0.9 - Math.PI * 0.5;
-    ctx.strokeStyle = isDesert ? 'rgba(165, 138, 92, 0.38)' : 'rgba(54, 78, 28, 0.48)';
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len);
-    ctx.stroke();
+  // 2. Micro-tufos de lâminas curvas de grama / trevos / ondulações de areia
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 2800; i++) {
+    const cx = rng() * size;
+    const cy = rng() * size;
+    const blades = isDesert ? 1 : 2 + (i % 3);
+    for (let b = 0; b < blades; b++) {
+      const len = isDesert ? 4 + rng() * 7 : 3.5 + rng() * 6.5;
+      const ang = isDesert
+        ? (rng() - 0.5) * 0.35
+        : -Math.PI * 0.5 + (rng() - 0.5) * 1.25;
+      const ex = cx + Math.cos(ang) * len;
+      const ey = cy + Math.sin(ang) * len;
+      const mx = (cx + ex) * 0.5 + (rng() - 0.5) * 2.5;
+      const my = (cy + ey) * 0.5 + (rng() - 0.5) * 2.5;
+      ctx.lineWidth = 0.9 + rng() * 0.8;
+      ctx.strokeStyle = isDesert
+        ? 'rgba(164, 134, 88, 0.30)'
+        : isWinter
+        ? 'rgba(176, 196, 214, 0.30)'
+        : b % 2 === 0
+        ? 'rgba(58, 84, 30, 0.38)'
+        : 'rgba(148, 168, 96, 0.32)';
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.quadraticCurveTo(mx, my, ex, ey);
+      ctx.stroke();
+    }
   }
 
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(64, 64);
+  tex.repeat.set(84, 84);
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
   tex.anisotropy = 16;

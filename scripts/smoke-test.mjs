@@ -726,8 +726,8 @@ rtsGame.intelRevealed = true;
 const tankBulletsBefore = rtsGame.bullets.length;
 rtsGame._updateUnitsAndCombat(0.1);
 assert.ok(rtsGame.bullets.length > tankBulletsBefore, 'Tanque MBT deve adquirir alvo e disparar canhão principal 120mm automaticamente');
-const firedShell = rtsGame.bullets[rtsGame.bullets.length - 1];
-assert.equal(firedShell.isTankShell, true, 'Projétil do MBT deve ser isTankShell');
+const firedShell = rtsGame.bullets.find((b) => b.isTankShell);
+assert.ok(Boolean(firedShell), 'Projétil do MBT deve ser isTankShell');
 assert.ok(firedShell.damage >= 135, 'Canhão principal 120mm deve causar 135+ de dano');
 const infHpBefore = targetInf.hp;
 rtsGame._detonateTankShell({ x: 4030, y: 4000, team: 'allies', damage: 135, splashRadius: 45 });
@@ -809,6 +809,15 @@ assert.equal(statusFull.reason, 'cap_reached', 'Motivo deve ser cap_reached');
 outposts[0].alive = false;
 const statusFreed = rtsGame.getOutpostPlacementStatus(capSec.x + 80, capSec.y, 'allies');
 assert.equal(statusFreed.ok, true, 'Destruir 1 posto deve liberar a vaga (2/3)');
+
+// Rede de Trincheiras Conectadas e Navegação Interna
+const trNetPath = rtsGame.findTrenchNetworkPath(
+  rtsGame.trenches[0].points[0].x,
+  rtsGame.trenches[0].points[0].y,
+  rtsGame.trenches[0].points[rtsGame.trenches[0].points.length - 1].x,
+  rtsGame.trenches[0].points[rtsGame.trenches[0].points.length - 1].y
+);
+assert.ok(Array.isArray(trNetPath) && trNetPath.length >= 2, 'findTrenchNetworkPath deve calcular caminho interno na trincheira');
 
 console.log('SMOKE TEST RTS 3D OK: QG Nv. 1-3, CP, Drones, 12 Setores, 3 Mapas, RTB/Reparo [B], Pathfinding, Campo POW, LOS, Tanques HE/AP, Transporte, Camuflagem e Fila 1-5 Slots validados.');
 

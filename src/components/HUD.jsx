@@ -1,7 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import Minimap from './Minimap.jsx';
 import TutorialModal from './TutorialModal.jsx';
+import {
+  IconCamera,
+  IconEyeOff,
+  IconFastForward,
+  IconBolt,
+  IconLogout,
+} from './MilIcons.jsx';
 import { BATTALION_UNLOCKS } from '../game/data/accountData.js';
+import { networkManager } from '../game/net/NetworkManager.js';
 import { HudPanel, useHudLayout } from './HudPanel.jsx';
 import {
   COMMAND_BY_ID,
@@ -32,11 +40,32 @@ export default function HUD({
   const [activeBaseTab, setActiveBaseTab] = useState('command'); // 'command' | 'defenses' | 'logistics'
   const [baseDrawerOpen, setBaseDrawerOpen] = useState(false);
   const [airDrawerOpen, setAirDrawerOpen] = useState(false);
+  const [editorDrawerOpen, setEditorDrawerOpen] = useState(false);
+  const [editorCollapsed, setEditorCollapsed] = useState(false);
+  const [editorTab, setEditorTab] = useState('buildings'); // 'buildings' | 'walls' | 'nature' | 'sectors'
+  const [editorTool, setEditorTool] = useState('farmhouse');
+  const [editorAngleDeg, setEditorAngleDeg] = useState(0);
+  const [editorScale, setEditorScale] = useState(1.0);
   const [airLockNotice, setAirLockNotice] = useState(false);
   const [showTransferPicker, setShowTransferPicker] = useState(false);
   const [systemMenuOpen, setSystemMenuOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [isAdminState, setIsAdminState] = useState(() => Boolean(networkManager.isAdmin()));
   const layoutApi = useHudLayout(); // Menus responsivos, redimensionáveis e fixáveis
+
+  useEffect(() => {
+    const unsub = networkManager.subscribe((snap) => {
+      setIsAdminState(Boolean(snap?.isAdmin || networkManager.isAdmin()));
+    });
+    return () => unsub();
+  }, []);
+
+  const isAdmin = isAdminState || Boolean(networkManager.isAdmin());
+  const isLocalHost =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname.startsWith('192.168.'));
 
   const hasAirCommand = Boolean(hud?.builtBuildings?.includes('air_command'));
 
@@ -45,6 +74,11 @@ export default function HUD({
       const tag = e.target?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
       const k = e.key?.toLowerCase();
+      if (k === 'h' && hud?.spectatorMode) {
+        e.preventDefault();
+        gameRef.current?.toggleSpectatorHud();
+        return;
+      }
       if (k === 'v') {
         if (hasAirCommand) {
           setAirDrawerOpen((prev) => {
@@ -73,9 +107,90 @@ export default function HUD({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [hasAirCommand, hud?.selectedUnits?.length, gameRef]);
+  }, [hasAirCommand, hud?.selectedUnits?.length, hud?.spectatorMode, gameRef]);
 
   if (!hud) return null;
+
+  if (hud.spectatorMode) {
+    if (hud.spectatorHudHidden) {
+      return (
+        <div className="hud-layer" style={{ pointerEvents: 'none' }}>
+          <button
+            type="button"
+            className="spectator-unhide-pill"
+            onClick={() => gameRef.current?.toggleSpectatorHud()}
+            title="Mostrar Controles do Espectador (Tecla H)"
+          >
+            [H] Mostrar HUD
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className="hud-layer" style={{ pointerEvents: 'none' }}>
+        <div className="spectator-control-bar">
+          <div className="spectator-badge">
+            <IconCamera size={15} />
+            <span>MODO ESPECTADOR • IA vs IA</span>
+          </div>
+
+          <button
+            type="button"
+            className="spec-btn"
+            onClick={() => gameRef.current?.toggleSpectatorHud()}
+            title="Ocultar todos os menus da tela para gravação limpa (Tecla H)"
+          >
+            <IconEyeOff size={14} />
+            <span>Ocultar HUD [H]</span>
+          </button>
+
+          <button
+            type="button"
+            className={`spec-btn ${hud.directorCamActive ? 'active' : ''}`}
+            onClick={() => gameRef.current?.toggleDirectorCam()}
+            title="Câmera Automática acompanha os maiores tiroteios e explosões"
+          >
+            <IconCamera size={14} />
+            <span>Director Cam: {hud.directorCamActive ? 'ON' : 'OFF'}</span>
+          </button>
+
+          <div className="spec-speed-group">
+            <IconFastForward size={13} />
+            {[1, 2, 3].map((spd) => (
+              <button
+                key={spd}
+                type="button"
+                className={`spec-speed-btn ${Math.abs((hud.timeScale || 1) - spd) < 0.1 ? 'active' : ''}`}
+                onClick={() => gameRef.current?.setGameSpeed(spd)}
+              >
+                {spd}x
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            className="spec-btn wave"
+            onClick={() => gameRef.current?.forceSpectatorArmorWave(false)}
+            title="Disparar imediatamente uma grande onda de tanques MBT e APCs dos dois lados"
+          >
+            <IconBolt size={14} />
+            <span>Forçar Onda de Blindados</span>
+          </button>
+
+          <button
+            type="button"
+            className="spec-btn exit"
+            onClick={onPause}
+            title="Abrir Menu / Sair do Modo Espectador [ESC]"
+          >
+            <IconLogout size={14} />
+            <span>Menu [ESC]</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const setSpeed = (mult) => {
     gameRef.current?.setGameSpeed(mult);
@@ -320,7 +435,8 @@ export default function HUD({
         </div>
       )}
 
-      {/* TOPO ESQUERDO: Mini-Mapa / Quadro de Planejamento Tático Interativo */}
+      {/* TOPO ESQUERDO: Mini-Mapa / Quadro de Planejamento Tático Interativo (Oculto quando Editor de Mapa está aberto) */}
+      {!editorDrawerOpen && (
       <HudPanel id="theater" className="hud-top-left" layoutApi={layoutApi}>
         <Minimap gameRef={gameRef} expanded={false} />
 
@@ -347,6 +463,7 @@ export default function HUD({
           )}
         </div>
       </HudPanel>
+      )}
 
       {/* TOPO CENTRO: 100% Livre e Transparente (apenas avisos flutuantes de combate) */}
       <div className="hud-top-center-notices">
@@ -368,199 +485,563 @@ export default function HUD({
         </div>
       </div>
 
-      {/* TOPO DIREITO: Apenas Recursos + Nível do QG + 3 Ícones Compactos (🔬 [T], 🗺️ [TAB], ⚙️) */}
+      {/* TOPO DIREITO / LATERAL ESQUERDA: Quando Editor de Mapa está aberto, esconde o HUD de partida e deixa só os menus de construção */}
       <HudPanel id="command" className="hud-top-right" layoutApi={layoutApi}>
-        <div className="toolbar-row compact-combat-bar">
-          {completedTechSet.has('uav_recon') && (
-            <button
-              type="button"
-              className={`hud-btn ${hud.activeDroneLaunchMode === 'uav_recon' ? 'active' : ''}`}
-              onClick={() => gameRef.current?.triggerDroneLaunchMode('uav_recon')}
-              title="Lançar Drone UAV 3D (350 SUP + 120 MUN)"
-            >
-              🛸 UAV
-            </button>
-          )}
-          {completedTechSet.has('fpv_kamikaze') && (
-            <button
-              type="button"
-              className={`hud-btn ${hud.activeDroneLaunchMode === 'fpv_kamikaze' ? 'active' : ''}`}
-              onClick={() => gameRef.current?.triggerDroneLaunchMode('fpv_kamikaze')}
-              title="Lançar Drone Kamikaze FPV (500 SUP + 200 MUN)"
-            >
-              💥 FPV
-            </button>
-          )}
-
-          <button
-            type="button"
-            className={`hud-btn ${hud.techModalOpen ? 'active' : ''}`}
-            onClick={() => gameRef.current?.toggleTechModal()}
-            title="Árvore de Pesquisa & Drones [T]"
-          >
-            🔬 [T]
-          </button>
-          <button
-            type="button"
-            className={`hud-btn ${hud.tacticalMapOpen ? 'active' : ''}`}
-            onClick={() => gameRef.current?.toggleTacticalMap()}
-            title="Mapa Estratégico [TAB]"
-          >
-            🗺️ [TAB]
-          </button>
-          <button
-            type="button"
-            className={`hud-btn ${hud.sandboxMode ? 'active' : ''}`}
-            onClick={() => gameRef.current?.toggleSandboxMode()}
-            title="Modo Caixa de Areia / Campo de Testes [F10]"
-          >
-            🛠️ SANDBOX — F10
-          </button>
-          <button
-            type="button"
-            className={`hud-btn ${tutorialOpen ? 'active' : ''}`}
-            onClick={() => setTutorialOpen((v) => !v)}
-            title="Tutorial Completo & Guia Tático de Campo"
-          >
-            📖 TUTORIAL
-          </button>
-          <button
-            type="button"
-            className={`hud-btn gear-btn ${systemMenuOpen ? 'active' : ''}`}
-            onClick={() => setSystemMenuOpen((v) => !v)}
-            title="Opções do Sistema [ESC]"
-          >
-            ⚙️
-          </button>
-        </div>
-
-        {/* BARRA DE PROGRESSÃO DO QG (NÍVEL 1-3) + PONTOS DE COMANDO (CP) */}
-        {(() => {
-          const lvl = hud.hqLevel || 1;
-          const cp = hud.commandPoints || 0;
-          const nextSpec = lvl < 3 ? HQ_UPGRADES[lvl + 1] : null;
-          const canUpgradeHq =
-            nextSpec &&
-            cp >= (nextSpec.requiredCp || 0) &&
-            hud.supplies >= (nextSpec.supplyCost || 0) &&
-            hud.fuel >= (nextSpec.fuelCost || 0) &&
-            hud.ammo >= (nextSpec.ammoCost || 0);
-          return (
-            <div className="hq-progression-bar">
-              <span className="hq-lvl-badge">🏛 QG NV. {lvl}/3</span>
-              <span className="hq-cp-badge">⭐ {cp} CP</span>
-              {nextSpec ? (
+        {!editorDrawerOpen && (
+          <>
+            <div className="toolbar-row compact-combat-bar">
+              {completedTechSet.has('uav_recon') && (
                 <button
                   type="button"
-                  className={`hud-btn hq-upgrade-btn ${canUpgradeHq ? 'ready' : 'locked'}`}
-                  onClick={() => gameRef.current?.upgradeHq()}
-                  title={`${nextSpec.name}: ${nextSpec.unlocks}`}
+                  className={`hud-btn ${hud.activeDroneLaunchMode === 'uav_recon' ? 'active' : ''}`}
+                  onClick={() => gameRef.current?.triggerDroneLaunchMode('uav_recon')}
+                  title="Lançar Drone UAV 3D (350 SUP + 120 MUN)"
                 >
-                  ⬆ QG NV.{lvl + 1} ({nextSpec.supplyCost}S/{nextSpec.fuelCost}C • {nextSpec.requiredCp}CP)
+                  🛸 UAV
                 </button>
-              ) : (
-                <span className="hq-max-badge">🎖 COMANDO SUPREMO</span>
               )}
-            </div>
-          );
-        })()}
-
-        <div className="resources-bar">
-          <div className="res-pill sup" title="Suprimentos Militares">
-            <span>⚙ {hud.supplies} SUP</span>
-            <small>+{hud.supplyIncome}</small>
-          </div>
-          <div className="res-pill ammo" title="Munição Tática (Tropas de Elite e Suporte Aéreo)">
-            <span>弹 {hud.ammo} MUN</span>
-            <small>+{hud.ammoIncome}</small>
-          </div>
-          <div
-            className="res-pill fuel"
-            title="Combustível Militar (Prédios de Base e Blindados Pesados)"
-          >
-            <span>⛽ {hud.fuel} COMB</span>
-            <small>+{hud.fuelIncome}</small>
-          </div>
-        </div>
-
-        {/* ATALHO DE PRÉDIOS DA BASE 3D (Clicar seleciona o prédio no mundo 3D e abre seu Menu de Produção) */}
-        {hud.alliedBaseBuildings && hud.alliedBaseBuildings.length > 0 && (
-          <div className="allied-buildings-strip">
-            {hud.alliedBaseBuildings.map((b) => {
-              const isSel = selectedBld && selectedBld.id === b.id;
-              return (
+              {completedTechSet.has('fpv_kamikaze') && (
                 <button
-                  key={b.id}
                   type="button"
-                  className={`bstrip-btn ${isSel ? 'active' : ''}`}
-                  onClick={() => gameRef.current?.selectBaseBuilding(b.id)}
-                  title={`Selecionar ${b.name} no mapa 3D (${b.hp}/${b.maxHp} HP)`}
+                  className={`hud-btn ${hud.activeDroneLaunchMode === 'fpv_kamikaze' ? 'active' : ''}`}
+                  onClick={() => gameRef.current?.triggerDroneLaunchMode('fpv_kamikaze')}
+                  title="Lançar Drone Kamikaze FPV (500 SUP + 200 MUN)"
                 >
-                  <span>🏭 {b.short}</span>
-                  {b.queueLength > 0 && (
-                    <small className="bstrip-prog">
-                      ⚙ {b.progress}% ({b.queueLength})
-                    </small>
-                  )}
+                  💥 FPV
                 </button>
+              )}
+
+              <button
+                type="button"
+                className={`hud-btn ${hud.techModalOpen ? 'active' : ''}`}
+                onClick={() => gameRef.current?.toggleTechModal()}
+                title="Árvore de Pesquisa & Drones [T]"
+              >
+                🔬 [T]
+              </button>
+              <button
+                type="button"
+                className={`hud-btn ${hud.tacticalMapOpen ? 'active' : ''}`}
+                onClick={() => gameRef.current?.toggleTacticalMap()}
+                title="Mapa Estratégico [TAB]"
+              >
+                🗺️ [TAB]
+              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  className={`hud-btn ${hud.sandboxMode ? 'active' : ''}`}
+                  onClick={() => gameRef.current?.toggleSandboxMode()}
+                  title="Modo Caixa de Areia / Campo de Testes [F10] (Exclusivo Admin)"
+                >
+                  🛠️ SANDBOX — F10
+                </button>
+              )}
+              <button
+                type="button"
+                className={`hud-btn ${tutorialOpen ? 'active' : ''}`}
+                onClick={() => setTutorialOpen((v) => !v)}
+                title="Tutorial Completo & Guia Tático de Campo"
+              >
+                📖 TUTORIAL
+              </button>
+              <button
+                type="button"
+                className={`hud-btn gear-btn ${systemMenuOpen ? 'active' : ''}`}
+                onClick={() => setSystemMenuOpen((v) => !v)}
+                title="Opções do Sistema [ESC]"
+              >
+                ⚙️
+              </button>
+            </div>
+
+            {/* BARRA DE PROGRESSÃO DO QG (NÍVEL 1-3) + PONTOS DE COMANDO (CP) */}
+            {(() => {
+              const lvl = hud.hqLevel || 1;
+              const cp = hud.commandPoints || 0;
+              const nextSpec = lvl < 3 ? HQ_UPGRADES[lvl + 1] : null;
+              const canUpgradeHq =
+                nextSpec &&
+                cp >= (nextSpec.requiredCp || 0) &&
+                hud.supplies >= (nextSpec.supplyCost || 0) &&
+                hud.fuel >= (nextSpec.fuelCost || 0) &&
+                hud.ammo >= (nextSpec.ammoCost || 0);
+              return (
+                <div className="hq-progression-bar">
+                  <span className="hq-lvl-badge">🏛 QG NV. {lvl}/3</span>
+                  <span className="hq-cp-badge">⭐ {cp} CP</span>
+                  {nextSpec ? (
+                    <button
+                      type="button"
+                      className={`hud-btn hq-upgrade-btn ${canUpgradeHq ? 'ready' : 'locked'}`}
+                      onClick={() => gameRef.current?.upgradeHq()}
+                      title={`${nextSpec.name}: ${nextSpec.unlocks}`}
+                    >
+                      ⬆ QG NV.{lvl + 1} ({nextSpec.supplyCost}S/{nextSpec.fuelCost}C • {nextSpec.requiredCp}CP)
+                    </button>
+                  ) : (
+                    <span className="hq-max-badge">🎖 COMANDO SUPREMO</span>
+                  )}
+                </div>
               );
-            })}
+            })()}
+
+            <div className="resources-bar">
+              <div className="res-pill sup" title="Suprimentos Militares">
+                <span>⚙ {hud.supplies} SUP</span>
+                <small>+{hud.supplyIncome}</small>
+              </div>
+              <div className="res-pill ammo" title="Munição Tática (Tropas de Elite e Suporte Aéreo)">
+                <span>弹 {hud.ammo} MUN</span>
+                <small>+{hud.ammoIncome}</small>
+              </div>
+              <div
+                className="res-pill fuel"
+                title="Combustível Militar (Prédios de Base e Blindados Pesados)"
+              >
+                <span>⛽ {hud.fuel} COMB</span>
+                <small>+{hud.fuelIncome}</small>
+              </div>
+            </div>
+
+            {/* ATALHO DE PRÉDIOS DA BASE 3D (Clicar seleciona o prédio no mundo 3D e abre seu Menu de Produção) */}
+            {hud.alliedBaseBuildings && hud.alliedBaseBuildings.length > 0 && (
+              <div className="allied-buildings-strip">
+                {hud.alliedBaseBuildings.map((b) => {
+                  const isSel = selectedBld && selectedBld.id === b.id;
+                  return (
+                    <button
+                      key={b.id}
+                      type="button"
+                      className={`bstrip-btn ${isSel ? 'active' : ''}`}
+                      onClick={() => gameRef.current?.selectBaseBuilding(b.id)}
+                      title={`Selecionar ${b.name} no mapa 3D (${b.hp}/${b.maxHp} HP)`}
+                    >
+                      <span>🏭 {b.short}</span>
+                      {b.queueLength > 0 && (
+                        <small className="bstrip-prog">
+                          ⚙ {b.progress}% ({b.queueLength})
+                        </small>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* BARRA DE ACESSO RÁPIDO NA LATERAL ESQUERDA (CONSTRUÇÕES & EDITOR) */}
+        {!editorDrawerOpen && (
+          <div className="left-quick-bar">
+            <button
+              type="button"
+              className={`quick-access-btn ${baseDrawerOpen ? 'active' : ''}`}
+              onClick={() => {
+                setBaseDrawerOpen((v) => {
+                  const next = !v;
+                  if (next) setAirDrawerOpen(false);
+                  return next;
+                });
+              }}
+              title="Abrir / Fechar Menu de Construções da Base (Atalho B)"
+            >
+              <span>🏗️ CONSTRUÇÕES DA BASE</span>
+              <small>[B] ({Math.max(0, builtSet.size - 1)}/4)</small>
+            </button>
+
+            <button
+              type="button"
+              className={`quick-access-btn ${
+                hasAirCommand ? (airDrawerOpen ? 'air-active active' : 'air-active') : 'air-locked'
+              }`}
+              onMouseEnter={() => {
+                if (!hasAirCommand) setAirLockNotice(true);
+              }}
+              onMouseLeave={() => setAirLockNotice(false)}
+              onClick={() => {
+                if (!hasAirCommand) {
+                  setAirLockNotice(true);
+                  gameRef.current?.notify(
+                    'COMANDO AÉREO BLOQUEADO',
+                    'Construa o Comando Aéreo / Radar no Menu de Construções para desbloquear os ataques aéreos!',
+                    '#fbbf24'
+                  );
+                  return;
+                }
+                setAirDrawerOpen((v) => {
+                  const next = !v;
+                  if (next) setBaseDrawerOpen(false);
+                  return next;
+                });
+              }}
+              title={
+                hasAirCommand
+                  ? 'Abrir Painel Exclusivo de Ataques Aéreos (Atalho V)'
+                  : 'Construa o Comando Aéreo / Radar no Menu de Construções para desbloquear os ataques aéreos!'
+              }
+            >
+              <span>{hasAirCommand ? '✈️ COMANDO AÉREO (ATIVO)' : '🔒 COMANDO AÉREO (Requer Radar)'}</span>
+              <small>[V]</small>
+            </button>
+
+            {isLocalHost && (
+              <button
+                type="button"
+                className="quick-access-btn"
+                style={{ borderColor: '#84cc16', color: '#d9f99d' }}
+                onClick={() => {
+                  setBaseDrawerOpen(false);
+                  setAirDrawerOpen(false);
+                  setEditorCollapsed(false);
+                  setEditorDrawerOpen(true);
+                  gameRef.current?.setMapEditorOpen(true, editorTool, editorAngleDeg, editorScale);
+                }}
+                title="Editor de Mapa 3D Local (Oculta HUD do jogo, pausa partida, libera Zoom amplo e salva em customMaps.json)"
+              >
+                <span>🛠️ EDITOR DE MAPA (LOCAL)</span>
+                <small>PAUSA + ZOOM</small>
+              </button>
+            )}
           </div>
         )}
 
-        {/* BARRA DE ACESSO RÁPIDO NA LATERAL ESQUERDA (2 BOTÕES PRINCIPAIS) */}
-        <div className="left-quick-bar">
-          <button
-            type="button"
-            className={`quick-access-btn ${baseDrawerOpen ? 'active' : ''}`}
-            onClick={() => {
-              setBaseDrawerOpen((v) => {
-                const next = !v;
-                if (next) setAirDrawerOpen(false);
-                return next;
-              });
-            }}
-            title="Abrir / Fechar Menu de Construções da Base (Atalho B)"
-          >
-            <span>🏗️ CONSTRUÇÕES DA BASE</span>
-            <small>[B] ({Math.max(0, builtSet.size - 1)}/4)</small>
-          </button>
+        {isLocalHost && editorDrawerOpen && (() => {
+          const activeToolId = hud.mapEditorTool !== undefined ? hud.mapEditorTool : editorTool;
+          const activeAngle =
+            typeof hud.mapEditorAngleDeg === 'number' ? hud.mapEditorAngleDeg : editorAngleDeg;
+          const activeScale =
+            typeof hud.mapEditorScale === 'number' ? hud.mapEditorScale : editorScale;
 
-          <button
-            type="button"
-            className={`quick-access-btn ${
-              hasAirCommand ? (airDrawerOpen ? 'air-active active' : 'air-active') : 'air-locked'
-            }`}
-            onMouseEnter={() => {
-              if (!hasAirCommand) setAirLockNotice(true);
-            }}
-            onMouseLeave={() => setAirLockNotice(false)}
-            onClick={() => {
-              if (!hasAirCommand) {
-                setAirLockNotice(true);
-                gameRef.current?.notify(
-                  'COMANDO AÉREO BLOQUEADO',
-                  'Construa o Comando Aéreo / Radar no Menu de Construções para desbloquear os ataques aéreos!',
-                  '#fbbf24'
-                );
-                return;
-              }
-              setAirDrawerOpen((v) => {
-                const next = !v;
-                if (next) setBaseDrawerOpen(false);
-                return next;
-              });
-            }}
-            title={
-              hasAirCommand
-                ? 'Abrir Painel Exclusivo de Ataques Aéreos (Atalho V)'
-                : 'Construa o Comando Aéreo / Radar no Menu de Construções para desbloquear os ataques aéreos!'
+          const EDITOR_CATALOG = {
+            buildings: [
+              { id: 'farmhouse', icon: '🏠', title: 'Casa Rural Europeia' },
+              { id: 'two_story', icon: '🏢', title: 'Sobrado Urbano (2 And.)' },
+              { id: 'barn', icon: '🏚️', title: 'Celeiro + Silo' },
+              { id: 'warehouse', icon: '🏭', title: 'Galpão Industrial' },
+              { id: 'brick_ruin', icon: '🧱', title: 'Ruína de Tijolo' },
+              { id: 'bunker', icon: '🛡️', title: 'Bunker de Concreto' },
+              { id: 'adobe_house', icon: '🕌', title: 'Casa Adobe (Deserto)' },
+              { id: 'wreck_tank', icon: '💥', title: 'Carcaça de Tanque' },
+              { id: 'wreck_truck', icon: '🚛', title: 'Caminhão Queimado' },
+            ],
+            walls: [
+              { id: 'fortified_wall', icon: '🏰', title: 'Muralha Fortificada de Concreto' },
+              { id: 'brick_wall', icon: '🧱', title: 'Muro de Tijolo / Alvenaria' },
+              { id: 'stone_wall', icon: '🧱', title: 'Muro de Pedra Rural' },
+              { id: 'trench_line', icon: '⛏️', title: 'Trincheira Conectável' },
+              { id: 'sandbag_line', icon: '🛡️', title: 'Sacos de Areia' },
+              { id: 'tank_trap_line', icon: '✖️', title: 'Ouriços Antitanque' },
+            ],
+            nature: [
+              { id: 'forest_area', icon: '🌲', title: 'Área de Floresta (Arrastar Raio)' },
+              { id: 'tree_pine', icon: '🌲', title: 'Pinheiro / Conífera 3D' },
+              { id: 'tree_oak', icon: '🌳', title: 'Carvalho Copa Larga' },
+              { id: 'tree_burnt', icon: '🪵', title: 'Árvores Queimadas' },
+              { id: 'bush', icon: '🌿', title: 'Arbustos / Cerca Viva' },
+              { id: 'crater_rock', icon: '🪨', title: 'Rochas / Crateras' },
+            ],
+          };
+
+          const allItems = [
+            ...EDITOR_CATALOG.buildings,
+            ...EDITOR_CATALOG.walls,
+            ...EDITOR_CATALOG.nature,
+            { id: 'select_move', icon: '✋', title: 'Mover / Girar Objeto' },
+            { id: 'move_sector', icon: '🚩', title: 'Mover Bandeira (Setor)' },
+            { id: 'eraser', icon: '🗑️', title: 'Borracha (Apagar Objeto)' },
+            { id: 'eraser_area', icon: '🧹', title: 'Limpar Área (15m)' },
+          ];
+          const activeObjMeta = allItems.find((i) => i.id === activeToolId);
+          const activeLabel = activeObjMeta ? activeObjMeta.title : 'Nenhum (Navegação)';
+
+          const selectTool = (toolId) => {
+            setEditorTool(toolId);
+            gameRef.current?.setMapEditorTool(toolId, activeAngle, activeScale);
+          };
+
+          const rotateBy = (delta) => {
+            const next = gameRef.current?.rotateMapEditorAngle(delta);
+            if (typeof next === 'number') setEditorAngleDeg(next);
+            else {
+              const fallback = (((activeAngle + delta) % 360) + 360) % 360;
+              setEditorAngleDeg(fallback);
+              gameRef.current?.setMapEditorTool(activeToolId, fallback, activeScale);
             }
-          >
-            <span>{hasAirCommand ? '✈️ COMANDO AÉREO (ATIVO)' : '🔒 COMANDO AÉREO (Requer Radar)'}</span>
-            <small>[V]</small>
-          </button>
-        </div>
+          };
+
+          return (
+            <div className={`mil-editor-dock ${editorCollapsed ? 'collapsed' : ''}`}>
+              {/* 1. CABEÇALHO COMPACTO & BOTÃO RECOLHER (1 LINHA LIMPA) */}
+              <div className="mil-editor-topbar">
+                <button
+                  type="button"
+                  className="mil-ed-topbtn exit"
+                  onClick={() => {
+                    setEditorDrawerOpen(false);
+                    setEditorCollapsed(false);
+                    gameRef.current?.setMapEditorOpen(false);
+                  }}
+                  title="Sair do Editor de Mapa e retomar a partida"
+                >
+                  ✕ SAIR DO EDITOR
+                </button>
+
+                <button
+                  type="button"
+                  className="mil-ed-topbtn save"
+                  onClick={() => gameRef.current?.saveCustomMapForDeploy()}
+                  title="Gravar layout em src/game/data/customMaps.json para subir no deploy"
+                >
+                  💾 SALVAR MAPA
+                </button>
+
+                <button
+                  type="button"
+                  className="mil-ed-topbtn collapse"
+                  onClick={() => setEditorCollapsed((v) => !v)}
+                  title={
+                    editorCollapsed
+                      ? 'Expandir painel do Editor de Mapa'
+                      : 'Recolher menu lateral para ver o mapa em tela cheia enquanto posiciona itens'
+                  }
+                >
+                  {editorCollapsed ? '▶ Expandir Menu' : '◀ Recolher Menu'}
+                </button>
+              </div>
+
+              {/* BARRA DE CÂMERA EM 1 LINHA (34PX DE ALTURA) */}
+              <div className="mil-editor-cambar">
+                <button
+                  type="button"
+                  className="mil-ed-cambtn"
+                  onClick={() => gameRef.current?.adjustEditorZoom(-280)}
+                  title="Aproximar câmera (Zoom In)"
+                >
+                  🔍+
+                </button>
+                <button
+                  type="button"
+                  className="mil-ed-cambtn"
+                  onClick={() => gameRef.current?.adjustEditorZoom(340)}
+                  title="Afastar câmera (Zoom Out)"
+                >
+                  🔍-
+                </button>
+                <button
+                  type="button"
+                  className="mil-ed-cambtn overview"
+                  onClick={() => gameRef.current?.setEditorOverviewZoom()}
+                  title="Visão panorâmica de todo o campo de batalha"
+                >
+                  🌐 Visão Geral
+                </button>
+              </div>
+
+              {!editorCollapsed && (
+                <>
+                  {/* 2. BARRA FIXA DE TRANSFORMAÇÃO DO OBJETO (ROTAÇÃO, ESCALA & BORRACHA) */}
+                  <div className="mil-editor-transform-box">
+                    <div className="mil-ed-tf-row">
+                      <span className="mil-ed-tf-label">ROTAÇÃO:</span>
+                      <div className="mil-ed-tf-controls">
+                        <button
+                          type="button"
+                          className="mil-ed-mini-btn"
+                          onClick={() => rotateBy(-45)}
+                          title="Girar -45°"
+                        >
+                          ↺ -45°
+                        </button>
+                        <span className="mil-ed-angle-badge">{activeAngle}°</span>
+                        <button
+                          type="button"
+                          className="mil-ed-mini-btn"
+                          onClick={() => rotateBy(45)}
+                          title="Girar +45° (Atalho: Tecla R)"
+                        >
+                          ↻ +45° (Tecla R)
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mil-ed-tf-row">
+                      <span className="mil-ed-tf-label">ESCALA:</span>
+                      <div className="mil-ed-tf-controls">
+                        {[
+                          { val: 0.8, label: '0.8x' },
+                          { val: 1.0, label: '1x' },
+                          { val: 1.25, label: '1.25x' },
+                          { val: 1.5, label: '1.5x' },
+                        ].map((sc) => (
+                          <button
+                            key={sc.val}
+                            type="button"
+                            className={`mil-ed-mini-btn ${
+                              Math.abs(activeScale - sc.val) < 0.05 ? 'active' : ''
+                            }`}
+                            onClick={() => {
+                              setEditorScale(sc.val);
+                              gameRef.current?.setMapEditorTool(activeToolId, activeAngle, sc.val);
+                            }}
+                          >
+                            {sc.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mil-ed-eraser-row">
+                      <button
+                        type="button"
+                        className={`mil-ed-moveobj-btn ${
+                          activeToolId === 'select_move' ? 'active' : ''
+                        }`}
+                        onClick={() => selectTool('select_move')}
+                        title="Clicar e arrastar qualquer casa, muro, árvore ou carcaça já colocada para mover ou girar"
+                      >
+                        ✋ Mover / Girar
+                      </button>
+                      <button
+                        type="button"
+                        className={`mil-ed-eraser-btn ${activeToolId === 'eraser' ? 'active' : ''}`}
+                        onClick={() => selectTool('eraser')}
+                        title="Excluir casa, muro, árvore, trincheira ou carcaça clicada no mapa"
+                      >
+                        🗑️ Apagar
+                      </button>
+                      <button
+                        type="button"
+                        className={`mil-ed-eraser-btn area ${
+                          activeToolId === 'eraser_area' ? 'active' : ''
+                        }`}
+                        onClick={() => selectTool('eraser_area')}
+                        title="Limpar todos os itens num raio de 15m do clique"
+                      >
+                        🧹 Área
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 3. NAVEGAÇÃO POR 4 ABAS LIMPAS (SEM LISTA INFINITA) */}
+                  <div className="mil-editor-tabs">
+                    {[
+                      { id: 'buildings', label: '🏠 PRÉDIOS' },
+                      { id: 'walls', label: '🧱 MUROS & DEFESAS' },
+                      { id: 'nature', label: '🌲 NATUREZA' },
+                      { id: 'sectors', label: '🚩 SETORES' },
+                    ].map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        className={`mil-ed-tab ${editorTab === t.id ? 'active' : ''}`}
+                        onClick={() => {
+                          setEditorTab(t.id);
+                          if (t.id === 'sectors') {
+                            selectTool('move_sector');
+                          }
+                        }}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* CONTEÚDO DA ABA ATIVA (GRADE COMPACTA DE 2 COLUNAS COM SCROLLBAR GRAFITE 4PX) */}
+                  <div className="mil-editor-body">
+                    {editorTab !== 'sectors' ? (
+                      <div className="mil-editor-grid-2col">
+                        {(EDITOR_CATALOG[editorTab] || []).map((item) => {
+                          const isSelected = activeToolId === item.id;
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              className={`mil-ed-card ${isSelected ? 'active' : ''}`}
+                              onClick={() => selectTool(item.id)}
+                            >
+                              <span className="mil-ed-card-icon">{item.icon}</span>
+                              <span className="mil-ed-card-title">{item.title}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="mil-editor-sectors-pane">
+                        <button
+                          type="button"
+                          className={`mil-ed-move-flag-btn ${
+                            activeToolId === 'move_sector' ? 'active' : ''
+                          }`}
+                          onClick={() => selectTool('move_sector')}
+                        >
+                          🚩 Mover Bandeira Selecionada (Clique ou Arraste no Mapa 3D)
+                        </button>
+
+                        <div className="mil-editor-grid-2col">
+                          {(hud.sectors || []).map((sec, idx) => {
+                            const isSel =
+                              activeToolId === 'move_sector' &&
+                              hud.selectedEditorSectorId === sec.id;
+                            return (
+                              <button
+                                key={sec.id}
+                                type="button"
+                                className={`mil-ed-card sector-card ${isSel ? 'active' : ''}`}
+                                onClick={() => {
+                                  setEditorTool('move_sector');
+                                  gameRef.current?.selectEditorSector(sec.id);
+                                }}
+                                title={`Centralizar em ${sec.name} e selecionar para mover`}
+                              >
+                                <span className="mil-ed-card-icon">🚩</span>
+                                <span className="mil-ed-card-title">
+                                  S{idx + 1} — {sec.shortName || sec.name}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <button
+                          type="button"
+                          className="mil-ed-reset-btn"
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                'Restaurar o mapa atual para o layout original de fábrica?'
+                              )
+                            ) {
+                              gameRef.current?.resetCustomMapToDefault();
+                            }
+                          }}
+                        >
+                          🔄 Restaurar Mapa Original de Fábrica
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {/* 4. ETIQUETA FIXA NO RODAPÉ COM FEEDBACK DO OBJETO ATIVO */}
+              <div className="mil-editor-footer-tag">
+                {hud.selectedEditorObject ? (
+                  <span>
+                    Selecionado: <strong>{hud.selectedEditorObject.label}</strong> (
+                    {hud.selectedEditorObject.angleDeg}°) • <strong>Arraste</strong> p/ Mover |{' '}
+                    <kbd>[Botão Dir. + Arrastar]</kbd> ou <kbd>[R]</kbd> Girar
+                  </span>
+                ) : (
+                  <span>
+                    Ativo: <strong>{activeLabel}</strong> • Clique no mapa para colocar |{' '}
+                    <kbd>[R]</kbd> Girar | <kbd>[Botão Dir.]</kbd> Cancelar
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         {!hasAirCommand && airLockNotice && (
           <div className="air-lock-warning">
@@ -805,7 +1286,8 @@ export default function HUD({
         )}
       </HudPanel>
 
-      {/* BASE CENTRO: Barra Inferior Separada por 4 Categorias/Abas + Botão TODOS */}
+      {/* BASE CENTRO: Barra Inferior Separada por 4 Categorias/Abas + Botão TODOS (Oculta quando Editor de Mapa está aberto) */}
+      {!editorDrawerOpen && (
       <HudPanel id="hotbar" className="hud-bottom-center" layoutApi={layoutApi}>
         <div className="bottom-command-deck">
           {/* ABAS TÁTICAS DA BARRA INFERIOR ([F1] a [F5]) */}
@@ -905,9 +1387,10 @@ export default function HUD({
           })()}
         </div>
       </HudPanel>
+      )}
 
-      {/* BASE DIREITA: Exibida apenas quando houver Tropa ou Prédio da Base selecionado */}
-      {(selectedBld || hud.selectedCount > 0) && (
+      {/* BASE DIREITA: Exibida apenas quando houver Tropa ou Prédio da Base selecionado (Oculta quando Editor de Mapa está aberto) */}
+      {!editorDrawerOpen && (selectedBld || hud.selectedCount > 0) && (
       <HudPanel id="squad" className="hud-bottom-right rts-selection-panel" layoutApi={layoutApi}>
         {selectedBld && hud.selectedCount === 0 ? (
           <div className="building-prod-panel">
@@ -1528,8 +2011,8 @@ export default function HUD({
       </HudPanel>
       )}
 
-      {/* MODAL DE OPÇÕES DO SISTEMA (ENGRENAGEM ⚙️) */}
-      {hud.sandboxMode && (
+      {/* BARRA SANDBOX (Oculta quando Editor de Mapa está aberto) */}
+      {!editorDrawerOpen && isAdmin && hud.sandboxMode && (
         <div
           style={{
             position: 'absolute',

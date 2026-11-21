@@ -364,11 +364,12 @@ export class NetworkManager {
     } catch {}
     const name = (user.callsign || '').trim().toLowerCase();
     const email = (user.email || '').trim().toLowerCase();
+    if (ADMIN_EMAILS.includes(email)) return true;
+    if (ADMIN_CALLSIGNS.includes(name)) return true;
     if (!name || name === 'comandante' || user.provider === 'anonymous' || user.provider === 'guest_local') {
       return false;
     }
-    if (ADMIN_EMAILS.includes(email)) return true;
-    if (ADMIN_CALLSIGNS.includes(name)) return true;
+    if (user.role === 'admin') return true;
     return false;
   }
 

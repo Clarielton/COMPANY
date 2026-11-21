@@ -1,6 +1,7 @@
 import { clamp, dist, randInt } from './core/math.js';
 import { Input } from './core/Input.js';
 import { AudioSystem } from './core/AudioSystem.js';
+import { networkManager } from './net/NetworkManager.js';
 import {
   COMMAND_ACTIONS,
   COMMAND_BY_ID,
@@ -199,6 +200,11 @@ export class Game {
     this.touchControlMode = 'select';
 
     this.intelRevealed = false;
+    this.spectatorMode = false;
+    this.directorCamActive = false;
+    this.spectatorHudHidden = false;
+    this._directorTarget = { x: 4800, y: 4800 };
+    this._directorSwitchTimer = 0;
     this.sandboxMode = false;
     this.sandboxFogDisabled = false;
     this.sandboxAiPaused = false;
@@ -753,6 +759,11 @@ export class Game {
     this.tacticalArrows = [];
     this.tacticalPings = [];
     this.intelRevealed = false;
+    this.spectatorMode = false;
+    this.directorCamActive = false;
+    this.spectatorHudHidden = false;
+    this._directorTarget = { x: 4800, y: 4800 };
+    this._directorSwitchTimer = 0;
     this.sandboxMode = false;
     this.sandboxFogDisabled = false;
     this.sandboxAiPaused = false;
@@ -866,6 +877,21 @@ export class Game {
         revealed: false,
       })
     );
+    if (Array.isArray(this.map.customTrenches)) {
+      for (const ct of this.map.customTrenches) {
+        if (Array.isArray(ct.points) && ct.points.length >= 2) {
+          this.trenches.push(
+            new TrenchSegment({
+              points: ct.points,
+              team: 'allies',
+              revealed: true,
+              openStart: Boolean(ct.openStart),
+              openEnd: Boolean(ct.openEnd),
+            })
+          );
+        }
+      }
+    }
 
     // 2. Barricadas Iniciais de Dentes de Dragão e Arame Farpado (fora das trincheiras)
     this.barricades.push(
@@ -1317,7 +1343,17 @@ export class Game {
     }
   }
 
+  isAdminUser() {
+    if (typeof window === 'undefined') return true; // Permite testes automatizados no Node.js
+    const nm = this.networkManager || networkManager;
+    return Boolean(nm?.isAdmin?.());
+  }
+
   enableSandboxMode() {
+    if (!this.isAdminUser()) {
+      this.notify('🔒 ACESSO RESTRITO', 'O Modo Sandbox é exclusivo para Administradores.', '#ef4444');
+      return false;
+    }
     this.sandboxMode = true;
     this.supplies = 99999;
     this.ammo = 99999;
@@ -1352,6 +1388,10 @@ export class Game {
   }
 
   toggleSandboxMode() {
+    if (!this.isAdminUser()) {
+      this.notify('🔒 ACESSO RESTRITO', 'O Modo Sandbox é exclusivo para Administradores.', '#ef4444');
+      return false;
+    }
     if (this.sandboxMode) {
       this.sandboxMode = false;
       this.notify('🛠️ MODO SANDBOX DESATIVADO', 'Regras normais de produção restauradas.', '#8c948c');
@@ -1543,6 +1583,744 @@ export class Game {
     this.map.updateFogOfWar(this.units, this.baseBuildings, 0.05);
     this._emitHud();
     return true;
+  }
+
+  setMapEditorOpen(isOpen, defaultTool = 'farmhouse', angleDeg = 0, scale = 1.0) {
+    const isLocal =
+      typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' ||
+        window.location.hostname === '127.0.0.1' ||
+        window.location.hostname.startsWith('192.168.'));
+    if (isOpen && !isLocal) {
+      this.notify('EDITOR RESTRITO AO MODO LOCAL', 'O Editor de Mapas só pode ser aberto em servidor local.', '#ef4444');
+      return false;
+    }
+    this.mapEditorOpen = Boolean(isOpen);
+    this._editorWallDragStart = null;
+    this._editorDraggingSector = null;
+    this._editorDraggingObject = false;
+    this._editorRotatingObject = false;
+    this.trenchPreview = null;
+    if (this.mapEditorOpen) {
+      if (this.timeScale > 0) this._preEditorTimeScale = this.timeScale;
+      this.timeScale = 0; // Pausa o jogo local automaticamente para editar apenas o mapa
+      this.setMapEditorTool(defaultTool, angleDeg, scale);
+      this.notify(
+        '🛠️ EDITOR DE MAPA ATIVO (HUD OCULTA & JOGO PAUSADO)',
+        'Coloque objetos, use [✋ Mover / Girar] para arrastar e clique direito + arraste (ou [R]) para virar o lado!',
+        '#d8b4fe'
+      );
+    } else {
+      this.selectedEditorSectorId = null;
+      this.selectedEditorObject = null;
+      this.setMapEditorTool(null);
+      this.timeScale = this._preEditorTimeScale || 1.0;
+    }
+    this._emitHud();
+  }
+
+  _findEditorObjectAt(x, y) {
+    if (!this.map) return null;
+    // 1. Construções
+    for (let i = (this.map.structures || []).length - 1; i >= 0; i--) {
+      const s = this.map.structures[i];
+      if (dist(x, y, s.x, s.y) <= Math.max(72, Math.max(s.w || 80, s.d || 80) * 0.72)) {
+        return { kind: 'structure', id: s.id, item: s, label: s.name || s.type || 'Construção' };
+      }
+    }
+    // 2. Carcaças
+    for (let i = (this.map.wrecks || []).length - 1; i >= 0; i--) {
+      const w = this.map.wrecks[i];
+      if (dist(x, y, w.x, w.y) <= 64) {
+        return { kind: 'wreck', id: w.id, item: w, label: w.name || 'Carcaça' };
+      }
+    }
+    // 3. Muros
+    for (let i = (this.map.stoneWalls || []).length - 1; i >= 0; i--) {
+      const w = this.map.stoneWalls[i];
+      if (this.map._distToSegment(x, y, w.x1, w.y1, w.x2, w.y2) <= 46) {
+        return {
+          kind: 'wall',
+          id: w.id,
+          item: w,
+          label: w.type === 'fortified' ? 'Muralha' : w.type === 'brick' ? 'Muro de Tijolo' : 'Muro',
+        };
+      }
+    }
+    // 4. Árvores (converte InstancedMesh em malha editável se ainda não tiver _editorId)
+    let bestT = null;
+    let bestTD = 58;
+    for (const t of this.map.trees || []) {
+      const d = dist(x, y, t.x, t.y);
+      if (d <= bestTD) {
+        bestTD = d;
+        bestT = t;
+      }
+    }
+    if (bestT) {
+      if (!bestT._editorId) {
+        bestT._editorId = `ed_tree_${Date.now()}_${Math.floor(Math.random() * 999)}`;
+        this.renderer?.hideInstancedTree?.(bestT);
+        const kind = bestT.isBurnt ? 'tree_burnt' : bestT.isPine ? 'tree_pine' : 'tree_oak';
+        this.renderer?.addEditorFoliage?.(bestT, kind, this.map);
+      }
+      return { kind: 'foliage', id: bestT._editorId, item: bestT, label: 'Árvore' };
+    }
+    // 5. Arbustos
+    let bestB = null;
+    let bestBD = 52;
+    for (const b of this.map.bushes || []) {
+      const d = dist(x, y, b.x, b.y);
+      if (d <= bestBD) {
+        bestBD = d;
+        bestB = b;
+      }
+    }
+    if (bestB) {
+      if (!bestB._editorId) {
+        bestB._editorId = `ed_bush_${Date.now()}_${Math.floor(Math.random() * 999)}`;
+        this.renderer?.hideInstancedBush?.(bestB);
+        this.renderer?.addEditorFoliage?.(bestB, 'bush', this.map);
+      }
+      return { kind: 'foliage', id: bestB._editorId, item: bestB, label: 'Arbusto' };
+    }
+    // 6. Crateras / Rochas colocadas no editor
+    for (let i = (this.map.craters || []).length - 1; i >= 0; i--) {
+      const c = this.map.craters[i];
+      if (c._editorId && dist(x, y, c.x, c.y) <= (c.radius || 44) + 16) {
+        return { kind: 'foliage', id: c._editorId, item: c, label: 'Rochas / Cratera' };
+      }
+    }
+    return null;
+  }
+
+  moveSelectedEditorObject(nx, ny, syncColliders = false) {
+    const sel = this.selectedEditorObject;
+    if (!sel || !sel.item || !this.map) return;
+    const x = clamp(Math.round(nx), 160, BATTLEFIELD_SIZE - 160);
+    const y = clamp(Math.round(ny), 160, BATTLEFIELD_SIZE - 160);
+    const it = sel.item;
+    if (sel.kind === 'wall') {
+      const cx = (it.x1 + it.x2) * 0.5;
+      const cy = (it.y1 + it.y2) * 0.5;
+      const dx = x - cx;
+      const dy = y - cy;
+      it.x1 = Math.round(it.x1 + dx);
+      it.y1 = Math.round(it.y1 + dy);
+      it.x2 = Math.round(it.x2 + dx);
+      it.y2 = Math.round(it.y2 + dy);
+    } else {
+      it.x = x;
+      it.y = y;
+    }
+    this.renderer?.updateEditorObjectTransform?.(sel, this.map);
+    if (syncColliders) {
+      this.map.syncAllColliders?.(this.baseBuildings);
+      if (this.map._navGrids) this.map._navGrids = {};
+    }
+  }
+
+  setSelectedEditorObjectAngle(angRad, syncColliders = true) {
+    const sel = this.selectedEditorObject;
+    if (!sel || !sel.item || !this.map) return;
+    const norm = ((angRad % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    const it = sel.item;
+    if (sel.kind === 'wall') {
+      const cx = (it.x1 + it.x2) * 0.5;
+      const cy = (it.y1 + it.y2) * 0.5;
+      const halfLen = Math.max(20, Math.hypot(it.x2 - it.x1, it.y2 - it.y1) * 0.5);
+      it.x1 = Math.round(cx - Math.cos(norm) * halfLen);
+      it.y1 = Math.round(cy - Math.sin(norm) * halfLen);
+      it.x2 = Math.round(cx + Math.cos(norm) * halfLen);
+      it.y2 = Math.round(cy + Math.sin(norm) * halfLen);
+      it.angle = norm;
+    } else {
+      it.angle = norm;
+    }
+    this.mapEditorAngle = norm;
+    this.renderer?.updateEditorObjectTransform?.(sel, this.map);
+    if (syncColliders) {
+      this.map.syncAllColliders?.(this.baseBuildings);
+      if (this.map._navGrids) this.map._navGrids = {};
+    }
+  }
+
+  selectEditorSector(sectorId) {
+    this.selectedEditorSectorId = sectorId || null;
+    this.setMapEditorTool('move_sector');
+    const sec = (this.map?.sectors || []).find((s) => s.id === sectorId);
+    if (sec) {
+      this.camera.x = clamp(sec.x, 300, BATTLEFIELD_SIZE - 300);
+      this.camera.y = clamp(sec.y, 300, BATTLEFIELD_SIZE - 300);
+      this.spawnText(sec.x, sec.y - 24, `🚩 ${(sec.shortName || sec.name).toUpperCase()} SELECIONADO`, '#facc15');
+    }
+    this._emitHud();
+  }
+
+  _placeEditorWallSegment(x1, y1, x2, y2, tool) {
+    if (tool === 'trench_line') {
+      const rawPts = [
+        { x: Math.round(x1), y: Math.round(y1) },
+        { x: Math.round(x2), y: Math.round(y2) },
+      ];
+      const newTrench = new TrenchSegment({
+        points: rawPts,
+        team: 'allies',
+        isLShape: false,
+        revealed: true,
+      });
+      this._connectTrenchToNetwork?.(newTrench);
+      this.trenches.push(newTrench);
+      if (this.map) {
+        if (!Array.isArray(this.map.customTrenches)) this.map.customTrenches = [];
+        this.map.customTrenches.push({
+          points: (newTrench.points || rawPts).map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+          openStart: Boolean(newTrench.openStart),
+          openEnd: Boolean(newTrench.openEnd),
+        });
+      }
+      this.audio?.play?.('pickup');
+      this.spawnText((x1 + x2) * 0.5, (y1 + y2) * 0.5 - 18, '⛏️ TRINCHEIRA CONECTADA ADICIONADA', '#4ade80');
+      this._emitHud();
+      return;
+    }
+
+    const typeMap = {
+      fortified_wall: 'fortified',
+      brick_wall: 'brick',
+      stone_wall: 'stone',
+      sandbag_line: 'sandbag',
+      tank_trap_line: 'tank_trap',
+    };
+    const newWall = {
+      id: `ed_wall_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+      x1: Math.round(x1),
+      y1: Math.round(y1),
+      x2: Math.round(x2),
+      y2: Math.round(y2),
+      type: typeMap[tool] || 'stone',
+      height: tool === 'fortified_wall' ? 42 : tool === 'sandbag_line' ? 10 : 14,
+      thickness: tool === 'fortified_wall' ? 20 : 18,
+    };
+    this.map.stoneWalls.push(newWall);
+    this.map.syncAllColliders?.(this.baseBuildings);
+    if (this.map._navGrids) this.map._navGrids = {};
+    this.renderer?.addEditorStoneWall?.(newWall, this.map);
+    this.audio?.play?.('pickup');
+    const midX = (x1 + x2) * 0.5;
+    const midY = (y1 + y2) * 0.5;
+    const label =
+      tool === 'fortified_wall'
+        ? '🏰 MURALHA DE CONCRETO ADICIONADA'
+        : tool === 'brick_wall'
+        ? '🧱 MURO DE TIJOLO ADICIONADO'
+        : tool === 'sandbag_line'
+        ? '🛡️ SACOS DE AREIA ADICIONADOS'
+        : tool === 'tank_trap_line'
+        ? '✖️ OURIÇOS ANTITANQUE ADICIONADOS'
+        : '🧱 MURO DE PEDRA ADICIONADO';
+    this.selectedEditorObject = {
+      kind: 'wall',
+      id: newWall.id,
+      item: newWall,
+      label:
+        tool === 'fortified_wall'
+          ? 'Muralha'
+          : tool === 'brick_wall'
+          ? 'Muro de Tijolo'
+          : 'Muro',
+    };
+    this.spawnText(midX, midY - 18, label, '#4ade80');
+    this._emitHud();
+  }
+
+  adjustEditorZoom(delta) {
+    const minZ = this.mapEditorOpen ? 180 : 340;
+    const maxZ = this.mapEditorOpen ? 3800 : 1020;
+    this.camera.zoom = clamp(this.camera.zoom + delta, minZ, maxZ);
+    this._emitHud();
+  }
+
+  setEditorOverviewZoom() {
+    this.camera.zoom = 2600;
+    this.camera.x = BATTLEFIELD_SIZE * 0.5;
+    this.camera.y = BATTLEFIELD_SIZE * 0.5;
+    this._emitHud();
+  }
+
+  setMapEditorTool(tool, angleDeg = null, scale = null) {
+    if (typeof angleDeg === 'number') {
+      const normDeg = ((angleDeg % 360) + 360) % 360;
+      this.mapEditorAngle = (normDeg * Math.PI) / 180;
+    }
+    if (typeof scale === 'number') this.mapEditorScale = clamp(scale, 0.5, 2.2);
+    this.mapEditorTool = tool || null;
+    this.activeCommandMode = tool ? 'map_editor' : null;
+    if (tool) {
+      this.mapEditorOpen = true;
+      if (this.timeScale > 0) {
+        this._preEditorTimeScale = this.timeScale;
+        this.timeScale = 0;
+      }
+    }
+    this._emitHud();
+  }
+
+  rotateMapEditorAngle(deltaDeg = 45) {
+    const baseRad =
+      this.selectedEditorObject && typeof this.selectedEditorObject.item?.angle === 'number'
+        ? this.selectedEditorObject.item.angle
+        : this.mapEditorAngle || 0;
+    const curDeg = Math.round((baseRad * 180) / Math.PI);
+    const nextDeg = (((curDeg + deltaDeg) % 360) + 360) % 360;
+    const nextRad = (nextDeg * Math.PI) / 180;
+    this.mapEditorAngle = nextRad;
+    if (this.selectedEditorObject) {
+      this.setSelectedEditorObjectAngle(nextRad, true);
+    }
+    this._emitHud();
+    return nextDeg;
+  }
+
+  _eraseSingleObjectAt(x, y, searchMult = 1.0) {
+    let removedLabel = null;
+    // 1. Construções existentes ou novas do mapa
+    const sIdx = (this.map.structures || []).findIndex(
+      (s) => dist(x, y, s.x, s.y) <= Math.max(95, Math.max(s.w || 80, s.d || 80) * 0.92) * searchMult
+    );
+    if (sIdx >= 0) {
+      const rem = this.map.structures.splice(sIdx, 1)[0];
+      this.renderer?.removeEditorStructure?.(rem.id);
+      removedLabel = rem.name || rem.type || 'Construção';
+    }
+    // 2. Carcaças existentes ou novas
+    if (!removedLabel) {
+      const wIdx = (this.map.wrecks || []).findIndex((w) => dist(x, y, w.x, w.y) <= 78 * searchMult);
+      if (wIdx >= 0) {
+        const remW = this.map.wrecks.splice(wIdx, 1)[0];
+        this.renderer?.removeEditorWreck?.(remW.id);
+        removedLabel = remW.name || 'Carcaça';
+      }
+    }
+    // 3. Muros de pedra/tijolo existentes do mapa
+    if (!removedLabel) {
+      const swIdx = (this.map.stoneWalls || []).findIndex(
+        (w) => this.map._distToSegment(x, y, w.x1, w.y1, w.x2, w.y2) <= 55 * searchMult
+      );
+      if (swIdx >= 0) {
+        const remSw = this.map.stoneWalls.splice(swIdx, 1)[0];
+        this.renderer?.removeEditorStoneWall?.(remSw.id);
+        removedLabel = 'Muro de Pedra';
+      }
+    }
+    // 4. Trincheiras existentes
+    if (!removedLabel) {
+      const trIdx = (this.trenches || []).findIndex((tr) => tr.containsPoint(x, y, 42 * searchMult));
+      if (trIdx >= 0) {
+        this.trenches.splice(trIdx, 1);
+        removedLabel = 'Trincheira';
+      }
+    }
+    // 5. Muralhas fortificadas ou barricadas
+    if (!removedLabel) {
+      const fwIdx = (this.fortifiedWalls || []).findIndex((fw) => fw.containsPoint(x, y, 42 * searchMult));
+      if (fwIdx >= 0) {
+        this.fortifiedWalls.splice(fwIdx, 1);
+        removedLabel = 'Muralha';
+      }
+    }
+    if (!removedLabel) {
+      const barIdx = (this.barricades || []).findIndex((b) => b.containsPoint(x, y, 42 * searchMult));
+      if (barIdx >= 0) {
+        this.barricades.splice(barIdx, 1);
+        removedLabel = 'Barricada';
+      }
+    }
+    // 6. Árvores existentes (InstancedMesh) ou adicionadas no editor
+    if (!removedLabel) {
+      let bestT = -1;
+      let bestTD = 72 * searchMult;
+      for (let i = 0; i < (this.map.trees || []).length; i++) {
+        const t = this.map.trees[i];
+        const d = dist(x, y, t.x, t.y);
+        if (d <= bestTD) {
+          bestTD = d;
+          bestT = i;
+        }
+      }
+      if (bestT >= 0) {
+        const remT = this.map.trees.splice(bestT, 1)[0];
+        if (remT._editorId) this.renderer?.removeEditorFoliage?.(remT._editorId);
+        this.renderer?.hideInstancedTree?.(remT);
+        removedLabel = 'Árvore';
+      }
+    }
+    // 7. Arbustos existentes (InstancedMesh) ou adicionados no editor
+    if (!removedLabel) {
+      let bestB = -1;
+      let bestBD = 68 * searchMult;
+      for (let i = 0; i < (this.map.bushes || []).length; i++) {
+        const b = this.map.bushes[i];
+        const d = dist(x, y, b.x, b.y);
+        if (d <= bestBD) {
+          bestBD = d;
+          bestB = i;
+        }
+      }
+      if (bestB >= 0) {
+        const remB = this.map.bushes.splice(bestB, 1)[0];
+        if (remB._editorId) this.renderer?.removeEditorFoliage?.(remB._editorId);
+        this.renderer?.hideInstancedBush?.(remB);
+        removedLabel = 'Arbusto';
+      }
+    }
+    return removedLabel;
+  }
+
+  _placeEditorForestArea(cx, cy, radius = 180) {
+    if (!this.map) return;
+    const x = clamp(Math.round(cx), 200, BATTLEFIELD_SIZE - 200);
+    const y = clamp(Math.round(cy), 200, BATTLEFIELD_SIZE - 200);
+    const r = clamp(Math.round(radius), 90, 520);
+    const sc = this.mapEditorScale || 1.0;
+
+    if (!Array.isArray(this.map.forestZones)) this.map.forestZones = [];
+    this.map.forestZones.push({
+      id: `ed_fz_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+      x,
+      y,
+      radius: r,
+      name: 'Bosque Customizado',
+    });
+
+    const treeCount = Math.max(8, Math.min(48, Math.round(r / 11)));
+    const placedTrees = [];
+    for (let i = 0; i < treeCount; i++) {
+      const ang = (i / treeCount) * Math.PI * 2 + Math.random() * 0.65;
+      const distR = (0.14 + Math.sqrt(Math.random()) * 0.82) * r;
+      const tx = clamp(Math.round(x + Math.cos(ang) * distR), 180, BATTLEFIELD_SIZE - 180);
+      const ty = clamp(Math.round(y + Math.sin(ang) * distR), 180, BATTLEFIELD_SIZE - 180);
+      if (this.map.isOnRoad?.(tx, ty, 32)) continue;
+      if (placedTrees.some((pt) => dist(tx, ty, pt.x, pt.y) < 38)) continue;
+
+      const isPine = Math.random() < 0.6;
+      const newTree = {
+        _editorId: `ed_tree_${Date.now()}_${i}_${Math.floor(Math.random() * 999)}`,
+        x: tx,
+        y: ty,
+        angle: Number((Math.random() * Math.PI * 2).toFixed(2)),
+        scale: Number(((0.92 + Math.random() * 0.45) * sc).toFixed(2)),
+        foliageTone: Number(Math.random().toFixed(2)),
+        isPine,
+        isBurnt: false,
+      };
+      placedTrees.push(newTree);
+      this.map.trees.push(newTree);
+      this.renderer?.addEditorFoliage?.(newTree, isPine ? 'tree_pine' : 'tree_oak', this.map);
+    }
+
+    const bushCount = Math.max(4, Math.round(treeCount * 0.45));
+    for (let b = 0; b < bushCount; b++) {
+      const ang = Math.random() * Math.PI * 2;
+      const distR = Math.random() * r * 0.92;
+      const bx = clamp(Math.round(x + Math.cos(ang) * distR), 180, BATTLEFIELD_SIZE - 180);
+      const by = clamp(Math.round(y + Math.sin(ang) * distR), 180, BATTLEFIELD_SIZE - 180);
+      if (this.map.isOnRoad?.(bx, by, 26)) continue;
+      const newBush = {
+        _editorId: `ed_bush_${Date.now()}_${b}_${Math.floor(Math.random() * 999)}`,
+        x: bx,
+        y: by,
+        angle: Number((Math.random() * Math.PI * 2).toFixed(2)),
+        scale: Number(((0.95 + Math.random() * 0.4) * sc).toFixed(2)),
+      };
+      this.map.bushes.push(newBush);
+      this.renderer?.addEditorFoliage?.(newBush, 'bush', this.map);
+    }
+
+    this.map.syncAllColliders?.(this.baseBuildings);
+    if (this.map._navGrids) this.map._navGrids = {};
+    this.audio?.play?.('pickup');
+    this.spawnText(
+      x,
+      y - 22,
+      `🌲 ÁREA DE FLORESTA CRIADA (+${placedTrees.length} ÁRVORES)`,
+      '#4ade80'
+    );
+    this._emitHud();
+  }
+
+  _applyMapEditorClick(wx, wy) {
+    if (!this.map || !this.mapEditorTool) return;
+    const x = clamp(Math.round(wx), 160, BATTLEFIELD_SIZE - 160);
+    const y = clamp(Math.round(wy), 160, BATTLEFIELD_SIZE - 160);
+    const tool = this.mapEditorTool;
+    const ang = this.mapEditorAngle || 0;
+    const sc = this.mapEditorScale || 1.0;
+
+    if (tool === 'eraser' || tool === 'eraser_area') {
+      if (tool === 'eraser_area') {
+        let count = 0;
+        for (let k = 0; k < 25; k++) {
+          const hit = this._eraseSingleObjectAt(x, y, 2.6);
+          if (!hit) break;
+          count++;
+        }
+        if (count > 0) {
+          this.map.syncAllColliders?.(this.baseBuildings);
+          if (this.map._navGrids) this.map._navGrids = {};
+          this.audio?.play?.('door');
+          this.spawnText(x, y - 16, `🗑️ ${count} ITEM(NS) REMOVIDO(S) NA ÁREA`, '#ef4444');
+        } else {
+          this.spawnText(x, y - 16, 'Nenhum item encontrado nesta área', '#94a3b8');
+        }
+        return;
+      }
+
+      const removedLabel = this._eraseSingleObjectAt(x, y, 1.0);
+      if (removedLabel) {
+        this.map.syncAllColliders?.(this.baseBuildings);
+        if (this.map._navGrids) this.map._navGrids = {};
+        this.audio?.play?.('door');
+        this.spawnText(x, y - 16, `🗑️ ${removedLabel.toUpperCase()} REMOVIDO`, '#ef4444');
+      } else {
+        this.spawnText(x, y - 16, 'Nenhum objeto próximo para remover', '#94a3b8');
+      }
+      return;
+    }
+
+    const bldPresets = {
+      farmhouse: { name: 'Casa Rural', type: 'farmhouse', w: 86, d: 64, h: 36, garrisonable: true },
+      two_story: { name: 'Sobrado Urbano (2 Andares)', type: 'two_story', w: 94, d: 72, h: 52, garrisonable: true },
+      barn: { name: 'Celeiro Rural', type: 'barn', w: 104, d: 74, h: 42, garrisonable: true },
+      warehouse: { name: 'Galpão Industrial', type: 'warehouse', w: 118, d: 78, h: 44, garrisonable: true },
+      brick_ruin: { name: 'Ruína de Tijolo', type: 'brick_ruin', w: 88, d: 68, h: 36, garrisonable: true },
+      bunker: { name: 'Bunker de Concreto', type: 'bunker', w: 76, d: 68, h: 28, garrisonable: true },
+      adobe_house: { name: 'Complexo Adobe', type: 'adobe_house', w: 92, d: 72, h: 38, garrisonable: true },
+    };
+
+    if (bldPresets[tool]) {
+      const p = bldPresets[tool];
+      const w = Math.round(p.w * sc);
+      const d = Math.round(p.d * sc);
+      const h = Math.round(p.h * sc);
+      const newStruct = {
+        id: `ed_bld_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+        name: p.name,
+        type: p.type,
+        x,
+        y,
+        w,
+        d,
+        h,
+        angle: ang,
+        garrisonable: p.garrisonable,
+        garrisonUnitId: null,
+        garrisonTeam: null,
+        coverRadius: Math.round(Math.max(w, d) * 0.92),
+      };
+      this.map.structures.push(newStruct);
+      this.map.syncAllColliders?.(this.baseBuildings);
+      if (this.map._navGrids) this.map._navGrids = {};
+      this.renderer?.addEditorStructure?.(newStruct, this.map);
+      this.selectedEditorObject = { kind: 'structure', id: newStruct.id, item: newStruct, label: p.name };
+      this.audio?.play?.('pickup');
+      this.spawnText(x, y - 20, `🏗️ ${p.name.toUpperCase()} ADICIONADO`, '#4ade80');
+      this._emitHud();
+      return;
+    }
+
+    if (tool === 'tree_pine' || tool === 'tree_oak' || tool === 'tree_burnt') {
+      const newTree = {
+        _editorId: `ed_tree_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+        x,
+        y,
+        angle: ang,
+        scale: Number((1.15 * sc).toFixed(2)),
+        foliageTone: Number(Math.random().toFixed(2)),
+        isPine: tool === 'tree_pine',
+        isBurnt: tool === 'tree_burnt',
+      };
+      this.map.trees.push(newTree);
+      this.renderer?.addEditorFoliage?.(newTree, tool, this.map);
+      this.selectedEditorObject = { kind: 'foliage', id: newTree._editorId, item: newTree, label: 'Árvore' };
+      this.audio?.play?.('pickup');
+      const treeMsg =
+        tool === 'tree_pine'
+          ? '🌲 PINHEIRO PLANTADO'
+          : tool === 'tree_burnt'
+          ? '🪵 ÁRVORE QUEIMADA ADICIONADA'
+          : '🌳 CARVALHO PLANTADO';
+      this.spawnText(x, y - 16, treeMsg, '#4ade80');
+      this._emitHud();
+      return;
+    }
+
+    if (tool === 'crater_rock') {
+      const newCrater = {
+        _editorId: `ed_rock_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+        x,
+        y,
+        angle: ang,
+        radius: Math.round(44 * sc),
+        scale: Number(sc.toFixed(2)),
+      };
+      this.map.craters.push(newCrater);
+      this.renderer?.addEditorFoliage?.(newCrater, 'crater_rock', this.map);
+      this.selectedEditorObject = { kind: 'foliage', id: newCrater._editorId, item: newCrater, label: 'Rochas / Cratera' };
+      this.audio?.play?.('pickup');
+      this.spawnText(x, y - 16, '🪨 ROCHAS / CRATERA ADICIONADA', '#a3be8c');
+      this._emitHud();
+      return;
+    }
+
+    if (tool === 'forest_area') {
+      this._placeEditorForestArea(x, y, Math.round(180 * sc));
+      return;
+    }
+
+    if (tool === 'bush') {
+      const newBush = {
+        _editorId: `ed_bush_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+        x,
+        y,
+        angle: ang,
+        scale: Number((1.1 * sc).toFixed(2)),
+      };
+      this.map.bushes.push(newBush);
+      this.renderer?.addEditorFoliage?.(newBush, 'bush', this.map);
+      this.selectedEditorObject = { kind: 'foliage', id: newBush._editorId, item: newBush, label: 'Arbusto' };
+      this.audio?.play?.('pickup');
+      this.spawnText(x, y - 16, '🌿 ARBUSTO / BOCAGE ADICIONADO', '#4ade80');
+      this._emitHud();
+      return;
+    }
+
+    if (tool === 'move_sector') {
+      const sectors = this.map.sectors || [];
+      let hitSec = null;
+      let bestD = 220;
+      for (const s of sectors) {
+        const d = dist(x, y, s.x, s.y);
+        if (d <= bestD) {
+          bestD = d;
+          hitSec = s;
+        }
+      }
+      if (hitSec && this.selectedEditorSectorId !== hitSec.id) {
+        this.selectedEditorSectorId = hitSec.id;
+        this.audio?.play?.('switch');
+        this.spawnText(
+          hitSec.x,
+          hitSec.y - 24,
+          `🚩 ${(hitSec.shortName || hitSec.name).toUpperCase()} SELECIONADO — CLIQUE NO NOVO LOCAL!`,
+          '#facc15'
+        );
+        this._emitHud();
+        return;
+      }
+      const targetSec =
+        sectors.find((s) => s.id === this.selectedEditorSectorId) || hitSec || sectors[0];
+      if (targetSec) {
+        targetSec.x = x;
+        targetSec.y = y;
+        this.selectedEditorSectorId = targetSec.id;
+        this.renderer?.moveEditorSector?.(targetSec, this.map);
+        this.audio?.play?.('pickup');
+        this.spawnText(
+          x,
+          y - 24,
+          `🚩 ${(targetSec.shortName || targetSec.name).toUpperCase()} MOVIDO PARA AQUI!`,
+          '#4ade80'
+        );
+        this._emitHud();
+      }
+      return;
+    }
+
+    if (
+      tool === 'stone_wall' ||
+      tool === 'brick_wall' ||
+      tool === 'fortified_wall' ||
+      tool === 'trench_line' ||
+      tool === 'sandbag_line' ||
+      tool === 'tank_trap_line'
+    ) {
+      const halfLen = Math.round(75 * sc);
+      const dx = Math.cos(ang) * halfLen;
+      const dy = Math.sin(ang) * halfLen;
+      this._placeEditorWallSegment(x - dx, y - dy, x + dx, y + dy, tool);
+      return;
+    }
+
+    if (tool === 'wreck_tank' || tool === 'wreck_truck') {
+      const isTank = tool === 'wreck_tank';
+      const newWreck = {
+        id: `ed_wrk_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+        type: isTank ? 'tank' : 'truck',
+        x,
+        y,
+        angle: ang,
+        smoke: true,
+        radius: isTank ? 56 : 54,
+        colRadius: isTank ? 30 : 28,
+        name: isTank ? 'Tanque Destruído' : 'Caminhão Militar Queimado',
+      };
+      this.map.wrecks.push(newWreck);
+      this.map.syncAllColliders?.(this.baseBuildings);
+      if (this.map._navGrids) this.map._navGrids = {};
+      this.renderer?.addEditorWreck?.(newWreck, this.map);
+      this.selectedEditorObject = { kind: 'wreck', id: newWreck.id, item: newWreck, label: newWreck.name };
+      this.audio?.play?.('pickup');
+      this.spawnText(x, y - 16, isTank ? '💥 TANQUE DESTRUÍDO ADICIONADO' : '🚛 CAMINHÃO QUEIMADO ADICIONADO', '#f59e0b');
+      this._emitHud();
+    }
+  }
+
+  async saveCustomMapForDeploy() {
+    if (!this.map) return { ok: false };
+    const payload = this.map.exportCustomMapPayload();
+    try {
+      localStorage.setItem(`COF_CUSTOM_MAP_${this.map.mapId}`, JSON.stringify(payload));
+    } catch {}
+    try {
+      const res = await fetch('/api/save-custom-map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapId: this.map.mapId, data: payload }),
+      });
+      const json = await res.json();
+      if (json.ok) {
+        this.notify(
+          '💾 MAPA SALVO NO PROJETO (PRONTO P/ DEPLOY)!',
+          `Gravado em src/game/data/customMaps.json (${this.map.mapId}). Quando fizer deploy, o mapa já sobe atualizado!`,
+          '#4ade80'
+        );
+        return { ok: true, file: json.file };
+      }
+    } catch {}
+    this.notify(
+      '💾 MAPA SALVO LOCALMENTE',
+      'Layout salvo no navegador. Em modo npm run dev ele também grava automaticamente em src/game/data/customMaps.json.',
+      '#38bdf8'
+    );
+    return { ok: true, localOnly: true };
+  }
+
+  async resetCustomMapToDefault() {
+    if (!this.map) return;
+    const mapId = this.map.mapId;
+    try {
+      localStorage.removeItem(`COF_CUSTOM_MAP_${mapId}`);
+    } catch {}
+    try {
+      await fetch('/api/save-custom-map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapId, reset: true }),
+      });
+    } catch {}
+    this.setupMatch(this.gameMode, this.startingResourcesPreset, mapId, this.aiDifficulty);
+    this.notify('🔄 MAPA ORIGINAL RESTAURADO', `O mapa ${mapId} voltou ao layout original.`, '#fbbf24');
   }
 
   getOutpostPlacementStatus(wx, wy, team = 'allies') {
@@ -2393,15 +3171,66 @@ export class Game {
   start() {
     this.resize();
     this.lastTs = performance.now();
+
+    const stepSimulation = (now) => {
+      let elapsed = (now - this.lastTs) / 1000;
+      if (!Number.isFinite(elapsed) || elapsed < 0) elapsed = 0;
+      this.lastTs = now;
+      // Limita o catch-up acumulado e divide em passos seguros de <= 0.05s para física estável
+      let remaining = Math.min(0.25, elapsed);
+      let lastDt = Math.min(0.05, remaining || 0.016);
+      while (remaining > 0.0001) {
+        const stepDt = Math.min(0.05, remaining);
+        this.update(stepDt);
+        lastDt = stepDt;
+        remaining -= stepDt;
+      }
+      return lastDt;
+    };
+
     const tick = (ts) => {
-      const dt = Math.min(0.05, (ts - this.lastTs) / 1000);
-      this.lastTs = ts;
-      this.update(dt);
+      if (typeof document !== 'undefined' && document.hidden) {
+        this.rafId = requestAnimationFrame(tick);
+        return;
+      }
+      const dt = stepSimulation(ts);
       this.renderer?.render(this, dt);
       this.input.endFrame();
       this.rafId = requestAnimationFrame(tick);
     };
     this.rafId = requestAnimationFrame(tick);
+
+    // Hybrid RAF + Web Worker Heartbeat (20 ticks/s): mantém simulação e rede ativas com aba minimizada/oculta
+    if (typeof window !== 'undefined' && typeof Worker !== 'undefined' && typeof Blob !== 'undefined' && !this._bgWorker) {
+      try {
+        const workerCode = `
+          let timer = null;
+          self.onmessage = function(e) {
+            if (e.data === 'start') {
+              if (!timer) timer = setInterval(function() { self.postMessage('tick'); }, 50);
+            } else if (e.data === 'stop') {
+              if (timer) { clearInterval(timer); timer = null; }
+            }
+          };
+        `;
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        const workerUrl = URL.createObjectURL(blob);
+        this._bgWorker = new Worker(workerUrl);
+        this._bgWorker.onmessage = () => {
+          if (typeof document !== 'undefined' && document.hidden) {
+            stepSimulation(performance.now());
+            this.input.endFrame();
+          }
+        };
+        this._bgWorker.postMessage('start');
+
+        document.addEventListener('visibilitychange', () => {
+          this.lastTs = performance.now();
+        });
+      } catch (err) {
+        console.warn('Background worker fallback:', err);
+      }
+    }
   }
 
   resize() {
@@ -3623,18 +4452,170 @@ export class Game {
     this._emitHud();
   }
 
+  _snapTrenchPoint(wx, wy, snapDist = 38) {
+    let best = null;
+    let bestD = snapDist;
+    for (const tr of this.trenches || []) {
+      for (let i = 0; i < (tr.points?.length || 0); i++) {
+        const p = tr.points[i];
+        const d = dist(wx, wy, p.x, p.y);
+        if (d <= bestD) {
+          bestD = d;
+          best = { x: p.x, y: p.y, trench: tr, pointIndex: i };
+        }
+      }
+    }
+    return best;
+  }
+
+  _connectTrenchToNetwork(newTrench, snapDist = 40) {
+    if (!newTrench?.points || newTrench.points.length < 2) return;
+    const startPt = newTrench.points[0];
+    const endPt = newTrench.points[newTrench.points.length - 1];
+    for (const tr of this.trenches || []) {
+      if (tr.id === newTrench.id || !tr.points || tr.points.length < 2) continue;
+      const oStart = tr.points[0];
+      const oEnd = tr.points[tr.points.length - 1];
+      let touched = false;
+      if (dist(startPt.x, startPt.y, oStart.x, oStart.y) <= snapDist) {
+        newTrench.openStart = true;
+        tr.openStart = true;
+        touched = true;
+      }
+      if (dist(startPt.x, startPt.y, oEnd.x, oEnd.y) <= snapDist) {
+        newTrench.openStart = true;
+        tr.openEnd = true;
+        touched = true;
+      }
+      if (dist(endPt.x, endPt.y, oStart.x, oStart.y) <= snapDist) {
+        newTrench.openEnd = true;
+        tr.openStart = true;
+        touched = true;
+      }
+      if (dist(endPt.x, endPt.y, oEnd.x, oEnd.y) <= snapDist) {
+        newTrench.openEnd = true;
+        tr.openEnd = true;
+        touched = true;
+      }
+      if (!touched && tr.containsPoint(startPt.x, startPt.y, 18)) {
+        newTrench.openStart = true;
+        touched = true;
+      }
+      if (!touched && tr.containsPoint(endPt.x, endPt.y, 18)) {
+        newTrench.openEnd = true;
+        touched = true;
+      }
+      if (touched) {
+        tr._meshVersion = (tr._meshVersion || 1) + 1;
+      }
+    }
+  }
+
+  // Calcula rota interna nó-a-nó pelo eixo central das trincheiras conectadas
+  findTrenchNetworkPath(startX, startY, endX, endY) {
+    if (!this.trenches || this.trenches.length === 0) return null;
+    const destTrench = this.trenches.find((tr) => tr.containsPoint(endX, endY, 20));
+    if (!destTrench) return null;
+
+    // Constrói grafo dos vértices de todas as trincheiras
+    const nodes = [];
+    const edges = [];
+    const addNode = (x, y, trenchId) => {
+      for (let i = 0; i < nodes.length; i++) {
+        if (dist(nodes[i].x, nodes[i].y, x, y) <= 42) return i;
+      }
+      const idx = nodes.length;
+      nodes.push({ x, y, trenchId });
+      edges.push([]);
+      return idx;
+    };
+
+    for (const tr of this.trenches) {
+      if (!tr.points || tr.points.length < 2) continue;
+      let prevIdx = -1;
+      for (const p of tr.points) {
+        const curIdx = addNode(p.x, p.y, tr.id);
+        if (prevIdx !== -1 && prevIdx !== curIdx) {
+          const w = dist(nodes[prevIdx].x, nodes[prevIdx].y, nodes[curIdx].x, nodes[curIdx].y);
+          edges[prevIdx].push({ to: curIdx, cost: w });
+          edges[curIdx].push({ to: prevIdx, cost: w });
+        }
+        prevIdx = curIdx;
+      }
+    }
+    if (nodes.length === 0) return null;
+
+    // Encontra o nó de entrada mais próximo do esquadrão e o nó mais próximo do destino
+    let startNode = 0;
+    let bestStartD = Infinity;
+    let goalNode = 0;
+    let bestGoalD = Infinity;
+    for (let i = 0; i < nodes.length; i++) {
+      const ds = dist(startX, startY, nodes[i].x, nodes[i].y);
+      if (ds < bestStartD) {
+        bestStartD = ds;
+        startNode = i;
+      }
+      const dg = dist(endX, endY, nodes[i].x, nodes[i].y);
+      if (dg < bestGoalD) {
+        bestGoalD = dg;
+        goalNode = i;
+      }
+    }
+
+    // Dijkstra no grafo interno de trincheiras
+    const dArr = new Array(nodes.length).fill(Infinity);
+    const parent = new Array(nodes.length).fill(-1);
+    const visited = new Array(nodes.length).fill(false);
+    dArr[startNode] = 0;
+
+    for (let step = 0; step < nodes.length; step++) {
+      let u = -1;
+      let best = Infinity;
+      for (let i = 0; i < nodes.length; i++) {
+        if (!visited[i] && dArr[i] < best) {
+          best = dArr[i];
+          u = i;
+        }
+      }
+      if (u === -1 || u === goalNode) break;
+      visited[u] = true;
+      for (const e of edges[u]) {
+        if (dArr[u] + e.cost < dArr[e.to]) {
+          dArr[e.to] = dArr[u] + e.cost;
+          parent[e.to] = u;
+        }
+      }
+    }
+
+    if (!Number.isFinite(dArr[goalNode])) return null;
+    const chain = [];
+    for (let cur = goalNode; cur !== -1; cur = parent[cur]) {
+      chain.push({ x: nodes[cur].x, y: nodes[cur].y });
+    }
+    chain.reverse();
+    const out = [{ x: startX, y: startY }, ...chain, { x: endX, y: endY }];
+    return out;
+  }
+
   _buildTrenchPoints(x1, y1, x2, y2, isLShape) {
-    const dx = x2 - x1;
-    const dy = y2 - y1;
+    const s1 = this._snapTrenchPoint(x1, y1, 38);
+    const s2 = this._snapTrenchPoint(x2, y2, 38);
+    const ax = s1 ? s1.x : x1;
+    const ay = s1 ? s1.y : y1;
+    const bx = s2 ? s2.x : x2;
+    const by = s2 ? s2.y : y2;
+    const dx = bx - ax;
+    const dy = by - ay;
     const len = Math.hypot(dx, dy);
-    const clampedLen = clamp(len, 95, 360);
+    const clampedLen = s2 ? clamp(len, 60, 420) : clamp(len, 95, 360);
     const ang = len > 1 ? Math.atan2(dy, dx) : 0;
-    const endX = x1 + Math.cos(ang) * clampedLen;
-    const endY = y1 + Math.sin(ang) * clampedLen;
+    const endX = s2 && len <= 420 ? bx : ax + Math.cos(ang) * clampedLen;
+    const endY = s2 && len <= 420 ? by : ay + Math.sin(ang) * clampedLen;
 
     if (!isLShape) {
       return [
-        { x: x1, y: y1 },
+        { x: ax, y: ay },
         { x: endX, y: endY },
       ];
     }
@@ -3644,7 +4625,7 @@ export class Game {
     const lEndX = endX + Math.cos(perpAng) * legLen;
     const lEndY = endY + Math.sin(perpAng) * legLen;
     return [
-      { x: x1, y: y1 },
+      { x: ax, y: ay },
       { x: endX, y: endY },
       { x: lEndX, y: lEndY },
     ];
@@ -3678,17 +4659,21 @@ export class Game {
     if (input.down('KeyA') || input.down('ArrowLeft')) mx -= 1;
     if (input.down('KeyD') || input.down('ArrowRight')) mx += 1;
 
+    const camBound = this.mapEditorOpen ? 180 : 820;
+    const minZoom = this.mapEditorOpen ? 180 : 340;
+    const maxZoom = this.mapEditorOpen ? 3800 : 1020;
+
     if (mx !== 0 || my !== 0) {
       const l = Math.hypot(mx, my);
-      this.camera.x = clamp(this.camera.x + (mx / l) * camMoveSpeed * realDt, 820, BATTLEFIELD_SIZE - 820);
-      this.camera.y = clamp(this.camera.y + (my / l) * camMoveSpeed * realDt, 820, BATTLEFIELD_SIZE - 820);
+      this.camera.x = clamp(this.camera.x + (mx / l) * camMoveSpeed * realDt, camBound, BATTLEFIELD_SIZE - camBound);
+      this.camera.y = clamp(this.camera.y + (my / l) * camMoveSpeed * realDt, camBound, BATTLEFIELD_SIZE - camBound);
     }
 
     // Pan com 2 Dedos no Touch ou Botão do Meio do Mouse
     if (input.touch && (input.touch.panDeltaX !== 0 || input.touch.panDeltaY !== 0)) {
       const panFactor = (this.camera.zoom / 680) * 1.65 * (this.settings.camSpeed || 1);
-      this.camera.x = clamp(this.camera.x - input.touch.panDeltaX * panFactor, 820, BATTLEFIELD_SIZE - 820);
-      this.camera.y = clamp(this.camera.y - input.touch.panDeltaY * panFactor, 820, BATTLEFIELD_SIZE - 820);
+      this.camera.x = clamp(this.camera.x - input.touch.panDeltaX * panFactor, camBound, BATTLEFIELD_SIZE - camBound);
+      this.camera.y = clamp(this.camera.y - input.touch.panDeltaY * panFactor, camBound, BATTLEFIELD_SIZE - camBound);
     }
 
     // Pan com 1 Dedo quando o botão [✋ MODO CÂMERA] estiver ativo (e sem modo de construção ativo)
@@ -3702,22 +4687,23 @@ export class Game {
       const panFactor = (this.camera.zoom / 680) * 1.65 * (this.settings.camSpeed || 1);
       this.camera.x = clamp(
         this.camera.x - (input.touch.singleDragDeltaX || 0) * panFactor,
-        820,
-        BATTLEFIELD_SIZE - 820
+        camBound,
+        BATTLEFIELD_SIZE - camBound
       );
       this.camera.y = clamp(
         this.camera.y - (input.touch.singleDragDeltaY || 0) * panFactor,
-        820,
-        BATTLEFIELD_SIZE - 820
+        camBound,
+        BATTLEFIELD_SIZE - camBound
       );
     }
 
-    // 2. Scroll do Mouse e Pinça com 2 Dedos (Pinch-to-Zoom) — Mais próximo da ação, sem ver fim do mapa
+    // 2. Scroll do Mouse e Pinça com 2 Dedos (Pinch-to-Zoom) — Mais amplo no Editor de Mapa
     if (input.wheel !== 0) {
-      this.camera.zoom = clamp(this.camera.zoom + input.wheel * 95, 340, 1020);
+      const step = this.mapEditorOpen ? 160 : 95;
+      this.camera.zoom = clamp(this.camera.zoom + input.wheel * step, minZoom, maxZoom);
     }
     if (input.touch && input.touch.pinchDelta && Math.abs(input.touch.pinchDelta) > 0.2) {
-      this.camera.zoom = clamp(this.camera.zoom + input.touch.pinchDelta * 2.8, 340, 1020);
+      this.camera.zoom = clamp(this.camera.zoom + input.touch.pinchDelta * 2.8, minZoom, maxZoom);
     }
 
     // 3. Tecla [TAB]: Abre/Fecha Quadro de Planejamento Tático Interativo
@@ -3927,10 +4913,11 @@ export class Game {
               isLShape: this.trenchShapeL,
               revealed: true,
             });
+            this._connectTrenchToNetwork(tr, 40);
             this.trenches.push(tr);
             this.matchStats.trenchesDug = (this.matchStats.trenchesDug || 0) + 1;
             this.audio.play('door');
-            this.spawnText(pts[0].x, pts[0].y, 'VALA DE TRINCHEIRA ESCAVADA (+65% DEF)', '#d4a338');
+            this.spawnText(pts[0].x, pts[0].y, '🛡️ TRINCHEIRA CONECTADA (+70% DEF)', '#d4a338');
           }
         } else {
           this.notify('SUPRIMENTOS INSUFICIENTES', `Necessário ${cost} SUP.`, '#c94a38');
@@ -4109,6 +5096,232 @@ export class Game {
           this.notify('SUPRIMENTOS INSUFICIENTES', `Necessário ${cost} SUP.`, '#c94a38');
         }
         this.activeCommandMode = null;
+      }
+      return;
+    }
+
+    // 8b-0. Editor de Mapa 3D no Modo Local (Adiciona/Remove construções, muros, árvores, move/rotaciona objetos colocados e salva em customMaps.json p/ Deploy)
+    if (this.activeCommandMode === 'map_editor') {
+      const wx = clamp(Math.round(this.worldMouse.x), 140, BATTLEFIELD_SIZE - 140);
+      const wy = clamp(Math.round(this.worldMouse.y), 140, BATTLEFIELD_SIZE - 140);
+
+      // Botão Direito + Arrastar gira o objeto selecionado olhando para o cursor; clique direito simples (ao soltar sem arrastar) cancela seleção
+      if (input.mouse.rightDown && this.selectedEditorObject && this.selectedEditorObject.item) {
+        if (input.mouse.isRightDragging) {
+          this._editorRotatingObject = true;
+          const it = this.selectedEditorObject.item;
+          const ox = this.selectedEditorObject.kind === 'wall' ? (it.x1 + it.x2) * 0.5 : it.x;
+          const oy = this.selectedEditorObject.kind === 'wall' ? (it.y1 + it.y2) * 0.5 : it.y;
+          if (dist(ox, oy, wx, wy) > 12) {
+            const aimAng =
+              this.selectedEditorObject.kind === 'wall'
+                ? Math.atan2(wy - oy, wx - ox)
+                : Math.atan2(wx - ox, wy - oy);
+            this.setSelectedEditorObjectAngle(aimAng, false);
+          }
+          return;
+        }
+      }
+      if (input.mouse.rightReleased) {
+        if (this._editorRotatingObject) {
+          this._editorRotatingObject = false;
+          this.setSelectedEditorObjectAngle(this.selectedEditorObject?.item?.angle || this.mapEditorAngle || 0, true);
+          this._emitHud();
+          return;
+        }
+        this._editorWallDragStart = null;
+        this._editorDraggingSector = null;
+        this._editorDraggingObject = false;
+        this.trenchPreview = null;
+        this.selectedEditorSectorId = null;
+        this.selectedEditorObject = null;
+        this._emitHud();
+        return;
+      }
+
+      if (input.wasPressed('KeyR')) {
+        const deg = this.rotateMapEditorAngle(45);
+        this.spawnText(this.worldMouse.x, this.worldMouse.y - 20, `🔄 ROTAÇÃO: ${deg}°`, '#38bdf8');
+      }
+
+      const tool = this.mapEditorTool;
+      const isEraser = tool === 'eraser' || tool === 'eraser_area';
+      const isWallTool =
+        tool === 'stone_wall' ||
+        tool === 'brick_wall' ||
+        tool === 'fortified_wall' ||
+        tool === 'trench_line' ||
+        tool === 'sandbag_line' ||
+        tool === 'tank_trap_line';
+
+      // Arraste ativo de um objeto selecionado (funciona tanto no modo [✋ Mover / Girar] quanto ao segurar e arrastar o objeto recém-colocado!)
+      if (this._editorDraggingObject && this.selectedEditorObject) {
+        if (input.mouse.down) {
+          this.moveSelectedEditorObject(wx, wy, false);
+          return;
+        }
+        if (input.mouse.released || !input.mouse.down) {
+          this._editorDraggingObject = false;
+          const it = this.selectedEditorObject.item;
+          const fx = this.selectedEditorObject.kind === 'wall' ? (it.x1 + it.x2) * 0.5 : it.x;
+          const fy = this.selectedEditorObject.kind === 'wall' ? (it.y1 + it.y2) * 0.5 : it.y;
+          this.moveSelectedEditorObject(fx, fy, true);
+          this._emitHud();
+          return;
+        }
+      }
+
+      if (tool === 'select_move') {
+        if (input.mouse.clicked) {
+          const hitObj = this._findEditorObjectAt(wx, wy);
+          if (hitObj) {
+            this.selectedEditorObject = hitObj;
+            this._editorDraggingObject = true;
+            if (typeof hitObj.item?.angle === 'number') {
+              this.mapEditorAngle = ((hitObj.item.angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+            }
+            this.audio?.play?.('switch');
+            this._emitHud();
+          } else if (this.selectedEditorObject) {
+            this.moveSelectedEditorObject(wx, wy, true);
+            this._editorDraggingObject = true;
+            this.audio?.play?.('pickup');
+            this._emitHud();
+          }
+        }
+        return;
+      }
+
+      // Mesmo usando uma ferramenta de construção pontual, clicar em cima do objeto recém-selecionado agarra e move ele em vez de empilhar outro em cima
+      if (
+        !isEraser &&
+        !isWallTool &&
+        tool !== 'forest_area' &&
+        tool !== 'move_sector' &&
+        input.mouse.clicked &&
+        this.selectedEditorObject?.item
+      ) {
+        const it = this.selectedEditorObject.item;
+        const ox = this.selectedEditorObject.kind === 'wall' ? (it.x1 + it.x2) * 0.5 : it.x;
+        const oy = this.selectedEditorObject.kind === 'wall' ? (it.y1 + it.y2) * 0.5 : it.y;
+        const grabRadius =
+          this.selectedEditorObject.kind === 'structure'
+            ? Math.max(55, Math.max(it.w || 80, it.d || 80) * 0.58)
+            : 52;
+        if (dist(wx, wy, ox, oy) <= grabRadius) {
+          this._editorDraggingObject = true;
+          return;
+        }
+      }
+
+      if (tool === 'forest_area') {
+        if (input.mouse.clicked) {
+          this._editorForestDragStart = { x: wx, y: wy };
+          this._editorForestPreview = {
+            x: wx,
+            y: wy,
+            radius: Math.round(180 * (this.mapEditorScale || 1)),
+          };
+        }
+        if (input.mouse.down && this._editorForestDragStart) {
+          const d = dist(this._editorForestDragStart.x, this._editorForestDragStart.y, wx, wy);
+          this._editorForestPreview = {
+            x: this._editorForestDragStart.x,
+            y: this._editorForestDragStart.y,
+            radius: d >= 45 ? clamp(Math.round(d), 90, 520) : Math.round(180 * (this.mapEditorScale || 1)),
+          };
+        }
+        if (input.mouse.released && this._editorForestDragStart) {
+          const start = this._editorForestDragStart;
+          const rad = this._editorForestPreview?.radius || Math.round(180 * (this.mapEditorScale || 1));
+          this._editorForestDragStart = null;
+          this._editorForestPreview = null;
+          this._placeEditorForestArea(start.x, start.y, rad);
+        }
+        return;
+      }
+      this._editorForestPreview = null;
+
+      if (isWallTool) {
+        if (input.mouse.clicked) {
+          this._editorWallDragStart = { x: wx, y: wy };
+        }
+        if (input.mouse.down && this._editorWallDragStart) {
+          const d = dist(this._editorWallDragStart.x, this._editorWallDragStart.y, wx, wy);
+          if (d >= 24) {
+            this.trenchPreview = {
+              points: [
+                { x: this._editorWallDragStart.x, y: this._editorWallDragStart.y },
+                { x: wx, y: wy },
+              ],
+              tool,
+            };
+          } else {
+            this.trenchPreview = null;
+          }
+        }
+        if (input.mouse.released && this._editorWallDragStart) {
+          const start = this._editorWallDragStart;
+          this._editorWallDragStart = null;
+          this.trenchPreview = null;
+          const d = dist(start.x, start.y, wx, wy);
+          if (d >= 30) {
+            this._placeEditorWallSegment(start.x, start.y, wx, wy, tool);
+          } else {
+            this._applyMapEditorClick(start.x, start.y);
+          }
+        }
+        return;
+      }
+
+      if (tool === 'move_sector') {
+        const swx = clamp(wx, 220, BATTLEFIELD_SIZE - 220);
+        const swy = clamp(wy, 220, BATTLEFIELD_SIZE - 220);
+        if (input.mouse.clicked) {
+          const hitSec = (this.map?.sectors || []).find((s) => dist(swx, swy, s.x, s.y) <= 220);
+          if (hitSec) {
+            this._editorDraggingSector = hitSec;
+            this._editorDragStartPos = { x: swx, y: swy };
+          } else {
+            this._editorDraggingSector = null;
+            this._applyMapEditorClick(swx, swy);
+          }
+        }
+        if (input.mouse.down && this._editorDraggingSector && input.mouse.isDragging) {
+          this._editorDraggingSector.x = swx;
+          this._editorDraggingSector.y = swy;
+          this.selectedEditorSectorId = this._editorDraggingSector.id;
+          this.renderer?.moveEditorSector?.(this._editorDraggingSector, this.map);
+        }
+        if (input.mouse.released && this._editorDraggingSector) {
+          const draggedSec = this._editorDraggingSector;
+          const wasDragged =
+            this._editorDragStartPos &&
+            dist(this._editorDragStartPos.x, this._editorDragStartPos.y, swx, swy) >= 18;
+          this._editorDraggingSector = null;
+          this._editorDragStartPos = null;
+          if (wasDragged) {
+            draggedSec.x = swx;
+            draggedSec.y = swy;
+            this.selectedEditorSectorId = draggedSec.id;
+            this.renderer?.moveEditorSector?.(draggedSec, this.map);
+            this.audio?.play?.('pickup');
+            this.spawnText(
+              swx,
+              swy - 24,
+              `🚩 ${(draggedSec.shortName || draggedSec.name).toUpperCase()} REPOSICIONADO!`,
+              '#4ade80'
+            );
+            this._emitHud();
+          } else {
+            this._applyMapEditorClick(swx, swy);
+          }
+        }
+        return;
+      }
+
+      if (input.mouse.clicked) {
+        this._applyMapEditorClick(this.worldMouse.x, this.worldMouse.y);
       }
       return;
     }
@@ -4406,17 +5619,25 @@ export class Game {
     ) {
       const destX = this.coverSnapPreview ? this.coverSnapPreview.cx : this.worldMouse.x;
       const destY = this.coverSnapPreview ? this.coverSnapPreview.cy : this.worldMouse.y;
-      this.hoverPathPreview = this.map.computeObstacleDetourPath(
-        leadAny.x,
-        leadAny.y,
-        destX,
-        destY,
-        leadAny.radius || 24,
-        this.fortifiedWalls,
-        this.barricades
-      );
+      // Recalcula a prévia A* apenas quando o destino/unidade muda de célula (evita custo por frame)
+      const previewKey = `${leadAny.id}_${Math.round(leadAny.x / 32)}_${Math.round(leadAny.y / 32)}_${Math.round(
+        destX / 32
+      )}_${Math.round(destY / 32)}`;
+      if (previewKey !== this._hoverPathKey || !this.hoverPathPreview) {
+        this._hoverPathKey = previewKey;
+        this.hoverPathPreview = this.map.computeObstacleDetourPath(
+          leadAny.x,
+          leadAny.y,
+          destX,
+          destY,
+          leadAny.radius || 24,
+          this.fortifiedWalls,
+          this.barricades
+        );
+      }
     } else {
       this.hoverPathPreview = null;
+      this._hoverPathKey = null;
     }
 
     // 11. Clique Direito + Arrastar (ou Toque Longo 0.4s + Arrastar no Mobile): Orientação Direcional de Formação e Ordens Táticas
@@ -4615,15 +5836,21 @@ export class Game {
                     this.barricades,
                     135
                   ) || snap;
-            const path = this.map.computeObstacleDetourPath(
-              u.x,
-              u.y,
-              unitSnap.cx,
-              unitSnap.cy,
-              u.radius || 22,
-              this.fortifiedWalls,
-              this.barricades
-            );
+            const trenchNetPath =
+              u.inTrench && unitSnap.trenchId
+                ? this.findTrenchNetworkPath(u.x, u.y, unitSnap.cx, unitSnap.cy)
+                : null;
+            const path =
+              trenchNetPath ||
+              this.map.computeObstacleDetourPath(
+                u.x,
+                u.y,
+                unitSnap.cx,
+                unitSnap.cy,
+                u.radius || 22,
+                this.fortifiedWalls,
+                this.barricades
+              );
             u.setCoverSnapOrder(unitSnap, path);
           } else {
             const path = this.map.computeObstacleDetourPath(
@@ -5040,8 +6267,28 @@ export class Game {
     this.tacticalPings = this.tacticalPings.filter((p) => p.life > 0);
 
     if (this.menuActive) {
-      this._updateWreckSmoke(realDt);
-      this._updateParticlesAndTexts(realDt);
+      // Batalha ao vivo em câmera lenta no fundo do Menu Inicial
+      if (!this._menuBattleSeeded && this.units?.length > 0) {
+        this._menuBattleSeeded = true;
+        this.intelRevealed = true;
+        this.sandboxFogDisabled = true;
+        this.supplies = Math.max(this.supplies, 1400);
+        this.allyAiSupplies = Math.max(this.allyAiSupplies || 0, 1400);
+        this.enemySupplies.enemy_1 = Math.max(this.enemySupplies.enemy_1 || 0, 1400);
+      }
+      const bgDt = Math.min(realDt, 0.05) * 0.42;
+      if (bgDt > 0 && !this.gameOver) {
+        this._updateWreckSmoke(bgDt);
+        this._updateBuildingProduction(bgDt);
+        this._updateEconomyAndSectors(bgDt);
+        this._updateAirDoctrinesAndAircrafts(bgDt);
+        this._updateAICommanders(bgDt);
+        this._updateUnitsAndCombat(bgDt);
+        this._updateBulletsAndMines(bgDt);
+        this.map.updateFrontline(this.units, bgDt);
+        this._updateParticlesAndTexts(bgDt);
+        this._updateDirectorCamera(realDt);
+      }
       this.hudSyncTimer -= realDt;
       if (this.hudSyncTimer <= 0) {
         this.hudSyncTimer = 0.25;
@@ -5064,6 +6311,9 @@ export class Game {
 
     // Input da câmera e ordens funcionam mesmo com Pausa Tática (timeScale === 0)
     this._handleRTSInput(realDt);
+    if (this.spectatorMode && this.directorCamActive) {
+      this._updateDirectorCamera(realDt);
+    }
 
     const safeDt = Math.min(realDt, 0.1);
     const ts = Number.isFinite(this.timeScale) ? this.timeScale : 1.0;
@@ -5132,6 +6382,9 @@ export class Game {
           'Seu batalhão atingiu 100% dos Pontos de Vitória e dominou o teatro de operações!'
         );
       }
+    } else {
+      // Mantém os textos flutuantes de confirmação animados mesmo com o jogo pausado no Editor de Mapa
+      this._updateParticlesAndTexts(safeDt);
     }
 
     // Atualiza som contínuo de motores diesel/esteiras e drones conforme distância da câmera
@@ -5354,14 +6607,149 @@ export class Game {
     }
   }
 
+  // ============================================================================
+  // MODO ESPECTADOR (IA vs IA) & DIRECTOR CAM CINEMATOGRÁFICA
+  // ============================================================================
+  enableSpectatorMode() {
+    if (!this.isAdminUser()) {
+      this.notify('ACESSO RESTRITO', 'O Modo Espectador (IA vs IA) é exclusivo para Administradores.', '#ef4444');
+      return false;
+    }
+    this.spectatorMode = true;
+    this.directorCamActive = true;
+    this.spectatorHudHidden = false;
+    this.intelRevealed = true;
+    this.sandboxFogDisabled = true;
+    this.timeScale = 1.0;
+    this.supplies = Math.max(this.supplies, 1800);
+    this.ammo = Math.max(this.ammo, 600);
+    this.fuel = Math.max(this.fuel, 500);
+    this.allyAiSupplies = 1800;
+    this.enemySupplies = { enemy_1: 1800, enemy_2: 1800 };
+    this._directorSwitchTimer = 0;
+    this.forceSpectatorArmorWave(true);
+    this.notify(
+      'MODO ESPECTADOR ATIVO (IA vs IA)',
+      'Sem Névoa de Guerra. Use [H] para ocultar a HUD e gravar vídeos limpos!',
+      '#c28e38'
+    );
+    this._emitHud();
+  }
+
+  toggleSpectatorHud() {
+    this.spectatorHudHidden = !this.spectatorHudHidden;
+    this._emitHud();
+  }
+
+  toggleDirectorCam() {
+    this.directorCamActive = !this.directorCamActive;
+    this.notify(
+      this.directorCamActive ? 'DIRECTOR CAM ATIVADA' : 'CÂMERA LIVRE (WASD)',
+      this.directorCamActive
+        ? 'A câmera acompanha automaticamente os maiores combates.'
+        : 'Controle a câmera manualmente com WASD / Setas.',
+      '#38bdf8'
+    );
+    this._emitHud();
+  }
+
+  forceSpectatorArmorWave(quiet = false) {
+    if (!this.map) return;
+    const allyHq = this.map.hqs.player || { x: 1150, y: 4800 };
+    const enemyHq = this.map.hqs.enemy_1 || { x: 8450, y: 4800 };
+    const centerSec =
+      this.map.sectors.find((s) => s.id === 'sec_center_cross') ||
+      this.map.sectors[Math.floor(this.map.sectors.length / 2)] || { x: 4800, y: 4800 };
+
+    const spawnBatch = [
+      { fac: 'player', type: 'mbt_tank', x: allyHq.x + 260, y: allyHq.y - 120, ang: 0 },
+      { fac: 'player', type: 'mbt_tank', x: allyHq.x + 260, y: allyHq.y + 120, ang: 0 },
+      { fac: 'player', type: 'apc_stryker', x: allyHq.x + 190, y: allyHq.y - 40, ang: 0 },
+      { fac: 'player', type: 'assault_squad', x: allyHq.x + 220, y: allyHq.y + 50, ang: 0 },
+      { fac: 'enemy_1', type: 'mbt_tank', x: enemyHq.x - 260, y: enemyHq.y - 120, ang: Math.PI },
+      { fac: 'enemy_1', type: 'mbt_tank', x: enemyHq.x - 260, y: enemyHq.y + 120, ang: Math.PI },
+      { fac: 'enemy_1', type: 'apc_stryker', x: enemyHq.x - 190, y: enemyHq.y + 40, ang: Math.PI },
+      { fac: 'enemy_1', type: 'assault_squad', x: enemyHq.x - 220, y: enemyHq.y - 50, ang: Math.PI },
+    ];
+    for (const sp of spawnBatch) {
+      const u = this.spawnUnit(sp.fac, sp.type, sp.x, sp.y, sp.ang);
+      if (u) {
+        u.setMoveOrder(
+          centerSec.x + randInt(-240, 240),
+          centerSec.y + randInt(-240, 240)
+        );
+      }
+    }
+    this._directorTarget = { x: centerSec.x, y: centerSec.y };
+    if (!quiet) {
+      this.audio?.play?.('radio');
+      this.notify(
+        'ONDA DE BLINDADOS LANÇADA!',
+        'Tanques MBT e APCs avançando para o centro do campo de batalha!',
+        '#f59e0b'
+      );
+      this._emitHud();
+    }
+  }
+
+  _updateDirectorCamera(realDt) {
+    this._directorSwitchTimer = (this._directorSwitchTimer || 0) - realDt;
+    if (this._directorSwitchTimer <= 0) {
+      this._directorSwitchTimer = 3.2;
+      let bestScore = -1;
+      let bestX = 4800;
+      let bestY = 4800;
+      const allies = this.units.filter((u) => u.alive && u.team === 'allies' && !u.captured);
+      const enemies = this.units.filter((u) => u.alive && u.team === 'enemies' && !u.captured);
+
+      for (const a of allies) {
+        let localEnemies = 0;
+        let closestD = Infinity;
+        for (const e of enemies) {
+          const d = dist(a.x, a.y, e.x, e.y);
+          if (d < closestD) closestD = d;
+          if (d < 680) localEnemies++;
+        }
+        const firingBonus = (a.muzzleFlashTimer || 0) > 0 ? 4 : 0;
+        const tankBonus = a.spec?.type === 'vehicle' ? 2.5 : 1;
+        const proxScore = closestD < 1200 ? (1200 - closestD) / 180 : 0;
+        const score = localEnemies * 3 + firingBonus + tankBonus + proxScore;
+        if (score > bestScore) {
+          bestScore = score;
+          bestX = a.x;
+          bestY = a.y;
+        }
+      }
+      if (bestScore > 0) {
+        this._directorTarget = {
+          x: clamp(bestX, 600, BATTLEFIELD_SIZE - 600),
+          y: clamp(bestY, 600, BATTLEFIELD_SIZE - 600),
+        };
+      }
+    }
+    const lerp = Math.min(1, realDt * 1.35);
+    this.camera.x += (this._directorTarget.x - this.camera.x) * lerp;
+    this.camera.y += (this._directorTarget.y - this.camera.y) * lerp;
+    const targetZoom = this.menuActive ? 680 : 620;
+    this.camera.zoom += (targetZoom - this.camera.zoom) * Math.min(1, realDt * 0.8);
+  }
+
   // IA Inimiga e Aliada com 3 Níveis de Dificuldade (Fácil/Recruta, Médio/Veterano, Difícil/General)
   _updateAICommanders(dt) {
     if (this.sandboxAiPaused || this.isMultiplayer) return;
     this.aiWaveTimer -= dt;
     this.aiTacticalOrderTimer -= dt;
 
-    const diff = this.aiDifficulty || 'medium';
-    const activeFactions = this.gameMode === '2v2' ? ['ally_ai', 'enemy_1', 'enemy_2'] : ['enemy_1'];
+    const diff = this.spectatorMode ? 'hard' : this.aiDifficulty || 'medium';
+    const fullAiAllies = Boolean(this.spectatorMode || this.menuActive);
+    const activeFactions =
+      this.gameMode === '2v2'
+        ? fullAiAllies
+          ? ['player', 'ally_ai', 'enemy_1', 'enemy_2']
+          : ['ally_ai', 'enemy_1', 'enemy_2']
+        : fullAiAllies
+          ? ['player', 'enemy_1']
+          : ['enemy_1'];
 
     if (this.aiWaveTimer <= 0) {
       const baseWave = diff === 'easy' ? 48 : diff === 'hard' ? 28 : 38;
@@ -5376,25 +6764,33 @@ export class Game {
         if (!hq || !hqBld) continue;
 
         const myUnits = this.units.filter((u) => u.alive && !u.surrendered && u.faction === fac);
-        let bank = fac === 'ally_ai' ? this.allyAiSupplies : this.enemySupplies[fac];
-        let aiLvl = this.aiHqLevels[fac] || 1;
+        let bank =
+          fac === 'player'
+            ? this.supplies
+            : fac === 'ally_ai'
+              ? this.allyAiSupplies
+              : this.enemySupplies[fac];
+        let aiLvl = fac === 'player' ? this.hqLevel || 1 : this.aiHqLevels[fac] || 1;
 
         // Evolução automática do QG da IA conforme dificuldade
         if (diff === 'medium' && aiLvl < 2 && bank >= 650 && this.matchStats.elapsedSeconds > 110) {
           bank -= 650;
           aiLvl = 2;
-          this.aiHqLevels[fac] = 2;
+          if (fac === 'player') this.hqLevel = 2;
+          else this.aiHqLevels[fac] = 2;
           hqBld.level = 2;
         } else if (diff === 'hard') {
           if (aiLvl < 2 && bank >= 550 && this.matchStats.elapsedSeconds > 75) {
             bank -= 550;
             aiLvl = 2;
-            this.aiHqLevels[fac] = 2;
+            if (fac === 'player') this.hqLevel = 2;
+            else this.aiHqLevels[fac] = 2;
             hqBld.level = 2;
           } else if (aiLvl < 3 && bank >= 1200 && this.matchStats.elapsedSeconds > 190) {
             bank -= 1200;
             aiLvl = 3;
-            this.aiHqLevels[fac] = 3;
+            if (fac === 'player') this.hqLevel = 3;
+            else this.aiHqLevels[fac] = 3;
             hqBld.level = 3;
           }
         }
@@ -5413,7 +6809,8 @@ export class Game {
           const cost = COMMAND_BY_ID[pick]?.cost || 180;
           if (bank >= cost) {
             bank -= cost;
-            if (fac === 'ally_ai') this.allyAiSupplies = bank;
+            if (fac === 'player') this.supplies = bank;
+            else if (fac === 'ally_ai') this.allyAiSupplies = bank;
             else this.enemySupplies[fac] = bank;
 
             const dir = hq.team === 'allies' ? 0 : Math.PI;
@@ -5534,6 +6931,14 @@ export class Game {
       if (!u.alive || u.captured) continue;
       try {
         u.sanitizePosition?.();
+        u._clampFormationSlot = (tx, ty) => {
+          if (u.garrisonedBuildingId || u.embarkedInId || !this.map?.pushPointOutsideAllBoxes) {
+            return { x: tx, y: ty };
+          }
+          const pt = { x: tx, z: ty };
+          this.map.pushPointOutsideAllBoxes(pt, u, this._frameSolidBoxes, 12);
+          return { x: pt.x, y: pt.z };
+        };
 
       if (u.muzzleFlashTimer > 0) u.muzzleFlashTimer -= dt;
       if (u.recoilTimer > 0) u.recoilTimer = Math.max(0, u.recoilTimer - dt);
@@ -5600,8 +7005,17 @@ export class Game {
           break;
         }
       }
+      const wasInTrench = Boolean(u.inTrench);
       u.inTrench = Boolean(insideTrench && u.spec.type === 'infantry' && !u.garrisonedBuildingId);
       u.inTrenchId = u.inTrench ? insideTrench.id : null;
+      if (u.inTrench) {
+        // Imunidade total a supressão dentro da trincheira +70% Defesa
+        u.suppressedTimer = 0;
+        u.pinned = false;
+        if (!wasInTrench && u.team === 'allies') {
+          this.spawnText(u.x, u.y - 18, '🛡️ COBERTURA DE TRINCHEIRA (+70% DEF)', '#4ade80');
+        }
+      }
       u.inTreelineCover =
         !u.inTrench && !u.garrisonedBuildingId && this.map.hasTreelineCover(u.x, u.y);
 
@@ -5940,11 +7354,11 @@ export class Game {
             dist(u.x, u.y, activeTarget.x, activeTarget.y) > effectiveRange * 0.84));
 
       if (wantsMove) {
-        // Avança pelos waypoints intermediários (sem nunca cancelar por stuckTimer)
+      // Avança pelos waypoints intermediários (raio amplo nos waypoints de curva para virar suave antes de quinas)
         while (
           u.waypoints &&
           u.waypoints.length > 0 &&
-          dist(u.x, u.y, u.waypoints[0].x, u.waypoints[0].y) < 18
+          dist(u.x, u.y, u.waypoints[0].x, u.waypoints[0].y) < (u.waypoints.length > 1 ? 26 : 18)
         ) {
           u.waypoints.shift();
         }
@@ -5994,6 +7408,9 @@ export class Game {
           const ignoreBldId =
             u.order.type === 'garrison_building' ? u.order.targetBuildingId : u.garrisonedBuildingId;
 
+          const prevStepX = u.x;
+          const prevStepY = u.y;
+
           // Calcula vetor de Steering e Desvio Suave ao redor de casas, muros, árvores e carcaças
           const steered = this.map.computeSteeringVelocity(
             u.x,
@@ -6021,6 +7438,34 @@ export class Game {
           );
           if (Number.isFinite(resolved.x)) u.x = clamp(resolved.x, 70, BATTLEFIELD_SIZE - 70);
           if (Number.isFinite(resolved.y)) u.y = clamp(resolved.y, 70, BATTLEFIELD_SIZE - 70);
+
+          // Auto-Destravamento: se a tropa ficar presa numa construção, recalcula a rota A* a partir da posição atual
+          u._repathCooldown = Math.max(0, (u._repathCooldown || 0) - dt);
+          const stepMoved = Math.hypot(u.x - prevStepX, u.y - prevStepY);
+          if (stepMoved < spd * dt * 0.3) {
+            u.wallStuckTimer = (u.wallStuckTimer || 0) + dt;
+          } else {
+            u.wallStuckTimer = Math.max(0, (u.wallStuckTimer || 0) - dt * 2);
+          }
+          if (u.wallStuckTimer > 0.8 && u._repathCooldown <= 0 && dFinal > 40) {
+            u.wallStuckTimer = 0;
+            u._repathCooldown = 1.6;
+            const repath = this.map.computeObstacleDetourPath(
+              u.x,
+              u.y,
+              finalDest.x,
+              finalDest.y,
+              u.radius || 24,
+              this.fortifiedWalls,
+              this.barricades
+            );
+            if (Array.isArray(repath) && repath.length >= 2) {
+              u.waypoints = repath
+                .slice(1)
+                .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
+                .map((p) => ({ x: p.x, y: p.y }));
+            }
+          }
 
           // Giro suave do chassi para veículos blindados
           if (u.spec.type === 'vehicle') {
@@ -6255,7 +7700,19 @@ export class Game {
             if (u.stance === 'crouch') spread *= 0.85;
             if (u.suppressedTimer > 0) spread *= 1.6;
             const shotAngle = aimAngle + spread;
-            const bSpeed = 680;
+            const isAtRocket =
+              u.spec.weaponModel === 'bazooka' || u.unitType === 'at_javelin_squad';
+            const isExplosiveWeapon = Boolean(
+              u.spec.explosiveShots ||
+                isTankCannon ||
+                isAtRocket ||
+                u.spec.weaponModel === 'rocket_pod'
+            );
+            const bSpeed = isAtRocket
+              ? 460
+              : u.spec.weaponModel === 'rocket_pod'
+              ? 520
+              : 680;
 
             let dmg = u.spec.damage;
             if (u.inForestStealth) {
@@ -6317,11 +7774,32 @@ export class Game {
             const startY = u.y + Math.sin(shotAngle) * 18;
             if (this.renderer?.vfx && activeTarget) {
               const isHeavyCannon =
-                u.spec.weaponModel === 'tank_cannon' || u.spec.weaponModel === 'rocket_pod';
+                u.spec.weaponModel === 'tank_cannon' ||
+                u.spec.weaponModel === 'rocket_pod' ||
+                isAtRocket;
               const sy = getTerrainHeight(startX, startY, this.map) + (u.spec.type === 'vehicle' ? 14 : 9);
               const ty = getTerrainHeight(activeTarget.x, activeTarget.y, this.map) + 8;
               this.renderer.vfx.spawnMuzzleFlash(startX, sy, startY, shotAngle, isHeavyCannon);
               this.renderer.vfx.spawnTracer(startX, sy, startY, activeTarget.x, ty, activeTarget.y, isHeavyCannon);
+            }
+            if (isAtRocket) {
+              // Sopro traseiro de fumaça da Bazuca / Javelin (Backblast)
+              const backX = u.x - Math.cos(shotAngle) * 12;
+              const backY = u.y - Math.sin(shotAngle) * 12;
+              for (let bp = 0; bp < 4; bp++) {
+                this.particles.push({
+                  x: backX + (Math.random() - 0.5) * 8,
+                  y: backY + (Math.random() - 0.5) * 8,
+                  z: 8 + Math.random() * 4,
+                  vx: -Math.cos(shotAngle) * (26 + Math.random() * 18) + (Math.random() - 0.5) * 12,
+                  vy: -Math.sin(shotAngle) * (26 + Math.random() * 18) + (Math.random() - 0.5) * 12,
+                  vz: 8 + Math.random() * 8,
+                  radius: 3.4 + Math.random() * 2.2,
+                  color: bp === 0 ? '#f97316' : '#cbd5e1',
+                  life: 0.42,
+                  maxLife: 0.42,
+                });
+              }
             }
             this.bullets.push({
               x: startX,
@@ -6335,14 +7813,19 @@ export class Game {
               angle: shotAngle,
               team: u.team,
               damage: dmg,
-              explosive: Boolean(u.spec.explosiveShots || u.spec.weaponModel === 'tank_cannon'),
-              isTankShell: u.spec.weaponModel === 'tank_cannon',
-              splashRadius: u.spec.weaponModel === 'tank_cannon' ? (u.spec.explosiveSplash || 45) : 0,
+              explosive: isExplosiveWeapon,
+              isRocket: isAtRocket || u.spec.weaponModel === 'rocket_pod',
+              isTankShell: isExplosiveWeapon,
+              splashRadius: isExplosiveWeapon
+                ? u.spec.explosiveSplash || (isAtRocket ? 42 : 45)
+                : 0,
               life: (effectiveRange + targetRadius + 75) / bSpeed,
             });
 
             const snd =
-              u.spec.weaponModel === 'tank_cannon' || u.spec.weaponModel === 'rocket_pod'
+              u.spec.weaponModel === 'tank_cannon' ||
+              u.spec.weaponModel === 'rocket_pod' ||
+              isAtRocket
                 ? 'tank_cannon'
                 : u.spec.weaponModel === 'autocannon'
                 ? 'autocannon'
@@ -6369,6 +7852,25 @@ export class Game {
 
       if (typeof u.updateSoldierWorldPositions === 'function') {
         u.updateSoldierWorldPositions();
+      }
+      // Garante que nem o alvo pessoal da formação nem a posição final de cada soldado fiquem dentro de construções
+      if (!u.garrisonedBuildingId && !u.embarkedInId && this.map?.pushPointOutsideAllBoxes) {
+        const solidBoxes = this._frameSolidBoxes || (this._frameSolidBoxes = this.getSolidBuildingBoxes());
+        if (u.spec.type === 'infantry' && Array.isArray(u.soldiers)) {
+          for (const s of u.soldiers) {
+            if (!s.alive) continue;
+            if (s.personalTarget) {
+              const tPos = { x: s.personalTarget.x, z: s.personalTarget.y };
+              this.map.pushPointOutsideAllBoxes(tPos, u, solidBoxes, 10);
+              s.personalTarget.x = tPos.x;
+              s.personalTarget.y = tPos.z;
+            }
+            const sPos = { x: s.worldX, z: s.worldY };
+            this.map.pushPointOutsideAllBoxes(sPos, u, solidBoxes, 7);
+            s.worldX = sPos.x;
+            s.worldY = sPos.z;
+          }
+        }
       }
       u.sanitizePosition?.();
       } catch (err) {
@@ -6441,6 +7943,22 @@ export class Game {
       b.life -= dt;
       b.x += b.vx * dt;
       b.y += b.vy * dt;
+
+      // Rastro de fumaça e propulsão de fogo para foguetes antitanque (Bazuca / Javelin / Katyusha)
+      if (b.isRocket && Math.random() < 0.85) {
+        this.particles.push({
+          x: b.x - Math.cos(b.angle) * 6 + (Math.random() - 0.5) * 3,
+          y: b.y - Math.sin(b.angle) * 6 + (Math.random() - 0.5) * 3,
+          z: 9 + (Math.random() - 0.5) * 2,
+          vx: -Math.cos(b.angle) * 16 + (Math.random() - 0.5) * 10,
+          vy: -Math.sin(b.angle) * 16 + (Math.random() - 0.5) * 10,
+          vz: 6 + Math.random() * 6,
+          radius: 2.6 + Math.random() * 1.8,
+          color: Math.random() < 0.35 ? '#fb923c' : '#d6d3d1',
+          life: 0.32,
+          maxLife: 0.32,
+        });
+      }
 
       let hitSomething = false;
 
@@ -6766,7 +8284,25 @@ export class Game {
       supplyTimer: Math.ceil(this.supplyIncomeTimer),
       aiWaveTimer: Math.ceil(this.aiWaveTimer),
       intelRevealed: this.intelRevealed,
+      spectatorMode: Boolean(this.spectatorMode),
+      directorCamActive: Boolean(this.directorCamActive),
+      spectatorHudHidden: Boolean(this.spectatorHudHidden),
       sandboxMode: Boolean(this.sandboxMode),
+      mapEditorOpen: Boolean(this.mapEditorOpen),
+      mapEditorTool: this.mapEditorTool || null,
+      mapEditorAngleDeg: Math.round((((this.mapEditorAngle || 0) * 180) / Math.PI + 360) % 360),
+      mapEditorScale: Number((this.mapEditorScale || 1.0).toFixed(2)),
+      selectedEditorSectorId: this.selectedEditorSectorId || null,
+      selectedEditorObject: this.selectedEditorObject
+        ? {
+            id: this.selectedEditorObject.id,
+            kind: this.selectedEditorObject.kind,
+            label: this.selectedEditorObject.label,
+            angleDeg: Math.round(
+              ((((this.selectedEditorObject.item?.angle || 0) * 180) / Math.PI) % 360 + 360) % 360
+            ),
+          }
+        : null,
       sandboxFogDisabled: Boolean(this.sandboxFogDisabled),
       sandboxAiPaused: Boolean(this.sandboxAiPaused),
       isCampaign: Boolean(this.isCampaign),

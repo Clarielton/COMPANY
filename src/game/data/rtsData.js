@@ -13,30 +13,6 @@ export const BATTLEFIELD_MAPS = [
       'Campinas europeias com sebes densas, fazendas fortificadas e estradas de terra ideais para emboscadas e cobertura.',
     accent: '#65a30d',
   },
-  {
-    id: 'el_alamein_ridge',
-    name: 'Deserto de El Alamein',
-    subtitle: 'Frente Árida • Dunas, Oásis & Refinarias',
-    theme: 'desert',
-    climate: 'Árido / Areia',
-    sectorsCount: 12,
-    sizeLabel: '9.6 × 9.6 km',
-    description:
-      'Teatro desértico com rodovia central, platôs rochosos, oásis com palmeiras, ruínas antigas e refinarias estratégicas.',
-    accent: '#eab308',
-  },
-  {
-    id: 'bastogne_winter',
-    name: 'Bastogne — Inverno Ardenas',
-    subtitle: 'Frente de Neve • Nevasca, Pinheiros & Gelo',
-    theme: 'winter',
-    climate: 'Nevasca / Gelo',
-    sectorsCount: 12,
-    sizeLabel: '9.6 × 9.6 km',
-    description:
-      'Floresta congelada sob nevasca intensa, pinheiros nevados, ruínas geladas e rotas escorregadias de inverno.',
-    accent: '#38bdf8',
-  },
 ];
 
 export const ARMY_SKINS = [
@@ -442,8 +418,11 @@ export const ADVANCED_UNITS = [
       fireRate: 0.6,
       burstShots: 2,
       reloadPause: 2.8,
-      damage: 58,
+      damage: 64,
       antiArmorBonus: 2.2,
+      explosiveShots: true,
+      explosiveSplash: 42,
+      bypassCoverAttack: true,
       spread: 0.025,
       captureRate: 0.4,
       radius: 25,

@@ -6,7 +6,7 @@ import {
   CAMPAIGN_PACKS,
 } from '../game/data/accountData.js';
 
-export default function AdminPanel() {
+export default function AdminPanel({ onLaunchSandbox }) {
   const [players, setPlayers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedPlayerUid, setSelectedPlayerUid] = useState(
@@ -75,6 +75,16 @@ export default function AdminPanel() {
         </div>
 
         <div className="admin-quick-actions">
+          {onLaunchSandbox && (
+            <button
+              type="button"
+              className="mil-pill"
+              style={{ borderColor: '#f59e0b', background: 'rgba(217, 119, 6, 0.22)', color: '#fde68a', fontWeight: 800 }}
+              onClick={onLaunchSandbox}
+            >
+              🛠️ Entrar no Modo Sandbox (Admin)
+            </button>
+          )}
           <button
             type="button"
             className="mil-pill"

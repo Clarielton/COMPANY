@@ -283,8 +283,15 @@ export class SquadUnit {
     for (let i = 0; i < this.soldiers.length; i++) {
       const s = this.soldiers[i];
       const off = this.memberOffsets[i] || { ox: 0, oy: 0 };
-      const tx = this.x + off.ox * cos + off.oy * sin;
-      const ty = this.y - off.ox * sin + off.oy * cos;
+      let tx = this.x + off.ox * cos + off.oy * sin;
+      let ty = this.y - off.ox * sin + off.oy * cos;
+      if (typeof this._clampFormationSlot === 'function') {
+        const clamped = this._clampFormationSlot(tx, ty);
+        if (clamped) {
+          tx = clamped.x;
+          ty = clamped.y;
+        }
+      }
       s.personalTarget = { x: tx, y: ty };
       if (!Number.isFinite(s.worldX) || !Number.isFinite(s.worldY) || !s._autonomousInit) {
         s.worldX = tx;
@@ -807,7 +814,7 @@ export class SquadUnit {
       if (this.garrisonedBuildingId) {
         dmg *= 0.3;
       } else if (this.inTrench && this.spec.type === 'infantry') {
-        dmg *= 0.35;
+        dmg *= 0.3; // +70% Defesa na Cobertura de Trincheira
       } else if (this.inHeavyCover && this.spec.type === 'infantry') {
         dmg *= 0.25;
       } else if (this.inForestStealth && this.spec.type === 'infantry') {
@@ -951,13 +958,16 @@ export class SquadUnit {
 }
 
 export class TrenchSegment {
-  constructor({ points, team = 'allies', isLShape = false, revealed = false }) {
+  constructor({ points, team = 'allies', isLShape = false, revealed = false, openStart = false, openEnd = false }) {
     this.id = NEXT_TRENCH_ID++;
     this.points = points;
     this.team = team;
     this.isLShape = isLShape;
     this.width = 48;
     this.revealed = team === 'allies' ? true : revealed;
+    this.openStart = Boolean(openStart);
+    this.openEnd = Boolean(openEnd);
+    this._meshVersion = 1;
   }
 
   containsPoint(px, py, extraRadius = 14) {
@@ -1005,7 +1015,7 @@ export class TrenchSegment {
     const vy = y2 - y1;
     const l2 = vx * vx + vy * vy;
     if (l2 === 0) return dist(px, py, x1, y1);
-    const t = clamp(((px - x1) * vx + (py - this.y1) * vy) / l2, 0, 1);
+    const t = clamp(((px - x1) * vx + (py - y1) * vy) / l2, 0, 1);
     return dist(px, py, x1 + t * vx, y1 + t * vy);
   }
 }

@@ -148,6 +148,14 @@ export default function App() {
           startWithMode(mode, 1000, mapId, 'medium');
           gameRef.current?.enableSandboxMode();
         }}
+        onPlaySpectator={(mapId) => {
+          startWithMode('2v2', 1000, mapId, 'hard');
+          gameRef.current?.enableSpectatorMode();
+        }}
+        onOpenMapEditor={(mapId) => {
+          startWithMode('1v1', 1000, mapId, 'medium');
+          gameRef.current?.setMapEditorOpen(true, 'farmhouse', 0, 1.0);
+        }}
         onStartOnlineMatch={({ networkManager, room, localSlot }) => {
           const game = gameRef.current;
           if (game) {

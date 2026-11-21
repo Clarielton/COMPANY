@@ -1,4 +1,16 @@
 import { clamp, dist, mulberry32 } from '../core/math.js';
+import { NavGrid } from './NavGrid.js';
+import customMapsData from '../data/customMaps.json' with { type: 'json' };
+
+// Meia-extensão AABB real de uma construção considerando sua rotação no plano XZ
+function structHalfExtents(st) {
+  const w = st.w || 60;
+  const d = st.d || st.h || w;
+  const ang = st.angle || 0;
+  const cos = Math.abs(Math.cos(ang));
+  const sin = Math.abs(Math.sin(ang));
+  return { hw: w * 0.5 * cos + d * 0.5 * sin, hd: w * 0.5 * sin + d * 0.5 * cos };
+}
 
 // Mapa 3x Maior (9600 x 9600) dando espaço real para exploração na névoa, flanqueamento e defesa em profundidade
 export const BATTLEFIELD_SIZE = 9600;
@@ -31,6 +43,7 @@ export class BattlefieldMap {
       this._generateBushes(rng);
       this.frontlineSamples = 40;
       this.frontlineX = new Float32Array(this.frontlineSamples).fill(this.size * 0.5);
+      this._applyCustomMapOverrides();
       return;
     }
 
@@ -39,6 +52,7 @@ export class BattlefieldMap {
       this._generateBushes(rng);
       this.frontlineSamples = 40;
       this.frontlineX = new Float32Array(this.frontlineSamples).fill(this.size * 0.5);
+      this._applyCustomMapOverrides();
       return;
     }
 
@@ -734,6 +748,103 @@ export class BattlefieldMap {
 
     this.frontlineSamples = 40;
     this.frontlineX = new Float32Array(this.frontlineSamples).fill(this.size * 0.5);
+    this._applyCustomMapOverrides();
+  }
+
+  _applyCustomMapOverrides() {
+    let override = (customMapsData && customMapsData[this.mapId]) || null;
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      try {
+        const localRaw = localStorage.getItem(`COF_CUSTOM_MAP_${this.mapId}`);
+        if (localRaw) override = JSON.parse(localRaw);
+      } catch {}
+    }
+    if (!override || typeof override !== 'object') return;
+    if (Array.isArray(override.structures)) {
+      this.structures = override.structures.map((s) => ({
+        ...s,
+        garrisonUnitId: null,
+        garrisonTeam: null,
+      }));
+    }
+    if (Array.isArray(override.trees)) this.trees = override.trees.map((t) => ({ ...t }));
+    if (Array.isArray(override.bushes)) this.bushes = override.bushes.map((b) => ({ ...b }));
+    if (Array.isArray(override.wrecks)) this.wrecks = override.wrecks.map((w) => ({ ...w }));
+    if (Array.isArray(override.stoneWalls)) this.stoneWalls = override.stoneWalls.map((w) => ({ ...w }));
+    if (Array.isArray(override.craters)) this.craters = override.craters.map((c) => ({ ...c }));
+    if (Array.isArray(override.forestZones)) {
+      this.forestZones = override.forestZones.map((fz) => ({ ...fz }));
+    }
+    if (Array.isArray(override.customTrenches)) {
+      this.customTrenches = override.customTrenches.map((t) => ({ ...t }));
+    }
+    if (Array.isArray(override.sectors) && override.sectors.length > 0) {
+      this.sectors = (this.sectors || []).map((origSec, idx) => {
+        const saved = override.sectors.find((s) => s.id === origSec.id) || override.sectors[idx];
+        if (!saved) return origSec;
+        return {
+          ...origSec,
+          ...saved,
+          x: Math.round(saved.x ?? origSec.x),
+          y: Math.round(saved.y ?? origSec.y),
+          owner: 'neutral',
+          captureProgress: 0,
+        };
+      });
+    }
+  }
+
+  exportCustomMapPayload() {
+    return {
+      mapId: this.mapId,
+      updatedAt: new Date().toISOString(),
+      sectors: (this.sectors || []).map((sec) => ({
+        id: sec.id,
+        name: sec.name,
+        shortName: sec.shortName,
+        shortLabel: sec.shortLabel,
+        type: sec.type,
+        x: Math.round(sec.x),
+        y: Math.round(sec.y),
+        radius: sec.radius || 175,
+        incomeBonus: sec.incomeBonus,
+        supplyBonus: sec.supplyBonus,
+        ammoBonus: sec.ammoBonus,
+        fuelBonus: sec.fuelBonus,
+      })),
+      structures: (this.structures || []).map((s) => ({
+        id: s.id,
+        name: s.name,
+        type: s.type,
+        x: Math.round(s.x),
+        y: Math.round(s.y),
+        w: s.w,
+        d: s.d,
+        h: s.h,
+        angle: Number((s.angle || 0).toFixed(3)),
+        garrisonable: Boolean(s.garrisonable),
+        coverRadius: s.coverRadius || 86,
+      })),
+      trees: (this.trees || []).map((t) => ({
+        x: Math.round(t.x),
+        y: Math.round(t.y),
+        scale: Number((t.scale || 1).toFixed(2)),
+        foliageTone: Number((t.foliageTone || 0.5).toFixed(2)),
+        isPine: Boolean(t.isPine),
+        isPalm: Boolean(t.isPalm),
+        isBurnt: Boolean(t.isBurnt),
+      })),
+      bushes: (this.bushes || []).map((b) => ({
+        x: Math.round(b.x),
+        y: Math.round(b.y),
+        scale: Number((b.scale || 1).toFixed(2)),
+      })),
+      wrecks: (this.wrecks || []).map((w) => ({ ...w, x: Math.round(w.x), y: Math.round(w.y) })),
+      stoneWalls: (this.stoneWalls || []).map((w) => ({ ...w })),
+      craters: (this.craters || []).map((c) => ({ ...c })),
+      forestZones: (this.forestZones || []).map((fz) => ({ ...fz })),
+      customTrenches: (this.customTrenches || []).map((t) => ({ ...t })),
+    };
   }
 
   _addBorderForests(rng) {
@@ -1972,8 +2083,9 @@ export class BattlefieldMap {
   isPointBlocked(x, y, unitRadius = 24, ignoreStructureId = null, customWalls = []) {
     for (const st of this.structures) {
       if (st.id === ignoreStructureId) continue;
-      const hw = st.w * 0.5 + unitRadius * 0.82;
-      const hd = (st.d || st.h || st.w) * 0.5 + unitRadius * 0.82;
+      const ext = structHalfExtents(st);
+      const hw = ext.hw + unitRadius * 0.82;
+      const hd = ext.hd + unitRadius * 0.82;
       if (Math.abs(x - st.x) < hw && Math.abs(y - st.y) < hd) return true;
     }
     for (const col of this.allColliders || []) {
@@ -2053,17 +2165,23 @@ export class BattlefieldMap {
     let vx = Math.cos(chosenAngle) * speed;
     let vy = Math.sin(chosenAngle) * speed;
 
-    // Força tangencial suave de afastamento de construções e carcaças muito próximas
+    // Força tangencial suave de afastamento apenas quando muito colado à face real (AABB) da construção
     for (const st of this.structures) {
       if (st.id === ignoreStructureId) continue;
+      const ext = structHalfExtents(st);
       const sdx = x - st.x;
       const sdy = y - st.y;
-      const sd = Math.hypot(sdx, sdy);
-      const safeR = Math.max(st.w, st.d) * 0.62 + unitRadius + 18;
-      if (sd > 1 && sd < safeR) {
-        const push = ((safeR - sd) / safeR) * speed * 0.55;
-        vx += (sdx / sd) * push;
-        vy += (sdy / sd) * push;
+      const ox = Math.max(0, Math.abs(sdx) - ext.hw);
+      const oy = Math.max(0, Math.abs(sdy) - ext.hd);
+      const faceDist = Math.hypot(ox, oy);
+      const safeR = unitRadius + 14;
+      if (faceDist < safeR) {
+        const nx = ox > 0 ? Math.sign(sdx) : 0;
+        const ny = oy > 0 ? Math.sign(sdy) : 0;
+        const nLen = Math.hypot(nx, ny) || 1;
+        const push = ((safeR - faceDist) / safeR) * speed * 0.45;
+        vx += (nx / nLen) * push;
+        vy += (ny / nLen) * push;
       }
     }
 
@@ -2086,8 +2204,9 @@ export class BattlefieldMap {
     // 1. Colisão AABB contra Construções Rurais/Urbanas (exceto se o esquadrão estiver entrando nela em Guarnição)
     for (const st of this.structures) {
       if (st.id === ignoreStructureId) continue;
-      const hw = st.w * 0.5 + unitRadius * 0.9;
-      const hd = (st.d || st.h || st.w) * 0.5 + unitRadius * 0.9;
+      const ext = structHalfExtents(st);
+      const hw = ext.hw + unitRadius * 0.9;
+      const hd = ext.hd + unitRadius * 0.9;
       const dx = rx - st.x;
       const dy = ry - st.y;
       if (Math.abs(dx) < hw && Math.abs(dy) < hd) {
@@ -2192,16 +2311,20 @@ export class BattlefieldMap {
       }
     }
 
-    // 5. Colisão leve contra Troncos de Árvores
-    for (const tr of this.trees) {
-      const minD = 9 + unitRadius * 0.35;
-      const dx = rx - tr.x;
-      const dy = ry - tr.y;
-      const d = Math.hypot(dx, dy);
-      if (d > 0.001 && d < minD) {
-        const push = minD - d;
-        rx += (dx / d) * push;
-        ry += (dy / d) * push;
+    // 5. Colisão contra Troncos Grossos apenas para Veículos (Infantaria entra livremente sob as copas das florestas)
+    if (unitRadius >= 28) {
+      for (const tr of this.trees) {
+        if ((tr.scale || 1) < 1.0) continue;
+        const minD = 10 + unitRadius * 0.42;
+        const dx = rx - tr.x;
+        const dy = ry - tr.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 0.001 && d < minD) {
+          collided = true;
+          const push = minD - d;
+          rx += (dx / d) * push;
+          ry += (dy / d) * push;
+        }
       }
     }
 
@@ -2753,7 +2876,7 @@ export class BattlefieldMap {
     return this.allColliders;
   }
 
-  getSolidBuildingBoxes(fortifiedWalls = [], barricades = []) {
+  getSolidBuildingBoxes(fortifiedWalls = [], barricades = [], opts = {}) {
     const padding = 1.2; // Margem de segurança no plano XZ
     const boxes = [];
 
@@ -2841,8 +2964,10 @@ export class BattlefieldMap {
           pushSubSegmentBoxes(w.x1, w.y1, lx, ly, halfT, w);
           pushSubSegmentBoxes(rx2, ry2, w.x2, w.y2, halfT, w);
 
-          // Vão central do portão: só é sólido quando FECHADO
-          if (!w.gateOpen) {
+          // Vão central do portão: só é sólido quando FECHADO (para o pathfinding, aberto para a equipe dona)
+          const gatePassable =
+            w.gateOpen || (opts.gatesOpenForTeam && (w.team || 'allies') === opts.gatesOpenForTeam);
+          if (!gatePassable) {
             pushSubSegmentBoxes(lx, ly, rx2, ry2, halfT, w);
           }
         } else {
@@ -2976,6 +3101,57 @@ export class BattlefieldMap {
     );
   }
 
+  // ===========================================================================
+  // PATHFINDING A* EM GRADE (NavGrid) — rota real contornando casas, prédios e muros
+  // ===========================================================================
+  _navSignature(fortifiedWalls = [], barricades = []) {
+    let s = `${this.structures?.length || 0}|${this.wrecks?.length || 0}|`;
+    for (const col of this.allColliders || []) {
+      if (col.kind === 'base_building') s += `${Math.round(col.x)},${Math.round(col.y)};`;
+    }
+    s += '|';
+    for (const w of fortifiedWalls || []) {
+      if (w.hp !== undefined && w.hp <= 0) continue;
+      s += `${w.id}${w.isGate ? 'g' : ''};`;
+    }
+    s += `|${(barricades || []).length}`;
+    return s;
+  }
+
+  getNavGrid(unitRadius = 24, fortifiedWalls = [], barricades = []) {
+    const isLarge = unitRadius >= 30;
+    const key = isLarge ? 'vehicle' : 'infantry';
+    if (!this._navGrids) this._navGrids = {};
+    let grid = this._navGrids[key];
+    if (!grid) {
+      grid = new NavGrid(this.size, 32);
+      this._navGrids[key] = grid;
+    }
+    const sig = this._navSignature(fortifiedWalls, barricades);
+    if (grid.signature !== sig) {
+      const boxes = this.getSolidBuildingBoxes(fortifiedWalls, barricades, { gatesOpenForTeam: 'allies' });
+      grid.rebuild(boxes, isLarge ? 46 : 36, 90);
+      grid.signature = sig;
+    }
+    return grid;
+  }
+
+  findNavPath(startX, startY, endX, endY, unitRadius = 24, fortifiedWalls = [], barricades = []) {
+    try {
+      const grid = this.getNavGrid(unitRadius, fortifiedWalls, barricades);
+      const path = grid.findPath(startX, startY, endX, endY);
+      if (!path || path.length < 2) return null;
+      for (const p of path) {
+        p.x = clamp(p.x, 80, this.size - 80);
+        p.y = clamp(p.y, 80, this.size - 80);
+      }
+      return path;
+    } catch (err) {
+      console.warn('NavGrid pathfinding error:', err);
+      return null;
+    }
+  }
+
   computeObstacleDetourPath(
     startX,
     startY,
@@ -2991,6 +3167,10 @@ export class BattlefieldMap {
       waypoints.push({ x: endX, y: endY });
       return waypoints;
     }
+
+    // 0. Rota principal por A* em grade (contorna casas, prédios da base, muros e passa pelos portões)
+    const navPath = this.findNavPath(startX, startY, endX, endY, unitRadius, fortifiedWalls, barricades);
+    if (navPath) return navPath;
 
     // 1. Detecta se a rota direta atravessa alguma Muralha Fortificada com ou sem Portão
     let hitWall = null;

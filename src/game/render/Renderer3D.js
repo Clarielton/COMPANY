@@ -195,7 +195,7 @@ export class Renderer3D {
     this.scene.background = new THREE.Color(0x98b0c4);
     this.scene.fog = new THREE.FogExp2(0xa3b8c9, 0.00012);
 
-    this.camera = new THREE.PerspectiveCamera(46, this.width / this.height, 8, 9500);
+    this.camera = new THREE.PerspectiveCamera(46, this.width / this.height, 8, 14000);
     this.camTarget = new THREE.Vector3(2400, 0, 4800);
     this.camZoom = 860;
     this.shakeMag = 0;
@@ -280,6 +280,100 @@ export class Renderer3D {
     };
     this.geometries.ring.rotateX(-Math.PI / 2);
 
+    // Texturas procedurais arquitetônicas (Tijolo, Pedra, Reboco, Concreto Armado e Telhas) com bumpMap
+    const makeArchTex = (drawFn, repeatX = 2, repeatY = 2) => {
+      if (typeof document === 'undefined') return null;
+      const c = document.createElement('canvas');
+      c.width = 256;
+      c.height = 256;
+      const ctx = c.getContext('2d');
+      drawFn(ctx, 256, 256);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(repeatX, repeatY);
+      return tex;
+    };
+
+    const brickTex = makeArchTex((ctx, w, h) => {
+      ctx.fillStyle = '#5a281e';
+      ctx.fillRect(0, 0, w, h);
+      const rows = 16;
+      const cols = 8;
+      const rh = h / rows;
+      const cw = w / cols;
+      for (let r = 0; r < rows; r++) {
+        const off = (r % 2) * (cw * 0.5);
+        for (let c = -1; c <= cols; c++) {
+          const shade = ((r * 7 + c * 13) % 5) * 6 - 12;
+          ctx.fillStyle = `rgb(${132 + shade}, ${58 + (shade >> 1)}, ${44 + (shade >> 1)})`;
+          ctx.fillRect(c * cw + off + 2, r * rh + 2, cw - 4, rh - 4);
+        }
+      }
+    }, 3, 2);
+
+    const stoneTex = makeArchTex((ctx, w, h) => {
+      ctx.fillStyle = '#6c655a';
+      ctx.fillRect(0, 0, w, h);
+      const rows = 10;
+      const rh = h / rows;
+      for (let r = 0; r < rows; r++) {
+        let x = -((r % 2) * 18);
+        while (x < w) {
+          const bw = 28 + ((r * 11 + x) % 22);
+          const shade = ((r * 5 + x) % 7) * 5 - 15;
+          ctx.fillStyle = `rgb(${156 + shade}, ${146 + shade}, ${130 + shade})`;
+          ctx.fillRect(x + 2, r * rh + 2, bw - 4, rh - 4);
+          x += bw;
+        }
+      }
+    }, 2, 2);
+
+    const plasterTex = makeArchTex((ctx, w, h) => {
+      ctx.fillStyle = '#c2b69f';
+      ctx.fillRect(0, 0, w, h);
+      for (let i = 0; i < 450; i++) {
+        const px = (i * 73) % w;
+        const py = (i * 137) % h;
+        ctx.fillStyle = i % 2 === 0 ? 'rgba(92,82,68,0.16)' : 'rgba(235,226,210,0.16)';
+        ctx.fillRect(px, py, 6 + (i % 10), 4 + (i % 8));
+      }
+      // Rodapé de pedra na base da parede
+      ctx.fillStyle = '#7c7365';
+      ctx.fillRect(0, h - 42, w, 42);
+    }, 2, 1);
+
+    const concreteTex = makeArchTex((ctx, w, h) => {
+      ctx.fillStyle = '#757a72';
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = 'rgba(42,46,40,0.45)';
+      ctx.lineWidth = 2;
+      for (let y = 32; y < h; y += 32) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+      for (let i = 0; i < 380; i++) {
+        ctx.fillStyle = i % 2 === 0 ? 'rgba(45,48,44,0.18)' : 'rgba(165,172,162,0.14)';
+        ctx.fillRect((i * 89) % w, (i * 151) % h, 5, 5);
+      }
+    }, 2, 2);
+
+    const roofTileTex = makeArchTex((ctx, w, h) => {
+      ctx.fillStyle = '#7a3e28';
+      ctx.fillRect(0, 0, w, h);
+      for (let y = 0; y < h; y += 16) {
+        ctx.fillStyle = 'rgba(38, 18, 10, 0.42)';
+        ctx.fillRect(0, y, w, 3);
+        for (let x = 0; x < w; x += 16) {
+          ctx.fillStyle = ((x + y) % 32 === 0) ? 'rgba(148, 76, 48, 0.35)' : 'rgba(96, 46, 28, 0.25)';
+          ctx.fillRect(x + 1, y + 3, 14, 13);
+        }
+      }
+    }, 3, 3);
+
     this.materials = {
       skin: new THREE.MeshStandardMaterial({ color: 0xd9a17c, roughness: 0.75 }),
       bootLeather: new THREE.MeshStandardMaterial({ color: 0x1c1916, roughness: 0.82 }),
@@ -306,13 +400,55 @@ export class Renderer3D {
         color: 0x8f8260,
         roughness: 0.92,
       }),
-      concrete: new THREE.MeshStandardMaterial({ color: 0x6e736b, roughness: 0.88 }),
-      concreteDark: new THREE.MeshStandardMaterial({ color: 0x484d46, roughness: 0.92 }),
-      masonryStone: new THREE.MeshStandardMaterial({ color: 0x9c9282, roughness: 0.88 }),
-      plasterWarm: new THREE.MeshStandardMaterial({ color: 0xb8ad99, roughness: 0.86 }),
-      brickBarn: new THREE.MeshStandardMaterial({ color: 0x7d382c, roughness: 0.86 }),
-      roofSlate: new THREE.MeshStandardMaterial({ color: 0x3b4046, roughness: 0.82 }),
-      roofTile: new THREE.MeshStandardMaterial({ color: 0x6e3b28, roughness: 0.85 }),
+      concrete: new THREE.MeshStandardMaterial({
+        color: 0x888e84,
+        map: concreteTex,
+        bumpMap: concreteTex,
+        bumpScale: 1.2,
+        roughness: 0.88,
+      }),
+      concreteDark: new THREE.MeshStandardMaterial({
+        color: 0x5c6259,
+        map: concreteTex,
+        bumpMap: concreteTex,
+        bumpScale: 1.4,
+        roughness: 0.92,
+      }),
+      masonryStone: new THREE.MeshStandardMaterial({
+        color: 0xb5aa98,
+        map: stoneTex,
+        bumpMap: stoneTex,
+        bumpScale: 1.6,
+        roughness: 0.88,
+      }),
+      plasterWarm: new THREE.MeshStandardMaterial({
+        color: 0xd8ccb8,
+        map: plasterTex,
+        bumpMap: plasterTex,
+        bumpScale: 1.1,
+        roughness: 0.86,
+      }),
+      brickBarn: new THREE.MeshStandardMaterial({
+        color: 0xb85a48,
+        map: brickTex,
+        bumpMap: brickTex,
+        bumpScale: 1.6,
+        roughness: 0.86,
+      }),
+      roofSlate: new THREE.MeshStandardMaterial({
+        color: 0x4b525a,
+        map: roofTileTex,
+        bumpMap: roofTileTex,
+        bumpScale: 1.3,
+        roughness: 0.82,
+      }),
+      roofTile: new THREE.MeshStandardMaterial({
+        color: 0x9e5236,
+        map: roofTileTex,
+        bumpMap: roofTileTex,
+        bumpScale: 1.5,
+        roughness: 0.85,
+      }),
       windowDark: new THREE.MeshStandardMaterial({ color: 0x14181d, roughness: 0.5 }),
       rustMetal: new THREE.MeshStandardMaterial({ color: 0x4a3326, roughness: 0.85, metalness: 0.35 }),
       charredMetal: new THREE.MeshStandardMaterial({ color: 0x262422, roughness: 0.9, metalness: 0.25 }),
@@ -473,6 +609,14 @@ export class Renderer3D {
     }
     this.sectorMeshes.clear();
     this.structureMeshes.clear();
+    if (!this.wreckMeshes) this.wreckMeshes = new Map();
+    this.wreckMeshes.clear();
+    if (!this.stoneWallMeshes) this.stoneWallMeshes = new Map();
+    this.stoneWallMeshes.clear();
+    if (!this.editorFoliageMeshes) this.editorFoliageMeshes = new Map();
+    this.editorFoliageMeshes.clear();
+    this._treeInstMeshes = { palm: [], pine: [], oak: [] };
+    this._bushInstMeshes = [];
     this.windmillBlades = [];
     this.vfx?.clear();
 
@@ -504,8 +648,8 @@ export class Renderer3D {
     const groundMat = new THREE.MeshStandardMaterial({
       map: groundTex,
       bumpMap: groundBump,
-      bumpScale: 3.6,
-      roughness: 0.92,
+      bumpScale: 2.8,
+      roughness: 0.9,
       metalness: 0.02,
     });
     const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -516,13 +660,13 @@ export class Renderer3D {
     this.carvedTrenchIds = new Set();
     this.worldGroup.add(ground);
 
-    // 1b. Camada de Micro-Detalhe (RepeatWrapping 64x64) para nitidez total ao aproximar a câmera
+    // 1b. Camada de Micro-Detalhe (RepeatWrapping 84x84) para nitidez total ao aproximar a câmera
     const detailTex = createGroundDetailTexture(map.theme || 'rural');
     detailTex.anisotropy = maxAniso;
     const detailMat = new THREE.MeshStandardMaterial({
       map: detailTex,
       transparent: true,
-      opacity: 0.36,
+      opacity: 0.28,
       blending: THREE.MultiplyBlending,
       premultipliedAlpha: true,
       depthWrite: false,
@@ -579,6 +723,7 @@ export class Renderer3D {
       const midY = (w.y1 + w.y2) * 0.5;
       wm.position.y += getTerrainHeight(midX, midY, map);
       this.worldGroup.add(wm);
+      if (w.id) this.stoneWallMeshes?.set(w.id, wm);
     }
 
     // 6. Carros Abandonados, Caminhões Queimados e Tanques Destruídos
@@ -587,6 +732,7 @@ export class Renderer3D {
       wrkMesh.position.set(wrk.x, getTerrainHeight(wrk.x, wrk.y, map), wrk.y);
       wrkMesh.rotation.y = wrk.angle || 0;
       this.worldGroup.add(wrkMesh);
+      if (wrk.id) this.wreckMeshes?.set(wrk.id, wrkMesh);
     }
 
     // 7. 12 Pontos Estratégicos de Conquista (Bandeira 3D que sobe/desce + Tendas & Barris)
@@ -599,6 +745,234 @@ export class Renderer3D {
 
     // 8. Linha de Frente Dinâmica
     this._initFrontlineMesh(map);
+  }
+
+  // =========================================================================
+  // ATUALIZAÇÃO INCREMENTAL INSTANTÂNEA DO EDITOR DE MAPA (<0.2ms, SEM TRAVAR)
+  // =========================================================================
+  addEditorStructure(st, map) {
+    if (!st || !this.worldGroup) return;
+    const stMesh = this._createRuralStructureMesh(st);
+    stMesh.position.set(st.x, getTerrainHeight(st.x, st.y, map), st.y);
+    stMesh.rotation.y = st.angle || 0;
+    this.worldGroup.add(stMesh);
+    this.structureMeshes.set(st.id, stMesh);
+  }
+
+  removeEditorStructure(stId) {
+    const m = this.structureMeshes.get(stId);
+    if (m) {
+      this.worldGroup.remove(m);
+      this.structureMeshes.delete(stId);
+    }
+  }
+
+  addEditorWreck(wrk, map) {
+    if (!wrk || !this.worldGroup) return;
+    const wrkMesh = this._createWreckMesh(wrk);
+    wrkMesh.position.set(wrk.x, getTerrainHeight(wrk.x, wrk.y, map), wrk.y);
+    wrkMesh.rotation.y = wrk.angle || 0;
+    this.worldGroup.add(wrkMesh);
+    this.wreckMeshes?.set(wrk.id, wrkMesh);
+  }
+
+  removeEditorWreck(wrkId) {
+    const m = this.wreckMeshes?.get(wrkId);
+    if (m) {
+      this.worldGroup.remove(m);
+      this.wreckMeshes.delete(wrkId);
+    }
+  }
+
+  addEditorFoliage(item, kind, map) {
+    if (!item || !this.worldGroup) return;
+    if (!this._editorFoliageMats) {
+      this._editorFoliageMats = {
+        pine: new THREE.MeshStandardMaterial({ color: 0x264d26, roughness: 0.88 }),
+        oak: new THREE.MeshStandardMaterial({ color: 0x3d5c28, roughness: 0.88 }),
+        bush: new THREE.MeshStandardMaterial({ color: 0x3c5b25, roughness: 0.92 }),
+        charred: new THREE.MeshStandardMaterial({ color: 0x241e1a, roughness: 0.96 }),
+        rock: new THREE.MeshStandardMaterial({ color: 0x5c574f, roughness: 0.94 }),
+        rim: new THREE.MeshStandardMaterial({ color: 0x2b231b, roughness: 0.98 }),
+      };
+    }
+    const g = new THREE.Group();
+    const sc = item.scale || 1;
+    const gy = getTerrainHeight(item.x, item.y, map);
+    g.position.set(item.x, gy, item.y);
+
+    if (kind === 'tree_pine') {
+      const trunk = new THREE.Mesh(this.geometries.cyl, this.materials.trenchDarkTimber);
+      trunk.scale.set(3.2 * sc, 34 * sc, 3.2 * sc);
+      trunk.position.y = 17 * sc;
+      g.add(trunk);
+      const coneMat = this._editorFoliageMats.pine;
+      [
+        { y: 30, r: 20, h: 24 },
+        { y: 46, r: 16, h: 22 },
+        { y: 61, r: 12, h: 20 },
+        { y: 75, r: 8, h: 17 },
+      ].forEach((tier, li) => {
+        const c = new THREE.Mesh(this.geometries.cone, coneMat);
+        c.scale.set(tier.r * sc, tier.h * sc, tier.r * sc);
+        c.position.y = tier.y * sc;
+        c.rotation.z = (li % 2 === 0 ? 1 : -1) * 0.06;
+        g.add(c);
+      });
+    } else if (kind === 'tree_oak') {
+      const trunk = new THREE.Mesh(this.geometries.cyl, this.materials.trenchDarkTimber);
+      trunk.scale.set(3.0 * sc, 22 * sc, 3.0 * sc);
+      trunk.position.y = 11 * sc;
+      g.add(trunk);
+      const crownMat = this._editorFoliageMats.oak;
+      [
+        { x: 0, y: 27, z: 0, r: 12 },
+        { x: 6, y: 24, z: 4, r: 9 },
+        { x: -5, y: 25, z: -4, r: 8.5 },
+      ].forEach((cl) => {
+        const m = new THREE.Mesh(this.geometries.sphere, crownMat);
+        m.scale.set(cl.r * 2 * sc, cl.r * 1.5 * sc, cl.r * 2 * sc);
+        m.position.set(cl.x * sc, cl.y * sc, cl.z * sc);
+        g.add(m);
+      });
+    } else if (kind === 'tree_burnt') {
+      const charredMat = this._editorFoliageMats.charred;
+      const trunk = new THREE.Mesh(this.geometries.cyl, charredMat);
+      trunk.scale.set(2.8 * sc, 28 * sc, 2.8 * sc);
+      trunk.position.y = 14 * sc;
+      trunk.rotation.z = 0.05;
+      g.add(trunk);
+      [
+        { y: 18, len: 11, rx: 0.45, rz: 0.7 },
+        { y: 22, len: 9, rx: -0.5, rz: -0.65 },
+        { y: 25, len: 7, rx: 0.3, rz: -0.5 },
+      ].forEach((br) => {
+        const bMesh = new THREE.Mesh(this.geometries.cyl, charredMat);
+        bMesh.scale.set(1.1 * sc, br.len * sc, 1.1 * sc);
+        bMesh.position.set(0, br.y * sc, 0);
+        bMesh.rotation.set(br.rx, 0, br.rz);
+        g.add(bMesh);
+      });
+    } else if (kind === 'crater_rock') {
+      const rockMat = this._editorFoliageMats.rock;
+      const rimMat = this._editorFoliageMats.rim;
+      const rim = new THREE.Mesh(this.geometries.cyl, rimMat);
+      rim.scale.set(22 * sc, 1.8 * sc, 22 * sc);
+      rim.position.y = 0.6;
+      g.add(rim);
+      [
+        { x: -7, y: 3.2, z: -4, rx: 6.5, ry: 4.5, rz: 5.5 },
+        { x: 6, y: 2.6, z: 5, rx: 5.2, ry: 3.8, rz: 4.8 },
+        { x: 2, y: 2.2, z: -6, rx: 4.0, ry: 2.8, rz: 3.6 },
+      ].forEach((rk) => {
+        const m = new THREE.Mesh(this.geometries.sphere, rockMat);
+        m.scale.set(rk.rx * sc, rk.ry * sc, rk.rz * sc);
+        m.position.set(rk.x * sc, rk.y * sc, rk.z * sc);
+        m.castShadow = true;
+        g.add(m);
+      });
+    } else {
+      const bushMat = this._editorFoliageMats.bush;
+      [
+        { x: 0, y: 5.5, z: 0, r: 8.5 },
+        { x: 5, y: 4.2, z: 3, r: 6.5 },
+        { x: -5, y: 4.5, z: -3, r: 6.2 },
+      ].forEach((cl) => {
+        const m = new THREE.Mesh(this.geometries.sphere, bushMat);
+        m.scale.set(cl.r * 2 * sc, cl.r * 1.3 * sc, cl.r * 2 * sc);
+        m.position.set(cl.x * sc, cl.y * sc, cl.z * sc);
+        g.add(m);
+      });
+    }
+
+    this.worldGroup.add(g);
+    if (item._editorId) this.editorFoliageMeshes?.set(item._editorId, g);
+  }
+
+  removeEditorFoliage(editorId) {
+    const m = this.editorFoliageMeshes?.get(editorId);
+    if (m) {
+      this.worldGroup.remove(m);
+      this.editorFoliageMeshes.delete(editorId);
+    }
+  }
+
+  addEditorStoneWall(w, map) {
+    if (!w || !this.worldGroup) return;
+    if (w.id && this.stoneWallMeshes?.has(w.id)) {
+      this.removeEditorStoneWall(w.id);
+    }
+    const wm = this._createStoneWallMesh(w);
+    const midX = (w.x1 + w.x2) * 0.5;
+    const midY = (w.y1 + w.y2) * 0.5;
+    wm.position.y += getTerrainHeight(midX, midY, map);
+    this.worldGroup.add(wm);
+    if (w.id) this.stoneWallMeshes?.set(w.id, wm);
+  }
+
+  removeEditorStoneWall(wallId) {
+    const m = this.stoneWallMeshes?.get(wallId);
+    if (m) {
+      this.worldGroup.remove(m);
+      this.stoneWallMeshes.delete(wallId);
+    }
+  }
+
+  moveEditorSector(sec, map) {
+    if (!sec) return;
+    const secGroup = this.sectorMeshes?.get(sec.id);
+    if (secGroup) {
+      secGroup.position.set(sec.x, getTerrainHeight(sec.x, sec.y, map), sec.y);
+    }
+  }
+
+  updateEditorObjectTransform(obj, map) {
+    if (!obj || !obj.item) return;
+    const item = obj.item;
+    if (obj.kind === 'structure') {
+      const m = this.structureMeshes?.get(obj.id);
+      if (m) {
+        m.position.set(item.x, getTerrainHeight(item.x, item.y, map), item.y);
+        m.rotation.y = item.angle || 0;
+      }
+    } else if (obj.kind === 'wreck') {
+      const m = this.wreckMeshes?.get(obj.id);
+      if (m) {
+        m.position.set(item.x, getTerrainHeight(item.x, item.y, map), item.y);
+        m.rotation.y = item.angle || 0;
+      }
+    } else if (obj.kind === 'foliage') {
+      const m = this.editorFoliageMeshes?.get(obj.id);
+      if (m) {
+        m.position.set(item.x, getTerrainHeight(item.x, item.y, map), item.y);
+        m.rotation.y = item.angle || 0;
+      }
+    } else if (obj.kind === 'wall') {
+      this.addEditorStoneWall(item, map);
+    }
+  }
+
+  hideInstancedTree(treeObj) {
+    if (!treeObj || typeof treeObj._instIdx !== 'number') return;
+    const meshes = this._treeInstMeshes?.[treeObj._instKind] || [];
+    const zeroMat = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (const m of meshes) {
+      m.setMatrixAt(treeObj._instIdx, zeroMat);
+      m.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  hideInstancedBush(bushObj) {
+    if (!bushObj || typeof bushObj._instIdx !== 'number') return;
+    const meshes = this._bushInstMeshes || [];
+    const zeroMat = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (const m of meshes) {
+      m.setMatrixAt(bushObj._instIdx, zeroMat);
+      m.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  _buildPreviewAtInit() {
 
     // 9. Nevasca 3D em Partículas (quando mapa for Bastogne Inverno)
     this.snowSystem = null;
@@ -648,18 +1022,18 @@ export class Renderer3D {
     const fogBase = isDesert
       ? 'rgba(28, 22, 14, 0.78)'
       : isWinter
-      ? 'rgba(15, 20, 28, 0.78)'
-      : 'rgba(12, 16, 12, 0.78)';
+        ? 'rgba(15, 20, 28, 0.78)'
+        : 'rgba(12, 16, 12, 0.78)';
     const fogCloud0 = isDesert
       ? 'rgba(48, 36, 24, 0.28)'
       : isWinter
-      ? 'rgba(28, 36, 48, 0.28)'
-      : 'rgba(28, 36, 28, 0.28)';
+        ? 'rgba(28, 36, 48, 0.28)'
+        : 'rgba(28, 36, 28, 0.28)';
     const fogCloud1 = isDesert
       ? 'rgba(28, 22, 14, 0)'
       : isWinter
-      ? 'rgba(15, 20, 28, 0)'
-      : 'rgba(12, 16, 12, 0)';
+        ? 'rgba(15, 20, 28, 0)'
+        : 'rgba(12, 16, 12, 0)';
 
     ctx.globalCompositeOperation = 'source-over';
     ctx.clearRect(0, 0, size, size);
@@ -709,7 +1083,7 @@ export class Renderer3D {
     const g = new THREE.Group();
     const dx = w.x2 - w.x1;
     const dy = w.y2 - w.y1;
-    const len = Math.hypot(dx, dy);
+    const len = Math.max(24, Math.hypot(dx, dy));
     const cx = (w.x1 + w.x2) * 0.5;
     const cy = (w.y1 + w.y2) * 0.5;
     const ang = Math.atan2(dx, dy);
@@ -717,7 +1091,82 @@ export class Renderer3D {
     g.position.set(cx, 0, cy);
     g.rotation.y = ang;
 
-    const wallH = w.height || 11;
+    if (w.type === 'fortified') {
+      const wallH = w.height || 42;
+      const wallT = w.thickness || 20;
+      const body = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+      body.scale.set(wallT, wallH, len);
+      body.position.set(0, wallH * 0.5, 0);
+      body.castShadow = true;
+      body.receiveShadow = true;
+      g.add(body);
+
+      const walkway = new THREE.Mesh(this.geometries.box, this.materials.concrete);
+      walkway.scale.set(wallT + 4, 3.2, len);
+      walkway.position.set(0, wallH + 1.2, 0);
+      g.add(walkway);
+
+      const merlonCount = Math.max(2, Math.floor(len / 28));
+      for (let m = 0; m < merlonCount; m++) {
+        const mz = -len * 0.5 + (m + 0.5) * (len / merlonCount);
+        const merlon = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+        merlon.scale.set(wallT + 4.5, 6.2, Math.min(14, (len / merlonCount) * 0.55));
+        merlon.position.set(0, wallH + 5.2, mz);
+        merlon.castShadow = true;
+        g.add(merlon);
+      }
+
+      const numPillars = Math.max(1, Math.round(len / 110));
+      for (let p = 0; p <= numPillars; p++) {
+        const pz = -len * 0.5 + (p / numPillars) * len;
+        const pillar = new THREE.Mesh(this.geometries.box, this.materials.gunMetal);
+        pillar.scale.set(wallT + 6, wallH + 8, 10);
+        pillar.position.set(0, (wallH + 8) * 0.5, pz);
+        pillar.castShadow = true;
+        g.add(pillar);
+      }
+      return g;
+    }
+
+    if (w.type === 'sandbag') {
+      const bagCols = Math.max(3, Math.floor(len / 11));
+      for (let row = 0; row < 3; row++) {
+        for (let c = 0; c < bagCols; c++) {
+          const sb = new THREE.Mesh(this.geometries.sandbag, this.materials.sandbagOlive);
+          const zOff = -len * 0.5 + (c + 0.5 + (row % 2) * 0.25) * (len / bagCols);
+          sb.scale.set(1.2, 1.15, 1.35);
+          sb.position.set(0, 2.2 + row * 2.8, zOff);
+          sb.castShadow = true;
+          g.add(sb);
+        }
+      }
+      return g;
+    }
+
+    if (w.type === 'tank_trap') {
+      const trapCount = Math.max(2, Math.floor(len / 28));
+      for (let i = 0; i < trapCount; i++) {
+        const zOff = -len * 0.5 + (i + 0.5) * (len / trapCount);
+        const hg = new THREE.Group();
+        hg.position.set(0, 6.5, zOff);
+        const angles = [
+          [0.78, 0, 0.65],
+          [-0.78, 0, -0.65],
+          [0, 0.78, 0.78],
+        ];
+        for (const [rx, ry, rz] of angles) {
+          const beam = new THREE.Mesh(this.geometries.box, this.materials.charredMetal);
+          beam.scale.set(2.4, 17, 2.4);
+          beam.rotation.set(rx, ry, rz);
+          beam.castShadow = true;
+          hg.add(beam);
+        }
+        g.add(hg);
+      }
+      return g;
+    }
+
+    const wallH = w.height || 13;
     const mat = w.type === 'brick' ? this.materials.brickBarn : this.materials.masonryStone;
     const wall = new THREE.Mesh(this.geometries.box, mat);
     wall.scale.set(w.thickness || 16, wallH, len);
@@ -726,7 +1175,9 @@ export class Renderer3D {
     wall.receiveShadow = true;
     g.add(wall);
 
-    for (const t of [-0.5, 0, 0.5]) {
+    const pillarCount = Math.max(2, Math.round(len / 95));
+    for (let p = 0; p <= pillarCount; p++) {
+      const t = -0.5 + p / pillarCount;
       const pillar = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
       pillar.scale.set((w.thickness || 16) + 3, wallH + 2.5, 8);
       pillar.position.set(0, (wallH + 2.5) * 0.5, t * len);
@@ -1799,6 +2250,8 @@ export class Renderer3D {
       const pTrunks = new THREE.InstancedMesh(this.geometries.cyl, trunkMat, palmTrees.length);
       const pCrowns = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 0.35, 7), palmMat, palmTrees.length);
       palmTrees.forEach((t, i) => {
+        t._instKind = 'palm';
+        t._instIdx = i;
         const sc = 0.9 + ((t.scale || 1) - 0.9) * 0.4;
         const gy = getTerrainHeight(t.x, t.y, map);
         dummy.position.set(t.x, gy + 32 * sc, t.y);
@@ -1815,6 +2268,7 @@ export class Renderer3D {
       });
       pTrunks.castShadow = true;
       pCrowns.castShadow = true;
+      this._treeInstMeshes.palm = [pTrunks, pCrowns];
       this.worldGroup.add(pTrunks, pCrowns);
     }
 
@@ -1825,16 +2279,15 @@ export class Renderer3D {
     const paletteWinter = [0x213d2b, 0x2b4a36, 0x1b3324];
     const pal = isDesert ? paletteDesert : isWinter ? paletteWinter : palettePine;
 
-    // 1. Pinheiros Militares Altos (7.0m–10.5m de altura, copa base 3.0m–4.5m, 5 camadas de cones de 8 lados)
+    // 1. Pinheiros/Coníferas Realistas (4 camadas assimétricas e inclinadas em 3 tons de verde-pinho/musgo)
     if (pineTrees.length > 0) {
-      const pineCone = new THREE.ConeGeometry(1, 1, 8);
+      const pineTierGeo = new THREE.ConeGeometry(1, 1, 7);
       const pTrunks = new THREE.InstancedMesh(this.geometries.cyl, trunkMat, pineTrees.length);
       const pLayers = [
-        new THREE.InstancedMesh(pineCone, leafMat, pineTrees.length),
-        new THREE.InstancedMesh(pineCone, leafMat, pineTrees.length),
-        new THREE.InstancedMesh(pineCone, leafMat, pineTrees.length),
-        new THREE.InstancedMesh(pineCone, leafMat, pineTrees.length),
-        new THREE.InstancedMesh(pineCone, leafMat, pineTrees.length),
+        new THREE.InstancedMesh(pineTierGeo, leafMat, pineTrees.length),
+        new THREE.InstancedMesh(pineTierGeo, leafMat, pineTrees.length),
+        new THREE.InstancedMesh(pineTierGeo, leafMat, pineTrees.length),
+        new THREE.InstancedMesh(pineTierGeo, leafMat, pineTrees.length),
       ];
 
       [pTrunks, ...pLayers].forEach((m) => {
@@ -1843,35 +2296,42 @@ export class Renderer3D {
       });
 
       const layerSpecs = [
-        { y: 31, r: 19.5, h: 25 },
-        { y: 45, r: 16.2, h: 23 },
-        { y: 59, r: 12.8, h: 21 },
-        { y: 72, r: 9.4, h: 19 },
-        { y: 84, r: 6.0, h: 16 },
+        { y: 30, r: 20.5, h: 24, tilt: 0.09 },
+        { y: 46, r: 16.5, h: 22, tilt: -0.08 },
+        { y: 61, r: 12.2, h: 20, tilt: 0.07 },
+        { y: 76, r: 7.8, h: 18, tilt: -0.06 },
       ];
 
       pineTrees.forEach((t, i) => {
-        // Escala total entre 7.0m (70u) e 10.5m (105u) de altura; base da copa 3.0m–4.5m (15u–22.5u raio)
+        t._instKind = 'pine';
+        t._instIdx = i;
+        const isBurnt = i % 15 === 0 && !isWinter;
         const hScale = 0.78 + ((t.scale || 1.0) - 0.85) * 0.45;
         const wScale = 0.82 + (t.foliageTone || 0.5) * 0.34;
         const gy = getTerrainHeight(t.x, t.y, map);
         const yaw = (t.foliageTone || 0.5) * Math.PI * 2;
 
-        dummy.position.set(t.x, gy + 16 * hScale, t.y);
-        dummy.rotation.set(0, yaw, 0);
-        dummy.scale.set(3.2 * wScale, 32 * hScale, 3.2 * wScale);
+        dummy.position.set(t.x, gy + 17 * hScale, t.y);
+        dummy.rotation.set(isBurnt ? 0.08 : 0, yaw, isBurnt ? -0.07 : 0);
+        dummy.scale.set(3.2 * wScale, 34 * hScale, 3.2 * wScale);
         dummy.updateMatrix();
         pTrunks.setMatrixAt(i, dummy.matrix);
 
         layerSpecs.forEach((spec, li) => {
-          dummy.position.set(t.x, gy + spec.y * hScale, t.y);
-          dummy.rotation.set(0, yaw + li * 0.45, 0);
-          dummy.scale.set(spec.r * wScale, spec.h * hScale, spec.r * wScale);
+          if (isBurnt) {
+            dummy.scale.set(0.001, 0.001, 0.001);
+          } else {
+            const offX = Math.cos(yaw + li * 1.7) * 2.2 * wScale;
+            const offZ = Math.sin(yaw + li * 1.7) * 2.2 * wScale;
+            dummy.position.set(t.x + offX, gy + spec.y * hScale, t.y + offZ);
+            dummy.rotation.set(spec.tilt, yaw + li * 0.85, -spec.tilt * 0.8);
+            dummy.scale.set(spec.r * wScale * 1.08, spec.h * hScale, spec.r * wScale * 0.92);
+          }
           dummy.updateMatrix();
           pLayers[li].setMatrixAt(i, dummy.matrix);
 
           col.setHex(pal[(i + li) % pal.length]);
-          col.offsetHSL(0, 0, li * 0.015);
+          col.offsetHSL((li % 2 === 0 ? 0.01 : -0.01), 0, li * 0.015);
           pLayers[li].setColorAt(i, col);
         });
       });
@@ -1879,57 +2339,78 @@ export class Renderer3D {
       pLayers.forEach((m) => {
         if (m.instanceColor) m.instanceColor.needsUpdate = true;
       });
+      this._treeInstMeshes.pine = [pTrunks, ...pLayers];
       this.worldGroup.add(pTrunks, ...pLayers);
     }
 
-    // 2. Árvores de Campo (Carvalhos/Bétulas com esferas suaves em verde-oliva militar)
+    // 2. Carvalhos / Árvores de Copa Larga (tronco ramificado + 4 aglomerados Icosahedron irregulares) + Árvores Queimadas
     if (oakTrees.length > 0) {
-      const smoothSphere = new THREE.SphereGeometry(1, 12, 10);
+      const foliageClusterGeo = new THREE.IcosahedronGeometry(1, 1);
       const oTrunks = new THREE.InstancedMesh(this.geometries.cyl, trunkMat, oakTrees.length);
-      const oCrownA = new THREE.InstancedMesh(smoothSphere, leafMat, oakTrees.length);
-      const oCrownB = new THREE.InstancedMesh(smoothSphere, leafMat, oakTrees.length);
+      const oBranches = new THREE.InstancedMesh(this.geometries.cyl, trunkMat, oakTrees.length);
+      const oCrowns = [
+        new THREE.InstancedMesh(foliageClusterGeo, leafMat, oakTrees.length),
+        new THREE.InstancedMesh(foliageClusterGeo, leafMat, oakTrees.length),
+        new THREE.InstancedMesh(foliageClusterGeo, leafMat, oakTrees.length),
+        new THREE.InstancedMesh(foliageClusterGeo, leafMat, oakTrees.length),
+      ];
 
-      [oTrunks, oCrownA, oCrownB].forEach((m) => {
+      [oTrunks, oBranches, ...oCrowns].forEach((m) => {
         m.castShadow = true;
         m.receiveShadow = true;
       });
 
+      const oakPal = isDesert ? paletteDesert : isWinter ? paletteWinter : [0x3d5c28, 0x4b6a2f, 0x2f4d21, 0x7a652d];
+
       oakTrees.forEach((t, i) => {
-        const hScale = 0.82 + ((t.scale || 1) - 0.9) * 0.42; // 3.5m a 5.0m total
+        t._instKind = 'oak';
+        t._instIdx = i;
+        const isBurnt = i % 12 === 0;
+        const hScale = 0.84 + ((t.scale || 1) - 0.9) * 0.42;
         const gy = getTerrainHeight(t.x, t.y, map);
         const yaw = (t.foliageTone || 0.5) * Math.PI * 2;
 
-        dummy.position.set(t.x, gy + 10 * hScale, t.y);
-        dummy.rotation.set(0, yaw, (t.foliageTone - 0.5) * 0.06);
-        dummy.scale.set(2.8 * hScale, 20 * hScale, 2.8 * hScale);
+        dummy.position.set(t.x, gy + 11 * hScale, t.y);
+        dummy.rotation.set(0, yaw, (t.foliageTone - 0.5) * 0.08);
+        dummy.scale.set(3.0 * hScale, 22 * hScale, 3.0 * hScale);
         dummy.updateMatrix();
         oTrunks.setMatrixAt(i, dummy.matrix);
 
-        dummy.position.set(t.x, gy + 26 * hScale, t.y);
-        dummy.rotation.set(0, yaw, 0);
-        dummy.scale.set(12.5 * hScale, 9.5 * hScale, 12.5 * hScale);
+        // Galho ramificado inclinado
+        dummy.position.set(t.x + Math.cos(yaw) * 4.2 * hScale, gy + 19 * hScale, t.y + Math.sin(yaw) * 4.2 * hScale);
+        dummy.rotation.set(0.45, yaw, 0.55);
+        dummy.scale.set(1.5 * hScale, 14 * hScale, 1.5 * hScale);
         dummy.updateMatrix();
-        oCrownA.setMatrixAt(i, dummy.matrix);
+        oBranches.setMatrixAt(i, dummy.matrix);
 
-        dummy.position.set(
-          t.x + Math.cos(yaw) * 4.5 * hScale,
-          gy + 31 * hScale,
-          t.y + Math.sin(yaw) * 4.5 * hScale
-        );
-        dummy.scale.set(9.2 * hScale, 7.5 * hScale, 9.2 * hScale);
-        dummy.updateMatrix();
-        oCrownB.setMatrixAt(i, dummy.matrix);
-
-        col.setHex(pal[(i + 1) % pal.length]);
-        oCrownA.setColorAt(i, col);
-        col.offsetHSL(0.015, 0, 0.04);
-        oCrownB.setColorAt(i, col);
+        const clusterOffsets = [
+          { x: 0, y: 27, z: 0, sx: 11.5, sy: 8.5, sz: 10.5 },
+          { x: 6.2, y: 24, z: 4.5, sx: 8.5, sy: 7.0, sz: 8.8 },
+          { x: -5.8, y: 25, z: -4.2, sx: 8.2, sy: 6.8, sz: 8.4 },
+          { x: 2.0, y: 32, z: -2.8, sx: 7.5, sy: 6.4, sz: 7.2 },
+        ];
+        clusterOffsets.forEach((cl, ci) => {
+          if (isBurnt) {
+            dummy.scale.set(0.001, 0.001, 0.001);
+          } else {
+            const rx = Math.cos(yaw) * cl.x - Math.sin(yaw) * cl.z;
+            const rz = Math.sin(yaw) * cl.x + Math.cos(yaw) * cl.z;
+            dummy.position.set(t.x + rx * hScale, gy + cl.y * hScale, t.y + rz * hScale);
+            dummy.rotation.set(ci * 0.5, yaw + ci * 1.1, ci * 0.35);
+            dummy.scale.set(cl.sx * hScale, cl.sy * hScale, cl.sz * hScale);
+          }
+          dummy.updateMatrix();
+          oCrowns[ci].setMatrixAt(i, dummy.matrix);
+          col.setHex(oakPal[(i + ci) % oakPal.length]);
+          oCrowns[ci].setColorAt(i, col);
+        });
       });
 
-      [oCrownA, oCrownB].forEach((m) => {
+      oCrowns.forEach((m) => {
         if (m.instanceColor) m.instanceColor.needsUpdate = true;
       });
-      this.worldGroup.add(oTrunks, oCrownA, oCrownB);
+      this._treeInstMeshes.oak = [oTrunks, oBranches, ...oCrowns];
+      this.worldGroup.add(oTrunks, oBranches, ...oCrowns);
     }
   }
 
@@ -1985,41 +2466,108 @@ export class Renderer3D {
       this.worldGroup.add(grassMesh);
     }
 
-    // 1b. Arbustos Densos Volumétricos & Sebes Táticas (map.bushes — 3 esferas achatadas por moita, 1.2–2.2m)
+    // 1b. Arbustos Compostos (4 aglomerados irregulares + base lenhosa + variação de cor) + Cercas Vivas (Bocage)
     const bushes = map.bushes || [];
     if (bushes.length > 0) {
-      const bushGeo = new THREE.SphereGeometry(1, 10, 8);
+      const bushGeo = new THREE.DodecahedronGeometry(1, 0);
       const bushMat = new THREE.MeshStandardMaterial({
-        color: isDesert ? 0x6c743a : isWinter ? 0xcad6df : 0x3c5b25,
+        color: 0xffffff,
         roughness: 0.92,
       });
-      const bLobeA = new THREE.InstancedMesh(bushGeo, bushMat, bushes.length);
-      const bLobeB = new THREE.InstancedMesh(bushGeo, bushMat, bushes.length);
-      const bLobeC = new THREE.InstancedMesh(bushGeo, bushMat, bushes.length);
-      [bLobeA, bLobeB, bLobeC].forEach((m) => {
+      const stemMat = new THREE.MeshStandardMaterial({
+        color: 0x3f2e1d,
+        roughness: 0.96,
+      });
+      const bStems = new THREE.InstancedMesh(this.geometries.cyl, stemMat, bushes.length);
+      const bLobes = [
+        new THREE.InstancedMesh(bushGeo, bushMat, bushes.length),
+        new THREE.InstancedMesh(bushGeo, bushMat, bushes.length),
+        new THREE.InstancedMesh(bushGeo, bushMat, bushes.length),
+        new THREE.InstancedMesh(bushGeo, bushMat, bushes.length),
+      ];
+      [bStems, ...bLobes].forEach((m) => {
         m.castShadow = true;
         m.receiveShadow = true;
       });
+      const bCol = new THREE.Color();
+      const bPal = isDesert
+        ? [0x6c743a, 0x828446, 0x5c6332]
+        : isWinter
+          ? [0x9fb2be, 0x4b5c42, 0xcad6df]
+          : [0x3c5b25, 0x4b6b2d, 0x2e4a1c, 0x6c6e34];
+
       bushes.forEach((b, i) => {
+        b._instIdx = i;
         const sc = b.scale || 1;
         const by = getTerrainHeight(b.x, b.y, map);
-        dummy.position.set(b.x, by + 5.5 * sc, b.y);
-        dummy.rotation.set(0, i * 0.9, 0);
-        dummy.scale.set(9.5 * sc, 6.8 * sc, 9.5 * sc);
+        dummy.position.set(b.x, by + 2.2 * sc, b.y);
+        dummy.rotation.set(0.1, i * 0.9, -0.1);
+        dummy.scale.set(1.6 * sc, 4.5 * sc, 1.6 * sc);
         dummy.updateMatrix();
-        bLobeA.setMatrixAt(i, dummy.matrix);
+        bStems.setMatrixAt(i, dummy.matrix);
 
-        dummy.position.set(b.x + 6.5 * sc, by + 4.5 * sc, b.y + 3.5 * sc);
-        dummy.scale.set(7.5 * sc, 5.4 * sc, 7.5 * sc);
-        dummy.updateMatrix();
-        bLobeB.setMatrixAt(i, dummy.matrix);
-
-        dummy.position.set(b.x - 5.5 * sc, by + 4.8 * sc, b.y - 4.0 * sc);
-        dummy.scale.set(7.2 * sc, 5.8 * sc, 7.2 * sc);
-        dummy.updateMatrix();
-        bLobeC.setMatrixAt(i, dummy.matrix);
+        const offsets = [
+          { dx: 0, dy: 5.5, dz: 0, sx: 8.8, sy: 6.2, sz: 8.4 },
+          { dx: 5.8, dy: 4.2, dz: 3.2, sx: 6.8, sy: 5.0, sz: 6.5 },
+          { dx: -5.2, dy: 4.5, dz: -3.6, sx: 6.5, sy: 5.2, sz: 6.2 },
+          { dx: 1.5, dy: 7.4, dz: -2.2, sx: 5.4, sy: 4.4, sz: 5.2 },
+        ];
+        offsets.forEach((o, oi) => {
+          dummy.position.set(b.x + o.dx * sc, by + o.dy * sc, b.y + o.dz * sc);
+          dummy.rotation.set(oi * 0.4, i * 0.9 + oi * 1.3, oi * 0.25);
+          dummy.scale.set(o.sx * sc, o.sy * sc, o.sz * sc);
+          dummy.updateMatrix();
+          bLobes[oi].setMatrixAt(i, dummy.matrix);
+          bCol.setHex(bPal[(i + oi) % bPal.length]);
+          bLobes[oi].setColorAt(i, bCol);
+        });
       });
-      this.worldGroup.add(bLobeA, bLobeB, bLobeC);
+      bLobes.forEach((m) => {
+        if (m.instanceColor) m.instanceColor.needsUpdate = true;
+      });
+      this._bushInstMeshes = [bStems, ...bLobes];
+      this.worldGroup.add(bStems, ...bLobes);
+    }
+
+    // 1c. Lâminas Cruzadas de Capim Alto / Bocage com Balanço Sutil ao Vento (InstancedMesh)
+    const bladeCount = Math.floor(900 * density);
+    if (bladeCount > 0) {
+      const bladeGeo = new THREE.PlaneGeometry(5.5, 9.0, 1, 1);
+      bladeGeo.translate(0, 4.5, 0);
+      const bladeMat = new THREE.MeshStandardMaterial({
+        color: isDesert ? 0xa59656 : isWinter ? 0x9aa99e : 0x567332,
+        roughness: 0.92,
+        side: THREE.DoubleSide,
+      });
+      this._windUniform = { value: 0 };
+      bladeMat.onBeforeCompile = (shader) => {
+        shader.uniforms.uWindTime = this._windUniform;
+        shader.vertexShader = 'uniform float uWindTime;\n' + shader.vertexShader;
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+           if (position.y > 0.5) {
+             transformed.x += sin(uWindTime * 2.1 + float(gl_InstanceID) * 0.7) * 1.1;
+             transformed.z += cos(uWindTime * 1.7 + float(gl_InstanceID) * 0.5) * 0.7;
+           }`
+        );
+      };
+      const bladeMesh = new THREE.InstancedMesh(bladeGeo, bladeMat, bladeCount);
+      for (let i = 0; i < bladeCount; i++) {
+        const bx = 320 + ((i * 2713) % (map.size - 640));
+        const bz = 320 + ((i * 4421) % (map.size - 640));
+        const blocked =
+          map.isOnRoad?.(bx, bz, 36) ||
+          (map.flattenedPads || []).some((p) => Math.hypot(bx - p.x, bz - p.y) < p.radius + 12);
+        const by = getTerrainHeight(bx, bz, map);
+        dummy.position.set(bx, by - 0.3, bz);
+        dummy.rotation.set(0, (i * 1.13) % Math.PI, 0);
+        const sc = blocked ? 0.001 : 0.75 + (i % 4) * 0.25;
+        dummy.scale.set(sc, sc, sc);
+        dummy.updateMatrix();
+        bladeMesh.setMatrixAt(i, dummy.matrix);
+      }
+      this.worldGroup.add(bladeMesh);
     }
 
     // 2. Rochas & Pedras nas Colinas e Margens das Estradas
@@ -2596,11 +3144,44 @@ export class Renderer3D {
         panel.receiveShadow = true;
         g.add(panel);
       }
+      // Fundação de pedra saliente (plinto) + Oitões sob o telhado + Cumeeira
+      const plinth = new THREE.Mesh(this.geometries.box, this.materials.masonryStone);
+      plinth.scale.set(w + 2.4, 5.2, d + 2.4);
+      plinth.position.y = 2.6;
+      g.add(plinth);
+
+      const ridgeBeam = new THREE.Mesh(this.geometries.box, this.materials.trenchDarkTimber);
+      ridgeBeam.scale.set(w + 10, 3.2, 3.4);
+      ridgeBeam.position.set(0, h + slopeH, 0);
+      g.add(ridgeBeam);
+
+      // Fechamento triangular dos oitões (gables) nas laterais esquerda/direita do telhado
+      for (const gx of [-w * 0.48, w * 0.48]) {
+        const gableLow = new THREE.Mesh(this.geometries.box, this.materials.plasterWarm);
+        gableLow.scale.set(2.8, slopeH * 0.52, d * 0.62);
+        gableLow.position.set(gx, h + slopeH * 0.25, 0);
+        g.add(gableLow);
+
+        const gableHigh = new THREE.Mesh(this.geometries.box, this.materials.plasterWarm);
+        gableHigh.scale.set(2.8, slopeH * 0.46, d * 0.28);
+        gableHigh.position.set(gx, h + slopeH * 0.72, 0);
+        g.add(gableHigh);
+
+        const atticWin = new THREE.Mesh(this.geometries.box, this.materials.windowDark);
+        atticWin.scale.set(3.4, 5.2, 5.2);
+        atticWin.position.set(gx, h + slopeH * 0.45, 0);
+        g.add(atticWin);
+      }
+
       const chimney = new THREE.Mesh(this.geometries.box, this.materials.brickBarn);
-      chimney.scale.set(7, 15, 7);
+      chimney.scale.set(7.5, 16, 7.5);
       chimney.position.set(w * 0.28, h + slopeH * 0.65, -d * 0.16);
       chimney.castShadow = true;
       g.add(chimney);
+      const chimneyCap = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+      chimneyCap.scale.set(9.2, 2.0, 9.2);
+      chimneyCap.position.set(w * 0.28, h + slopeH * 0.65 + 8.5, -d * 0.16);
+      g.add(chimneyCap);
 
       const door = new THREE.Mesh(this.geometries.box, this.materials.wood);
       door.scale.set(9, 14, 2);
@@ -2922,18 +3503,18 @@ export class Renderer3D {
     const uniColor = isEnemy
       ? 0x454d52 // Feldgrau / Grafite escuro inimigo
       : weaponModel === 'smg'
-      ? 0x7c6543 // Assalto: caqui / marrom-terra
-      : weaponModel === 'sniper'
-      ? 0x3b4d2b // Sniper: verde camuflado escuro
-      : facMeta.uniformColor;
+        ? 0x7c6543 // Assalto: caqui / marrom-terra
+        : weaponModel === 'sniper'
+          ? 0x3b4d2b // Sniper: verde camuflado escuro
+          : facMeta.uniformColor;
     const helmColor = isEnemy ? 0x32383d : facMeta.helmetColor;
     const uniMat = new THREE.MeshStandardMaterial({ color: uniColor, roughness: 0.84 });
     const helmMat = new THREE.MeshStandardMaterial({ color: helmColor, roughness: 0.65 });
     const vestMat = isEnemy
       ? new THREE.MeshStandardMaterial({ color: 0x26292e, roughness: 0.8 })
       : weaponModel === 'smg'
-      ? new THREE.MeshStandardMaterial({ color: 0x23262b, roughness: 0.78 }) // Colete pesado preto/grafite
-      : this.materials.vestOlive;
+        ? new THREE.MeshStandardMaterial({ color: 0x23262b, roughness: 0.78 }) // Colete pesado preto/grafite
+        : this.materials.vestOlive;
 
     // Pernas articuladas + Botas de combate
     const legL = new THREE.Group();
@@ -3586,37 +4167,71 @@ export class Renderer3D {
     }
 
     if (subType === 'concrete_bunker') {
+      // Casamata / Bunker Blindado de Concreto Armado com Paredes Chanfradas, Visor Anti-Ricochete, Rede de Camuflagem e Ninho .50cal
+      const pad = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+      pad.scale.set(64, 2.4, 58);
+      pad.position.y = 1.2;
+      pad.receiveShadow = true;
+      g.add(pad);
+
       const baseWall = new THREE.Mesh(this.geometries.box, this.materials.concrete);
-      baseWall.scale.set(52, 14, 46);
-      baseWall.position.y = 7;
+      baseWall.scale.set(54, 15, 48);
+      baseWall.position.y = 7.5;
       baseWall.castShadow = true;
       baseWall.receiveShadow = true;
       g.add(baseWall);
 
+      // Placas blindadas anguladas nas quinas frontais
+      for (const sx of [-1, 1]) {
+        const cheek = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+        cheek.scale.set(14, 15, 16);
+        cheek.position.set(sx * 22, 7.5, 18);
+        cheek.rotation.y = sx * 0.45;
+        cheek.castShadow = true;
+        g.add(cheek);
+      }
+
       const slit = new THREE.Mesh(this.geometries.box, this.materials.windowDark);
-      slit.scale.set(36, 4.5, 2.2);
-      slit.position.set(0, 10.5, 22.5);
+      slit.scale.set(36, 4.5, 2.5);
+      slit.position.set(0, 10.5, 23.2);
       g.add(slit);
 
+      // Visor / aba superior de aço sobre a fenda de tiro
+      const visorHood = new THREE.Mesh(this.geometries.box, this.materials.gunMetal);
+      visorHood.scale.set(42, 2.2, 6.5);
+      visorHood.position.set(0, 13.4, 24.8);
+      visorHood.rotation.x = 0.22;
+      g.add(visorHood);
+
       const roofSlab = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
-      roofSlab.scale.set(58, 5, 52);
-      roofSlab.position.y = 16.5;
+      roofSlab.scale.set(60, 5.5, 54);
+      roofSlab.position.y = 17.2;
       roofSlab.castShadow = true;
       g.add(roofSlab);
 
+      // Rede de camuflagem tática e sacos de areia no topo
+      const camoTop = new THREE.Mesh(
+        this.geometries.box,
+        new THREE.MeshStandardMaterial({ color: 0x44582f, roughness: 0.95 })
+      );
+      camoTop.scale.set(52, 1.8, 44);
+      camoTop.position.y = 20.5;
+      g.add(camoTop);
+
       for (let i = -2; i <= 2; i++) {
         const sb = new THREE.Mesh(this.geometries.sandbag, this.materials.sandbagOlive);
-        sb.scale.set(6, 2.8, 4);
-        sb.position.set(i * 10, 20.2, 18);
+        sb.scale.set(6.5, 3.0, 4.2);
+        sb.position.set(i * 10, 21.2, 19);
+        sb.castShadow = true;
         g.add(sb);
       }
 
       const turret = new THREE.Group();
-      turret.position.set(0, 10.5, 18);
+      turret.position.set(0, 10.5, 19);
       const barrel = new THREE.Mesh(this.geometries.cyl, this.materials.gunMetal);
       barrel.rotation.x = Math.PI / 2;
-      barrel.scale.set(2.2, 16, 2.2);
-      barrel.position.set(0, 0, 8);
+      barrel.scale.set(2.4, 18, 2.4);
+      barrel.position.set(0, 0, 9);
       turret.add(barrel);
       g.add(turret);
       g.userData = { turret };
@@ -3624,28 +4239,86 @@ export class Renderer3D {
     }
 
     if (subType === 'supply_outpost') {
+      // Posto de Suprimentos & Logística: Pátio de Concreto, Tenda Militar Camuflada, Paletes de Munição, Tonéis de Combustível, Mureta de Sacos de Areia e Antena de Rádio
+      const pad = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+      pad.scale.set(62, 2.2, 56);
+      pad.position.y = 1.1;
+      pad.receiveShadow = true;
+      g.add(pad);
+
+      // Tenda logística com cobertura de lona verde-oliva inclinada
+      const tentBody = new THREE.Mesh(this.geometries.box, this.materials.packCanvas);
+      tentBody.scale.set(30, 13, 24);
+      tentBody.position.set(-10, 7.5, -6);
+      tentBody.castShadow = true;
+      g.add(tentBody);
+
+      const tentRoofL = new THREE.Mesh(this.geometries.box, this.materials.vestOlive);
+      tentRoofL.scale.set(17, 1.8, 26);
+      tentRoofL.position.set(-17, 15.5, -6);
+      tentRoofL.rotation.z = 0.35;
+      tentRoofL.castShadow = true;
+      g.add(tentRoofL);
+
+      const tentRoofR = new THREE.Mesh(this.geometries.box, this.materials.vestOlive);
+      tentRoofR.scale.set(17, 1.8, 26);
+      tentRoofR.position.set(-3, 15.5, -6);
+      tentRoofR.rotation.z = -0.35;
+      tentRoofR.castShadow = true;
+      g.add(tentRoofR);
+
+      // Paletes de caixas de suprimento e munição
       const crate1 = new THREE.Mesh(this.geometries.box, this.materials.trenchDarkTimber);
-      crate1.scale.set(18, 10, 14);
-      crate1.position.set(-12, 5, 6);
+      crate1.scale.set(14, 9, 12);
+      crate1.position.set(15, 5.5, 10);
       crate1.castShadow = true;
       g.add(crate1);
 
       const crate2 = new THREE.Mesh(this.geometries.box, this.materials.sandbagOlive);
-      crate2.scale.set(16, 9, 16);
-      crate2.position.set(12, 4.5, -6);
+      crate2.scale.set(12, 7.5, 12);
+      crate2.position.set(15, 13.5, 10);
       crate2.castShadow = true;
       g.add(crate2);
 
+      // 3 Tonéis de Combustível Militar
+      for (let dIdx = 0; dIdx < 3; dIdx++) {
+        const drum = new THREE.Mesh(this.geometries.cyl, this.materials.rustMetal);
+        drum.scale.set(6.2, 10.5, 6.2);
+        drum.position.set(14 + (dIdx % 2) * 7.5, 6.2, -12 + Math.floor(dIdx / 2) * 7.5);
+        drum.castShadow = true;
+        g.add(drum);
+      }
+
+      // Perímetro de sacos de areia
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        const sb = new THREE.Mesh(this.geometries.sandbag, this.materials.sandbagOlive);
+        sb.position.set(Math.cos(a) * 26, 3.2, Math.sin(a) * 23);
+        sb.rotation.y = -a + Math.PI / 2;
+        sb.scale.set(6.5, 3.2, 4.0);
+        sb.castShadow = true;
+        g.add(sb);
+      }
+
+      // Torre de Rádio Treliçada + Luz de Sinalização
       const mast = new THREE.Mesh(this.geometries.cyl, this.materials.gunMetal);
-      mast.scale.set(2.4, 48, 2.4);
-      mast.position.set(0, 24, 0);
+      mast.scale.set(2.4, 52, 2.4);
+      mast.position.set(-20, 26, 14);
       mast.castShadow = true;
       g.add(mast);
 
       const cross = new THREE.Mesh(this.geometries.box, this.materials.gunMetal);
-      cross.scale.set(18, 1.5, 1.5);
-      cross.position.set(0, 44, 0);
+      cross.scale.set(18, 1.6, 1.6);
+      cross.position.set(-20, 48, 14);
       g.add(cross);
+
+      const beacon = new THREE.Mesh(
+        this.geometries.sphere,
+        new THREE.MeshStandardMaterial({ color: 0x4ade80, emissive: 0x22c55e, emissiveIntensity: 1.4 })
+      );
+      beacon.scale.set(3.2, 3.2, 3.2);
+      beacon.position.set(-20, 53, 14);
+      g.add(beacon);
 
       const turret = new THREE.Group();
       g.add(turret);
@@ -3697,12 +4370,12 @@ export class Renderer3D {
     const skin = unit.faction === 'player' ? ARMY_SKIN_BY_ID[skinId] : null;
     const facMeta = skin
       ? {
-          ...baseMeta,
-          uniform: skin.uniform,
-          helmet: skin.helmet,
-          vehicle: skin.vehicle,
-          color: skin.accent || baseMeta.color,
-        }
+        ...baseMeta,
+        uniform: skin.uniform,
+        helmet: skin.helmet,
+        vehicle: skin.vehicle,
+        color: skin.accent || baseMeta.color,
+      }
       : baseMeta;
 
     const selRing = new THREE.Mesh(this.geometries.ring, this.materials.selectRing);
@@ -3808,22 +4481,26 @@ export class Renderer3D {
         const d = Math.hypot(wx - (ax + t * dx), wz - (az + t * dz));
         if (d < minD) minD = d;
       }
-      if (minD <= 16) {
-        pos.setY(i, pos.getY(i) - 12);
-      } else if (minD <= 32) {
-        pos.setY(i, pos.getY(i) + 3.5);
+      if (minD <= 24) {
+        pos.setY(i, pos.getY(i) - 14);
       }
     }
     pos.needsUpdate = true;
-    this.terrainGeo.computeVertexNormals();
   }
 
   _createTrenchMesh(trench) {
     this.carveTrenchInTerrain(trench);
     const g = new THREE.Group();
     const pts = trench.points;
-    const deepFloorMat = new THREE.MeshStandardMaterial({ color: 0x110d09, roughness: 0.99 });
-    const aoWallMat = new THREE.MeshStandardMaterial({ color: 0x1b140e, roughness: 0.96 });
+    if (!this._trenchMats) {
+      this._trenchMats = {
+        deepFloorMat: new THREE.MeshStandardMaterial({ color: 0x2b2118, roughness: 0.99 }),
+        aoWallMat: new THREE.MeshStandardMaterial({ color: 0x1b140e, roughness: 0.96 }),
+        muddyDuckboardMat: new THREE.MeshStandardMaterial({ color: 0x3b2919, roughness: 0.95 }),
+      };
+    }
+    const { deepFloorMat, aoWallMat, muddyDuckboardMat } = this._trenchMats;
+    g.userData.version = trench._meshVersion || 1;
 
     for (let segIdx = 0; segIdx < pts.length - 1; segIdx++) {
       const a = pts[segIdx];
@@ -3835,11 +4512,18 @@ export class Renderer3D {
       const cy = (a.y + b.y) * 0.5;
       const ang = Math.atan2(dx, dy);
 
-      const segGroup = new THREE.Group();
-      segGroup.position.set(cx, 0, cy);
-      segGroup.rotation.y = ang;
+      const gyA = getTerrainHeight(a.x, a.y, this.currentMap);
+      const gyB = getTerrainHeight(b.x, b.y, this.currentMap);
+      const gyMid = (gyA + gyB) * 0.5;
+      const pitch = -Math.atan2(gyB - gyA, len);
 
-      // Fundo escuro de lama/sombra profunda (#110d09) + Estrados de tábuas pisoteadas (duckboards)
+      const segGroup = new THREE.Group();
+      segGroup.position.set(cx, gyMid + 2.2, cy);
+      segGroup.rotation.order = 'YXZ';
+      segGroup.rotation.y = ang;
+      segGroup.rotation.x = pitch;
+
+      // Fundo de terra úmida escavada (#2b2118) + Estrados de madeira escura enlameada (duckboards)
       const pitFloor = new THREE.Mesh(this.geometries.box, deepFloorMat);
       pitFloor.scale.set(24, 1.0, len + 4);
       pitFloor.position.y = -9.5;
@@ -3856,11 +4540,32 @@ export class Renderer3D {
       const plankCount = Math.max(4, Math.floor(len / 12));
       for (let p = 0; p < plankCount; p++) {
         const zP = -len * 0.5 + (p + 0.5) * (len / plankCount);
-        const duckboard = new THREE.Mesh(this.geometries.box, this.materials.wood);
-        duckboard.scale.set(16, 0.8, 7.2);
-        duckboard.position.set(((p % 3) - 1) * 0.6, -8.6, zP);
+        const duckboard = new THREE.Mesh(this.geometries.box, muddyDuckboardMat);
+        duckboard.scale.set(15.5, 0.85, 6.8);
+        duckboard.position.set(((p % 3) - 1) * 0.6, -8.5, zP);
         duckboard.rotation.y = ((p % 2) - 0.5) * 0.06;
         segGroup.add(duckboard);
+      }
+
+      // Passarelas de travessia para veículos (pontes de pranchas reforçadas sobre trechos retos)
+      if (len >= 110) {
+        const bridgeGroup = new THREE.Group();
+        bridgeGroup.position.set(0, 1.4, 0);
+        for (const trackX of [-7.5, 7.5]) {
+          const trackPlank = new THREE.Mesh(this.geometries.box, muddyDuckboardMat);
+          trackPlank.scale.set(6.8, 1.4, 34);
+          trackPlank.position.set(trackX, 0, 0);
+          trackPlank.castShadow = true;
+          trackPlank.receiveShadow = true;
+          bridgeGroup.add(trackPlank);
+        }
+        for (let b = -12; b <= 12; b += 8) {
+          const crossBeam = new THREE.Mesh(this.geometries.box, this.materials.trenchDarkTimber);
+          crossBeam.scale.set(22, 1.1, 4.2);
+          crossBeam.position.set(0, 0.4, b);
+          bridgeGroup.add(crossBeam);
+        }
+        segGroup.add(bridgeGroup);
       }
 
       // Paredes internas com tábuas de madeira verticais e chapas de zinco corrugado
@@ -3888,7 +4593,7 @@ export class Renderer3D {
       ammoBox.position.set(-6.5, -3.0, len * 0.25);
       segGroup.add(ammoBox);
 
-      const ladder = new THREE.Mesh(this.geometries.box, this.materials.wood);
+      const ladder = new THREE.Mesh(this.geometries.box, this.materials.trenchDarkTimber);
       ladder.scale.set(7.5, 11, 1.5);
       ladder.position.set(0, -0.5, len * 0.46);
       ladder.rotation.x = 0.35;
@@ -3950,7 +4655,11 @@ export class Renderer3D {
         }
       }
 
+      // Abre automaticamente a parede divisória nas pontas conectadas e nas junções L
       for (const endSign of [-1, 1]) {
+        const isStartCap = endSign === -1 && segIdx === 0 && !trench.openStart;
+        const isEndCap = endSign === 1 && segIdx === pts.length - 2 && !trench.openEnd;
+        if (!isStartCap && !isEndCap) continue;
         const endBerm = new THREE.Mesh(this.geometries.box, this.materials.trenchMudBerm);
         endBerm.scale.set(28, 4.2, 6);
         endBerm.position.set(0, 2.1, endSign * (len * 0.5 + 2));
@@ -3958,6 +4667,22 @@ export class Renderer3D {
       }
 
       g.add(segGroup);
+    }
+
+    // Nós de junção limpos nas curvas e conexões abertas (sem barreiras cruzadas no meio)
+    for (let pIdx = 0; pIdx < pts.length; pIdx++) {
+      const isMidCorner = pIdx > 0 && pIdx < pts.length - 1;
+      const isOpenStart = pIdx === 0 && trench.openStart;
+      const isOpenEnd = pIdx === pts.length - 1 && trench.openEnd;
+      if (!isMidCorner && !isOpenStart && !isOpenEnd) continue;
+      const jp = pts[pIdx];
+      const gyJ = getTerrainHeight(jp.x, jp.y, this.currentMap) + 2.2;
+      const jFloor = new THREE.Mesh(new THREE.CylinderGeometry(13, 13, 1.1, 10), deepFloorMat);
+      jFloor.position.set(jp.x, gyJ - 9.4, jp.y);
+      g.add(jFloor);
+      const jDuck = new THREE.Mesh(new THREE.CylinderGeometry(9.5, 9.5, 0.9, 8), muddyDuckboardMat);
+      jDuck.position.set(jp.x, gyJ - 8.45, jp.y);
+      g.add(jDuck);
     }
 
     return g;
@@ -4091,7 +4816,7 @@ export class Renderer3D {
     this._updateFrontlineVisuals(game.map);
 
     if (this.fogMesh) {
-      this.fogMesh.visible = !game.menuActive;
+      this.fogMesh.visible = !game.menuActive && !game.mapEditorOpen;
     }
     this.fogSyncTimer -= dt;
     if (this.fogSyncTimer <= 0) {
@@ -4227,6 +4952,11 @@ export class Renderer3D {
     for (const tr of game.trenches) {
       activeTrenchIds.add(tr.id);
       let tm = this.trenchMeshes.get(tr.id);
+      if (tm && tm.userData?.version !== (tr._meshVersion || 1)) {
+        this.dynamicGroup.remove(tm);
+        this.trenchMeshes.delete(tr.id);
+        tm = null;
+      }
       if (!tm) {
         tm = this._createTrenchMesh(tr);
         this.dynamicGroup.add(tm);
@@ -4345,6 +5075,7 @@ export class Renderer3D {
     // 7. Esquadrões e Veículos 3D Detalhados e Animados
     const activeUnitIds = new Set();
     const now = performance.now() * 0.006;
+    if (this._windUniform) this._windUniform.value = now;
 
     for (const u of game.units) {
       if (!u.alive || u.captured || u.embarkedInId) continue;
@@ -4367,7 +5098,7 @@ export class Renderer3D {
       const isGarrisoned = Boolean(u.garrisonedBuildingId);
 
       const groundY = getTerrainHeight(u.x, u.y, game.map);
-      const baseY = u.inTrench && u.spec.type === 'infantry' ? -6.5 : 0;
+      const baseY = u.inTrench && u.spec.type === 'infantry' ? -7.7 : 0; // -0.55m dentro da vala
       mesh.position.set(u.x, groundY + baseY, u.y);
       mesh.rotation.y = u.spec.type === 'infantry' ? 0 : Math.PI / 2 - u.angle;
 
@@ -4560,16 +5291,21 @@ export class Renderer3D {
       }
     }
 
-    // 8. Projéteis Traçantes 3D
+    // 8. Projéteis Traçantes e Foguetes Explosivos 3D (acompanhando a altura real do terreno)
     let bIdx = 0;
     for (const b of game.bullets) {
       if (bIdx >= this.bulletPool.length) break;
       if (b.team === 'enemies' && !game.map.isPositionVisibleToAllies(b.x, b.y)) continue;
       const bm = this.bulletPool[bIdx++];
       bm.visible = true;
-      bm.position.set(b.x, 8.5, b.y);
+      const gy = getTerrainHeight(b.x, b.y, game.map);
+      bm.position.set(b.x, gy + (b.isRocket ? 10 : 8.5), b.y);
       bm.rotation.y = Math.PI / 2 - b.angle;
-      bm.scale.set(b.explosive ? 2.4 : 1.2, b.explosive ? 2.4 : 1.2, b.explosive ? 18 : 11);
+      bm.scale.set(
+        b.isRocket ? 3.2 : b.explosive ? 2.4 : 1.2,
+        b.isRocket ? 3.2 : b.explosive ? 2.4 : 1.2,
+        b.isRocket ? 22 : b.explosive ? 18 : 11
+      );
     }
     for (let i = bIdx; i < this.bulletPool.length; i++) {
       this.bulletPool[i].visible = false;
@@ -4849,21 +5585,24 @@ export class Renderer3D {
       ctx.restore();
     }
 
-    // 2. Pré-visualização de Construção ou Apoio Aéreo
+    // 2. Pré-visualização de Construção, Editor de Muros/Trincheiras ou Apoio Aéreo
     if (
       (game.activeCommandMode === 'build_trench' ||
         game.activeCommandMode === 'build_barricade' ||
         game.activeCommandMode === 'build_wall' ||
-        game.activeCommandMode === 'build_wire') &&
-      game.trenchPreview
+        game.activeCommandMode === 'build_wire' ||
+        game.activeCommandMode === 'map_editor') &&
+      game.trenchPreview &&
+      Array.isArray(game.trenchPreview.points) &&
+      game.trenchPreview.points.length >= 2
     ) {
       const pts = game.trenchPreview.points;
+      const isWallPreview =
+        game.activeCommandMode === 'build_wall' ||
+        (game.activeCommandMode === 'map_editor' && game.trenchPreview.tool !== 'trench_line');
       ctx.save();
-      ctx.strokeStyle =
-        game.activeCommandMode === 'build_wall'
-          ? 'rgba(74, 222, 128, 0.92)'
-          : 'rgba(200, 125, 40, 0.92)';
-      ctx.lineWidth = game.activeCommandMode === 'build_wall' ? 9 : 5;
+      ctx.strokeStyle = isWallPreview ? 'rgba(74, 222, 128, 0.92)' : 'rgba(200, 125, 40, 0.92)';
+      ctx.lineWidth = isWallPreview ? 9 : 6;
       ctx.setLineDash([10, 6]);
       ctx.beginPath();
       pts.forEach((pt, idx) => {
@@ -4873,20 +5612,34 @@ export class Renderer3D {
       });
       ctx.stroke();
 
-      // Desenha os pilares verdes de prévia da Muralha Contínua a cada ~8m
-      if (game.activeCommandMode === 'build_wall' && pts.length >= 2) {
-        ctx.setLineDash([]);
-        ctx.fillStyle = 'rgba(74, 222, 128, 0.85)';
+      // Desenha os pilares verdes de prévia da Muralha/Muro Contínuo e etiqueta de comprimento
+      if (pts.length >= 2) {
         const a = pts[0];
         const b = pts[pts.length - 1];
         const segLen = Math.hypot(b.x - a.x, b.y - a.y);
-        const pCount = Math.max(1, Math.round(segLen / 110));
-        for (let i = 0; i <= pCount; i++) {
-          const t = i / pCount;
-          const sc = this.worldToScreen(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, 6);
-          if (sc.visible) {
-            ctx.fillRect(sc.x - 4, sc.y - 4, 8, 8);
+        if (isWallPreview) {
+          ctx.setLineDash([]);
+          ctx.fillStyle = 'rgba(74, 222, 128, 0.85)';
+          const pCount = Math.max(1, Math.round(segLen / 110));
+          for (let i = 0; i <= pCount; i++) {
+            const t = i / pCount;
+            const sc = this.worldToScreen(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, 6);
+            if (sc.visible) {
+              ctx.fillRect(sc.x - 4, sc.y - 4, 8, 8);
+            }
           }
+        }
+        const midSc = this.worldToScreen((a.x + b.x) * 0.5, (a.y + b.y) * 0.5, 16);
+        if (midSc.visible) {
+          const meters = Math.round(segLen / 14);
+          const lbl = `${meters}m`;
+          ctx.setLineDash([]);
+          ctx.font = "700 11px 'Inter', 'Segoe UI', sans-serif";
+          ctx.textAlign = 'center';
+          ctx.fillStyle = 'rgba(15, 23, 15, 0.88)';
+          ctx.fillRect(midSc.x - 22, midSc.y - 18, 44, 16);
+          ctx.fillStyle = '#a3e635';
+          ctx.fillText(lbl, midSc.x, midSc.y - 6);
         }
       }
       ctx.restore();
@@ -4900,10 +5653,10 @@ export class Renderer3D {
       const previewColor = game.activeAirStrikeMode
         ? '#ef4444'
         : isOutpostMode
-        ? outpostStatus?.ok
-          ? '#4ade80'
-          : '#ef4444'
-        : '#c87d28';
+          ? outpostStatus?.ok
+            ? '#4ade80'
+            : '#ef4444'
+          : '#c87d28';
       ctx.strokeStyle = previewColor;
       ctx.lineWidth = 2.4;
       ctx.setLineDash([6, 4]);
@@ -4946,6 +5699,173 @@ export class Renderer3D {
         }
       }
       ctx.restore();
+    }
+
+    // 2b. Preview Direcional e Seleção do Editor de Mapa (Mostra para qual lado o objeto está virado ou raio da Área de Floresta)
+    if (game.mapEditorOpen) {
+      if (game._editorForestPreview || (game.mapEditorTool === 'forest_area' && game.worldMouse)) {
+        const fp = game._editorForestPreview || {
+          x: game.worldMouse.x,
+          y: game.worldMouse.y,
+          radius: Math.round(180 * (game.mapEditorScale || 1)),
+        };
+        const cSc = this.worldToScreen(fp.x, fp.y, 4);
+        const eSc = this.worldToScreen(fp.x + fp.radius, fp.y, 4);
+        if (cSc.visible) {
+          const pxRad = eSc.visible ? Math.max(24, Math.hypot(eSc.x - cSc.x, eSc.y - cSc.y)) : 48;
+          ctx.save();
+          ctx.fillStyle = 'rgba(74, 222, 128, 0.14)';
+          ctx.strokeStyle = '#4ade80';
+          ctx.lineWidth = 2.4;
+          ctx.setLineDash([8, 5]);
+          ctx.beginPath();
+          ctx.arc(cSc.x, cSc.y, pxRad, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.setLineDash([]);
+          const radM = Math.round(fp.radius / 14);
+          const estTrees = Math.max(8, Math.min(48, Math.round(fp.radius / 11)));
+          const lbl = `🌲 Área de Floresta • Raio ${radM}m (~${estTrees} árvores)`;
+          ctx.font = "700 11px 'Inter', 'Segoe UI', sans-serif";
+          ctx.textAlign = 'center';
+          const tw = ctx.measureText(lbl).width + 14;
+          ctx.fillStyle = 'rgba(10, 26, 14, 0.9)';
+          ctx.fillRect(cSc.x - tw * 0.5, cSc.y - 26, tw, 18);
+          ctx.fillStyle = '#86efac';
+          ctx.fillText(lbl, cSc.x, cSc.y - 13);
+          ctx.restore();
+        }
+      }
+      const sel = game.selectedEditorObject;
+      if (sel && sel.item) {
+        const it = sel.item;
+        const cx = sel.kind === 'wall' ? (it.x1 + it.x2) * 0.5 : it.x;
+        const cy = sel.kind === 'wall' ? (it.y1 + it.y2) * 0.5 : it.y;
+        const ang =
+          sel.kind === 'wall'
+            ? typeof it.angle === 'number'
+              ? it.angle
+              : Math.atan2(it.y2 - it.y1, it.x2 - it.x1)
+            : it.angle || 0;
+
+        ctx.save();
+        // Desenha footprint rotacionado para estruturas/muros ou círculo para árvores/carcaças
+        if (sel.kind === 'structure') {
+          const hw = (it.w || 84) * 0.54;
+          const hd = (it.d || 68) * 0.54;
+          const cos = Math.cos(-ang);
+          const sin = Math.sin(-ang);
+          const corners = [
+            { lx: -hw, lz: -hd },
+            { lx: hw, lz: -hd },
+            { lx: hw, lz: hd },
+            { lx: -hw, lz: hd },
+          ].map((c) => this.worldToScreen(cx + c.lx * cos - c.lz * sin, cy + c.lx * sin + c.lz * cos, 3));
+          if (corners.every((c) => c.visible)) {
+            ctx.strokeStyle = '#a3e635';
+            ctx.lineWidth = 2.6;
+            ctx.fillStyle = 'rgba(132, 204, 22, 0.14)';
+            ctx.beginPath();
+            corners.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          }
+        } else if (sel.kind === 'wall') {
+          const p1 = this.worldToScreen(it.x1, it.y1, 4);
+          const p2 = this.worldToScreen(it.x2, it.y2, 4);
+          if (p1.visible && p2.visible) {
+            ctx.strokeStyle = '#a3e635';
+            ctx.lineWidth = 5;
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+          }
+        } else {
+          const cSc = this.worldToScreen(cx, cy, 3);
+          if (cSc.visible) {
+            ctx.strokeStyle = '#a3e635';
+            ctx.lineWidth = 2.4;
+            ctx.beginPath();
+            ctx.arc(cSc.x, cSc.y, 26, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+        }
+
+        // Seta Direcional mostrando para qual lado o objeto está virado (+Z local em Three.js = sin(ang), cos(ang))
+        const dirX = sel.kind === 'wall' ? Math.cos(ang) : Math.sin(ang);
+        const dirY = sel.kind === 'wall' ? Math.sin(ang) : Math.cos(ang);
+        const arrowLen = sel.kind === 'structure' ? Math.max(it.w || 80, it.d || 80) * 0.78 : 68;
+        const cSc = this.worldToScreen(cx, cy, 5);
+        const tipWorldX = cx + dirX * arrowLen;
+        const tipWorldY = cy + dirY * arrowLen;
+        const tSc = this.worldToScreen(tipWorldX, tipWorldY, 5);
+        if (cSc.visible && tSc.visible) {
+          ctx.strokeStyle = '#facc15';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(cSc.x, cSc.y);
+          ctx.lineTo(tSc.x, tSc.y);
+          ctx.stroke();
+
+          const headAng = Math.atan2(tSc.y - cSc.y, tSc.x - cSc.x);
+          ctx.fillStyle = '#facc15';
+          ctx.beginPath();
+          ctx.moveTo(tSc.x, tSc.y);
+          ctx.lineTo(tSc.x - Math.cos(headAng - 0.45) * 12, tSc.y - Math.sin(headAng - 0.45) * 12);
+          ctx.lineTo(tSc.x - Math.cos(headAng + 0.45) * 12, tSc.y - Math.sin(headAng + 0.45) * 12);
+          ctx.closePath();
+          ctx.fill();
+
+          const deg = Math.round(((ang * 180) / Math.PI + 360) % 360);
+          const badge = `🧭 ${sel.label} (${deg}°)`;
+          ctx.font = "700 11px 'Inter', 'Segoe UI', sans-serif";
+          ctx.textAlign = 'center';
+          const tw = ctx.measureText(badge).width + 14;
+          ctx.fillStyle = 'rgba(15, 23, 15, 0.9)';
+          ctx.fillRect(cSc.x - tw * 0.5, cSc.y - 34, tw, 18);
+          ctx.strokeStyle = '#a3e635';
+          ctx.lineWidth = 1.2;
+          ctx.strokeRect(cSc.x - tw * 0.5, cSc.y - 34, tw, 18);
+          ctx.fillStyle = '#ecfccb';
+          ctx.fillText(badge, cSc.x, cSc.y - 21);
+        }
+        ctx.restore();
+      } else if (
+        game.worldMouse &&
+        game.mapEditorTool &&
+        game.mapEditorTool !== 'eraser' &&
+        game.mapEditorTool !== 'eraser_area' &&
+        game.mapEditorTool !== 'select_move' &&
+        game.mapEditorTool !== 'move_sector'
+      ) {
+        // Seta direcional de prévia antes de clicar para colocar
+        const mx = game.worldMouse.x;
+        const my = game.worldMouse.y;
+        const ang = game.mapEditorAngle || 0;
+        const cSc = this.worldToScreen(mx, my, 4);
+        const tSc = this.worldToScreen(mx + Math.sin(ang) * 58, my + Math.cos(ang) * 58, 4);
+        if (cSc.visible && tSc.visible) {
+          ctx.save();
+          ctx.strokeStyle = 'rgba(250, 204, 21, 0.85)';
+          ctx.lineWidth = 2.4;
+          ctx.beginPath();
+          ctx.moveTo(cSc.x, cSc.y);
+          ctx.lineTo(tSc.x, tSc.y);
+          ctx.stroke();
+          const headAng = Math.atan2(tSc.y - cSc.y, tSc.x - cSc.x);
+          ctx.fillStyle = '#facc15';
+          ctx.beginPath();
+          ctx.moveTo(tSc.x, tSc.y);
+          ctx.lineTo(tSc.x - Math.cos(headAng - 0.45) * 10, tSc.y - Math.sin(headAng - 0.45) * 10);
+          ctx.lineTo(tSc.x - Math.cos(headAng + 0.45) * 10, tSc.y - Math.sin(headAng + 0.45) * 10);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+        }
+      }
     }
 
     // 3. Ponto de Encontro (Rally Point) do Prédio da Base Selecionado
@@ -5049,8 +5969,8 @@ export class Renderer3D {
       ctx.strokeStyle = isSelected
         ? '#a3be8c'
         : bld.team === 'allies'
-        ? '#7faed9'
-        : '#d9534f';
+          ? '#7faed9'
+          : '#d9534f';
       ctx.lineWidth = isSelected ? 1.8 : 1.1;
       ctx.strokeRect(sc.x - bw * 0.5 - 4, sc.y - 16, bw + 8, 25);
 
@@ -5140,10 +6060,10 @@ export class Renderer3D {
         u.garrisonedBuildingId
           ? 44
           : u.spec.subType === 'watchtower'
-          ? 64
-          : u.spec.type === 'vehicle'
-          ? 36
-          : 28;
+            ? 64
+            : u.spec.type === 'vehicle'
+              ? 36
+              : 28;
       const sc = this.worldToScreen(u.x, u.y, heightOffset);
       if (!sc.visible) continue;
 
@@ -5190,10 +6110,10 @@ export class Renderer3D {
     const borderCol = u.surrendered
       ? '#ffffff'
       : u.faction === 'player'
-      ? '#7faed9'
-      : u.faction === 'ally_ai'
-      ? '#d4a338'
-      : '#d9534f';
+        ? '#7faed9'
+        : u.faction === 'ally_ai'
+          ? '#d4a338'
+          : '#d9534f';
     const fillCol = u.surrendered
       ? 'rgba(255, 255, 255, 0.94)'
       : u.factionMeta?.badgeFill || 'rgba(22, 25, 19, 0.9)';

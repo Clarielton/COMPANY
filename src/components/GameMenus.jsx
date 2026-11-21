@@ -3,6 +3,19 @@ import TutorialModal from './TutorialModal.jsx';
 import MultiplayerLobby from './MultiplayerLobby.jsx';
 import AuthGate from './AuthGate.jsx';
 import AdminPanel from './AdminPanel.jsx';
+import {
+  IconCrosshair,
+  IconGlobe,
+  IconMedal,
+  IconCamera,
+  IconCompass,
+  IconSupply,
+  IconBook,
+  IconShield,
+  IconPlay,
+  IconGold,
+  IconLogout,
+} from './MilIcons.jsx';
 import { loadStoredFirebaseConfig, networkManager } from '../game/net/NetworkManager.js';
 import {
   COMMAND_BY_ID,
@@ -74,6 +87,8 @@ export default function GameMenus({
   interrogationTarget,
   onPlayMode,
   onPlaySandbox,
+  onPlaySpectator,
+  onOpenMapEditor,
   onStartOnlineMatch,
   onResume,
   onSaveBattle,
@@ -91,6 +106,7 @@ export default function GameMenus({
   onResolveInterrogation,
 }) {
   const [subTab, setSubTab] = useState(initialTab || 'skirmish');
+  const [hoveredNav, setHoveredNav] = useState(null);
   const [net, setNet] = useState(() => networkManager.getStatusSnapshot());
   const [newCampName, setNewCampName] = useState('');
   const [storeMsg, setStoreMsg] = useState('');
@@ -397,17 +413,21 @@ export default function GameMenus({
   const activeTab =
     subTab === 'admin'
       ? 'admin'
-      : subTab === 'skirmish'
-      ? 'skirmish'
+      : subTab === 'rooms'
+      ? 'rooms'
       : subTab === 'campaign'
       ? 'campaign'
-      : subTab === 'ranks'
-      ? 'ranks'
-      : subTab === 'store'
-      ? 'store'
-      : ['skins', 'tutorial', 'saves', 'settings', 'controls'].includes(subTab)
+      : subTab === 'spectator'
+      ? 'spectator'
+      : subTab === 'editor_hub'
+      ? 'editor_hub'
+      : subTab === 'ranks' || subTab === 'store' || subTab === 'skins'
+      ? 'store_ranks'
+      : ['tutorial', 'settings', 'controls'].includes(subTab)
       ? 'arsenal_hub'
-      : 'rooms';
+      : subTab === 'saves'
+      ? 'skirmish'
+      : 'skirmish';
 
   const hubSubTab = ['skins', 'tutorial', 'saves', 'settings', 'controls'].includes(subTab)
     ? subTab
@@ -415,120 +435,424 @@ export default function GameMenus({
   const systemSubTab =
     subTab === 'settings' ? 'settings' : subTab === 'controls' ? 'controls' : 'saves';
 
+  const isLocalHost =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname.startsWith('192.168.'));
+
   const mapSubtitles = {
-    normandy_fields: 'Frente Rural Europeia • Campos e Vilarejos',
-    el_alamein_ridge: 'Frente Árida Norte da África • Dunas e Oásis',
-    bastogne_winter: 'Frente Congelada das Ardenas • Neve e Pinheiros',
+    normandy_fields: 'Frente Rural Europeia • Campos, Sebes & Vilarejos',
   };
 
+  const xp = net.currentUser?.xp || 0;
+  const prog = computeLevelFromXp(xp);
+  const span = Math.max(1, prog.nextLevelXp - prog.currentMinXp);
+  const xpPct =
+    prog.nextLevelXp > prog.currentMinXp
+      ? Math.min(100, Math.round(((xp - prog.currentMinXp) / span) * 100))
+      : 100;
+
+  const HUB_NAV_ITEMS = [
+    {
+      id: 'rooms',
+      label: 'BATALHA ONLINE (1v1 & 2v2)',
+      sub: 'Salas abertas e Matchmaking rápido',
+      Icon: IconCrosshair,
+      kicker: 'OPERAÇÃO MULTIPLAYER EM TEMPO REAL',
+      title: 'BATALHA ONLINE (1v1 & 2v2)',
+      desc: 'Enfrente outros comandantes em tempo real com sincronização via Firebase RTDB, salas privadas ou matchmaking rápido.',
+      rules: ['Sem itens pagos (Fair Play)', '12 Setores Estratégicos', 'QG Evolução Nv. 1 a 3'],
+      ctaLabel: 'ENTRAR NO LOBBY ONLINE',
+      onLaunch: () => setSubTab('rooms'),
+    },
+    {
+      id: 'campaign',
+      label: 'GUERRA DE 15 DIAS REAIS',
+      sub: 'Campanha persistente na nuvem',
+      badge: '15 JOGADORES • 40 TERRITÓRIOS',
+      Icon: IconGlobe,
+      kicker: 'TEATRO ESTRATÉGICO PERSISTENTE',
+      title: 'GUERRA DE 15 DIAS REAIS',
+      desc: 'Dispute o domínio de 40 territórios ao longo de 15 dias reais com suprimentos acumulados, defesa de QG e pacotes táticos.',
+      rules: ['15 Jogadores por Frente', '40 Territórios Persistentes', 'Pacotes Táticos Ativos'],
+      ctaLabel: 'INICIAR CAMPANHA DE 15 DIAS',
+      onLaunch: () => {
+        const firstCamp = (net.campaigns || [])[0];
+        if (firstCamp) {
+          onStartOnlineMatch?.({
+            networkManager,
+            room: {
+              roomId: firstCamp.id,
+              mapId: firstCamp.mapId || 'normandy_fields',
+              mapSeed: firstCamp.mapSeed || 194406,
+              startingResources: firstCamp.playerSupplies || 1000,
+              isCampaign: true,
+              campaignDay: firstCamp.day || 1,
+            },
+            localSlot: 1,
+          });
+        } else {
+          setSubTab('campaign');
+        }
+      },
+    },
+    {
+      id: 'skirmish',
+      label: 'CAMPANHA CLÁSSICA & SAVES',
+      sub: 'Escaramuças vs IA, Missões e Saves Locais',
+      Icon: IconMedal,
+      kicker: 'COMBATE TÁTICO CONTRA IA',
+      title: 'CAMPANHA CLÁSSICA & SAVES',
+      desc: 'Comande infantaria com vida individual por soldado, blindados MBT, artilharia MLRS e suporte aéreo contra a IA tática.',
+      rules: ['Modos 1v1 e 2v2', '3 Níveis de IA', 'Save Rápido [F9] / JSON'],
+      ctaLabel: 'INICIAR OPERAÇÃO',
+      onLaunch: () =>
+        onPlayMode(selectedMode, startingResources, selectedMapId, selectedDifficulty),
+    },
+    ...(isAdmin
+      ? [
+          {
+            id: 'spectator',
+            label: 'MODO ESPECTADOR (IA vs IA)',
+            sub: 'Assistir batalhas e gravar conteúdo',
+            Icon: IconCamera,
+            kicker: 'ESTÚDIO CINEMATOGRÁFICO & GRAVAÇÃO (ADMIN)',
+            title: 'MODO ESPECTADOR: IA vs IA',
+            desc: 'Dois Comandantes de IA completos (Aliados vs Eixo) batalham pelo mapa sem intervenção humana e sem Névoa de Guerra.',
+            rules: ['Visão 100% Sem Névoa', 'Director Cam Automática', 'Ocultar HUD [H] + Vel. 1x–3x'],
+            ctaLabel: 'INICIAR BATALHA ESPECTADOR',
+            onLaunch: () => onPlaySpectator?.(selectedMapId),
+          },
+        ]
+      : []),
+    ...(isLocalHost
+      ? [
+          {
+            id: 'editor_hub',
+            label: isAdmin ? 'EDITOR DE MAPAS & SANDBOX' : 'EDITOR DE MAPAS (LOCAL)',
+            sub: 'Modificar mapa 3D no modo local',
+            Icon: IconCompass,
+            kicker: 'FERRAMENTAS DE CONSTRUÇÃO DE CENÁRIO (LOCAL)',
+            title: isAdmin ? 'EDITOR DE MAPAS 3D & SANDBOX' : 'EDITOR DE MAPAS 3D (LOCAL)',
+            desc: 'Posicione casas, muros, trincheiras, áreas inteiras de floresta e mova pontos de conquista diretamente no terreno 3D.',
+            rules: ['Salva em customMaps.json', 'Pausa & Zoom Amplo', 'Mover/Girar Pós-Colocação'],
+            ctaLabel: 'ABRIR EDITOR DE MAPA 3D',
+            onLaunch: () => onOpenMapEditor?.(selectedMapId),
+          },
+        ]
+      : []),
+    {
+      id: 'store_ranks',
+      label: 'SUPRIMENTOS, PATENTE & ARSENAL',
+      sub: 'Ouro Militar, Batalhões e Camuflagens',
+      Icon: IconSupply,
+      kicker: 'PROGRESSÃO & ARSENAL DO COMANDANTE',
+      title: 'SUPRIMENTOS, PATENTE & ARSENAL',
+      desc: 'Desbloqueie batalhões de elite com sua patente e Ouro Militar, equipe pacotes de campanha e personalize uniformes.',
+      rules: [`Nível ${prog.level} (${prog.rank})`, `${net.currentUser?.militaryGold ?? 0} Ouro Militar`, '5 Esquemas de Camuflagem'],
+      ctaLabel: 'GERENCIAR ARSENAL',
+      onLaunch: () => setSubTab('store'),
+    },
+    {
+      id: 'arsenal_hub',
+      label: 'GUIA TÁTICO & MANUAL DE ASSALTO',
+      sub: 'Doutrina, Controles e Áudio/Vídeo',
+      Icon: IconBook,
+      kicker: 'ACADEMIA MILITAR & CONFIGURAÇÕES',
+      title: 'GUIA TÁTICO & MANUAL DE ASSALTO',
+      desc: 'Aprenda táticas de flanqueamento, encaixe em muros (Cover Snap), captura de prisioneiros e ajuste gráficos/controles.',
+      rules: ['Treinamento Guiado', 'Atalhos F1–F5 & TAB', 'Configurações de Câmera'],
+      ctaLabel: 'INICIAR TREINAMENTO GUIADO',
+      onLaunch: () => {
+        try {
+          localStorage.setItem('frontline_start_guided', '1');
+        } catch {}
+        onPlayMode(selectedMode, 1000, selectedMapId, 'easy');
+      },
+    },
+  ];
+
+  const previewId = hoveredNav || activeTab;
+  const heroMeta = HUB_NAV_ITEMS.find((it) => it.id === previewId) || HUB_NAV_ITEMS[2];
+
   return (
-    <div className="mil-menu-overlay">
-      <div className="mil-menu-panel">
-        {/* CABEÇALHO DO HUB ONLINE + PERFIL DO COMANDANTE */}
-        <header className="mil-menu-header">
-          <div className="mil-brand">
-            <span className="mil-brand-title">COMPANY OF FRONTLINE</span>
-            <span className="mil-brand-sub">
-              {isPaused
-                ? `▪ OPERAÇÃO ${hud.gameMode.toUpperCase()} PAUSADA`
-                : '▪ HUB MULTIPLAYER ONLINE'}
-            </span>
+    <div className="mil-menu-overlay commercial-hub-overlay">
+      <div className="mil-hub-shell">
+        {/* CABEÇALHO SUPERIOR LIMPO */}
+        <header className="mil-hub-header">
+          <div className="mil-hub-brand">
+            <div className="mil-hub-crest">
+              <IconShield size={22} />
+            </div>
+            <div className="mil-brand">
+              <span className="mil-brand-title">COMPANY OF FRONTLINE</span>
+              <span className="mil-brand-sub">
+                {isPaused
+                  ? `OPERAÇÃO ${hud.gameMode.toUpperCase()} PAUSADA`
+                  : 'COMANDO TÁTICO EM TEMPO REAL 3D'}
+              </span>
+            </div>
           </div>
 
-          <nav className="mil-tabs" aria-label="Hub Principal">
-            <button
-              type="button"
-              className={`mil-tab-btn ${activeTab === 'skirmish' ? 'active' : ''}`}
-              onClick={() => setSubTab('skirmish')}
-            >
-              ⚔️ CAMPANHA / 1v1 & 2v2
-            </button>
-            <button
-              type="button"
-              className={`mil-tab-btn ${activeTab === 'rooms' ? 'active' : ''}`}
-              onClick={() => setSubTab('rooms')}
-            >
-              📡 SALAS ONLINE
-            </button>
-            <button
-              type="button"
-              className={`mil-tab-btn ${activeTab === 'campaign' ? 'active' : ''}`}
-              onClick={() => setSubTab('campaign')}
-            >
-              🗓️ CAMPANHAS (15 DIAS)
-            </button>
-            <button
-              type="button"
-              className={`mil-tab-btn ${activeTab === 'ranks' ? 'active' : ''}`}
-              onClick={() => setSubTab('ranks')}
-            >
-              🎖️ PATENTE & BATALHÕES
-            </button>
-            <button
-              type="button"
-              className={`mil-tab-btn ${activeTab === 'store' ? 'active' : ''}`}
-              onClick={() => setSubTab('store')}
-            >
-              🛒 SUPRIMENTOS
-            </button>
-            <button
-              type="button"
-              className={`mil-tab-btn ${activeTab === 'arsenal_hub' ? 'active' : ''}`}
-              onClick={() => setSubTab('tutorial')}
-            >
-              📖 GUIA / SIST.
-            </button>
-            {isAdmin && (
-              <button
-                type="button"
-                className={`mil-tab-btn ${activeTab === 'admin' ? 'active' : ''}`}
-                style={{ borderColor: '#ef4444', color: activeTab === 'admin' ? '#fca5a5' : '#ef4444' }}
-                onClick={() => setSubTab('admin')}
-              >
-                🛡️ PAINEL ADMIN
-              </button>
-            )}
-          </nav>
-
           {net.currentUser && (
-            <div className="hub-user-badge">
-              <div className="hub-user-info">
-                <strong>
-                  {isAdmin ? '🛡️ [ADMIN] ' : ''}
-                  {net.currentUser.hasGoldInsignia ? '🏅 ' : ''}
-                  {net.currentUser.callsign}
-                </strong>
-                <small>
-                  Nv.{net.currentUser.level || 1} {net.currentUser.rank} • 💰{' '}
-                  {net.currentUser.militaryGold ?? 0} Ouro
-                </small>
+            <div className="mil-profile-card">
+              <div className="mil-profile-meta">
+                <div className="mil-profile-top">
+                  <span className="mil-online-dot" title="Conectado" />
+                  <strong>{net.currentUser.callsign}</strong>
+                  <span className="mil-online-tag">ONLINE</span>
+                </div>
+                <div className="mil-profile-rank-row">
+                  <span>
+                    Nv.{prog.level} {prog.rank}
+                  </span>
+                  <span className="mil-gold-pill">
+                    <IconGold size={13} /> {net.currentUser.militaryGold ?? 0} Ouro
+                  </span>
+                </div>
+                <div className="mil-profile-xp-track" title={`${xp} / ${prog.nextLevelXp} XP`}>
+                  <div className="mil-profile-xp-fill" style={{ width: `${xpPct}%` }} />
+                </div>
               </div>
+
               {isAdmin && (
                 <button
                   type="button"
-                  className="mil-pill"
+                  className={`mil-pill ${activeTab === 'admin' ? 'active' : ''}`}
                   style={{ borderColor: '#ef4444', color: '#fca5a5' }}
                   onClick={() => setSubTab('admin')}
-                  title="Abrir painel administrativo"
+                  title="Painel Administrativo"
                 >
-                  ⚙️ Painel
+                  <IconShield size={14} /> Admin
                 </button>
               )}
+
               <button
                 type="button"
-                className="mil-pill"
+                className="mil-logout-btn"
                 onClick={() => networkManager.logout()}
                 title="Encerrar sessão do comandante"
               >
-                Sair
+                <IconLogout size={14} /> Sair
               </button>
             </div>
           )}
         </header>
 
-        {/* CORPO DO HUB CENTRAL */}
-        <main className="mil-menu-body">
-          {activeTab === 'rooms' && (
+        {/* LAYOUT EM 2 COLUNAS: NAVEGAÇÃO LATERAL TÁTICA + PAINEL CENTRAL DINÂMICO */}
+        <div className="mil-hub-columns">
+          <aside className="mil-hub-sidebar" aria-label="Menu Tático">
+            {HUB_NAV_ITEMS.map((item) => {
+              const IconComp = item.Icon;
+              const isAct = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`mil-hub-navbtn ${isAct ? 'active' : ''}`}
+                  onMouseEnter={() => setHoveredNav(item.id)}
+                  onMouseLeave={() => setHoveredNav(null)}
+                  onClick={() => {
+                    if (item.id === 'store_ranks') setSubTab('store');
+                    else if (item.id === 'arsenal_hub') setSubTab('tutorial');
+                    else setSubTab(item.id);
+                  }}
+                >
+                  <div className="mil-nav-icon">
+                    <IconComp size={18} />
+                  </div>
+                  <div className="mil-nav-text">
+                    <strong>{item.label}</strong>
+                    <small>{item.sub}</small>
+                    {item.badge && <span className="mil-nav-badge">{item.badge}</span>}
+                  </div>
+                </button>
+              );
+            })}
+
+            {isAdmin && (
+              <button
+                type="button"
+                className={`mil-hub-navbtn admin-nav ${activeTab === 'admin' ? 'active' : ''}`}
+                onClick={() => setSubTab('admin')}
+              >
+                <div className="mil-nav-icon">
+                  <IconShield size={18} />
+                </div>
+                <div className="mil-nav-text">
+                  <strong>PAINEL ADMINISTRATIVO</strong>
+                  <small>Moderação, Contas & Sandbox</small>
+                </div>
+              </button>
+            )}
+
+            {isPaused && (
+              <button
+                type="button"
+                className="mil-hub-resume-btn"
+                onClick={onResume}
+              >
+                <IconPlay size={15} /> RETORNAR À BATALHA
+              </button>
+            )}
+          </aside>
+
+          {/* PAINEL CENTRAL DINÂMICO */}
+          <main className="mil-hub-main">
+            {/* CARD DE DESTAQUE VISUAL DINÂMICO */}
+            {activeTab !== 'admin' && (
+              <section className="mil-hero-card">
+                <div className="mil-hero-info">
+                  <span className="mil-hero-kicker">{heroMeta.kicker}</span>
+                  <h2>{heroMeta.title}</h2>
+                  <p>{heroMeta.desc}</p>
+                  <div className="mil-hero-rules">
+                    {heroMeta.rules.map((r) => (
+                      <span key={r} className="mil-hero-rule-pill">
+                        {r}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="mil-hero-actions">
+                  <div className="mil-hero-map-mini">
+                    <span>TEATRO ATIVO</span>
+                    <strong>
+                      {BATTLEFIELD_MAPS.find((m) => m.id === selectedMapId)?.name ||
+                        'Campos da Normandia'}
+                    </strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="mil-btn-primary mil-hero-cta"
+                    onClick={heroMeta.onLaunch}
+                  >
+                    <IconPlay size={15} />
+                    <span>{heroMeta.ctaLabel}</span>
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {/* CONTEÚDO INTERATIVO DA SEÇÃO SELECIONADA */}
+            <div className="mil-hub-content">
+              {activeTab === 'spectator' && isAdmin && (
+                <div className="mil-subpane">
+                  <div className="mp-card">
+                    <div className="mp-card-head">
+                      <div>
+                        <span className="mp-kicker">ESTÚDIO DE GRAVAÇÃO • TIKTOK / SHORTS / REELS</span>
+                        <h3>MODO ESPECTADOR: BATALHA AUTOMATIZADA IA vs IA</h3>
+                      </div>
+                      <button
+                        type="button"
+                        className="mil-btn-primary"
+                        onClick={() => onPlaySpectator?.(selectedMapId)}
+                      >
+                        <IconCamera size={16} /> INICIAR IA vs IA AGORA
+                      </button>
+                    </div>
+                    <div className="mil-controls-grid">
+                      <div className="mil-ctrl-item">
+                        <kbd>Tecla H</kbd>
+                        <div>
+                          <strong>Ocultar HUD</strong>
+                          <span>Tela 100% limpa para gravar vídeos</span>
+                        </div>
+                      </div>
+                      <div className="mil-ctrl-item">
+                        <kbd>Director Cam</kbd>
+                        <div>
+                          <strong>Câmera Automática</strong>
+                          <span>Segue tiroteios, tanques e explosões</span>
+                        </div>
+                      </div>
+                      <div className="mil-ctrl-item">
+                        <kbd>1x | 2x | 3x</kbd>
+                        <div>
+                          <strong>Controle de Velocidade</strong>
+                          <span>Acelere batalhas épicas em minutos</span>
+                        </div>
+                      </div>
+                      <div className="mil-ctrl-item">
+                        <kbd>Onda Blindada</kbd>
+                        <div>
+                          <strong>Forçar Reforço</strong>
+                          <span>Dispara choque imediato de tanques MBT</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'editor_hub' && isLocalHost && (
+                <div className="mil-subpane">
+                  <div className="mp-card">
+                    <div className="mp-card-head">
+                      <div>
+                        <span className="mp-kicker">CONSTRUÇÃO DE CENÁRIO 3D</span>
+                        <h3>EDITOR DE MAPAS & TESTE TÁTICO</h3>
+                      </div>
+                      <div className="mp-join-inline">
+                        {isLocalHost && (
+                          <button
+                            type="button"
+                            className="mil-btn-primary"
+                            onClick={() => onOpenMapEditor?.(selectedMapId)}
+                          >
+                            <IconCompass size={16} /> ABRIR EDITOR DE MAPA (LOCAL)
+                          </button>
+                        )}
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            className="mil-btn-secondary"
+                            style={{ borderColor: '#c28e38', color: '#fde68a' }}
+                            onClick={() => onPlaySandbox?.(selectedMode, selectedMapId)}
+                          >
+                            <IconShield size={16} /> ENTRAR NO SANDBOX [F10]
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <p style={{ color: '#9ca898', fontSize: 13, margin: 0 }}>
+                      Pausa a partida automaticamente, oculta a Névoa de Guerra, libera zoom amplo e permite adicionar casas, muros, trincheiras, áreas inteiras de floresta e reposicionar os 12 setores de conquista gravando direto em <code>src/game/data/customMaps.json</code>.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'store_ranks' && (
+                <div className="mil-subpane">
+                  <div className="mil-subbar">
+                    <button
+                      type="button"
+                      className={`mil-pill ${subTab === 'store' ? 'active' : ''}`}
+                      onClick={() => setSubTab('store')}
+                    >
+                      SUPRIMENTOS DE CAMPANHA
+                    </button>
+                    <button
+                      type="button"
+                      className={`mil-pill ${subTab === 'ranks' ? 'active' : ''}`}
+                      onClick={() => setSubTab('ranks')}
+                    >
+                      PATENTE & BATALHÕES
+                    </button>
+                    <button
+                      type="button"
+                      className={`mil-pill ${subTab === 'skins' ? 'active' : ''}`}
+                      onClick={() => setSubTab('skins')}
+                    >
+                      UNIFORMES & CAMUFLAGENS
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'rooms' && (
             <div className="mil-subpane">
               <MultiplayerLobby onStartOnlineMatch={onStartOnlineMatch} />
             </div>
@@ -707,7 +1031,7 @@ export default function GameMenus({
             </div>
           )}
 
-          {activeTab === 'ranks' && (
+          {(subTab === 'ranks' || (activeTab === 'store_ranks' && subTab === 'ranks')) && (
             <div className="mil-subpane">
               {(() => {
                 const xp = net.currentUser?.xp || 0;
@@ -794,7 +1118,7 @@ export default function GameMenus({
             </div>
           )}
 
-          {activeTab === 'store' && (
+          {(subTab === 'store' || (activeTab === 'store_ranks' && subTab === 'store')) && (
             <div className="mil-subpane">
               <div className="mp-card">
                 <div className="mp-card-head">
@@ -857,7 +1181,7 @@ export default function GameMenus({
             </div>
           )}
 
-          {activeTab === 'arsenal_hub' && (
+          {(activeTab === 'arsenal_hub' || subTab === 'skins') && (
             <div className="mil-subpane">
               <div className="mil-subbar">
                 <button
@@ -865,28 +1189,28 @@ export default function GameMenus({
                   className={`mil-pill ${hubSubTab === 'tutorial' ? 'active' : ''}`}
                   onClick={() => setSubTab('tutorial')}
                 >
-                  📖 TUTORIAL & ASSALTO
+                  TUTORIAL & ASSALTO
                 </button>
                 <button
                   type="button"
                   className={`mil-pill ${hubSubTab === 'skins' ? 'active' : ''}`}
                   onClick={() => setSubTab('skins')}
                 >
-                  ✦ UNIFORMES & SKINS
+                  UNIFORMES & SKINS
                 </button>
                 <button
                   type="button"
                   className={`mil-pill ${hubSubTab === 'saves' ? 'active' : ''}`}
                   onClick={() => setSubTab('saves')}
                 >
-                  💾 SAVES
+                  SAVES
                 </button>
                 <button
                   type="button"
                   className={`mil-pill ${hubSubTab === 'settings' ? 'active' : ''}`}
                   onClick={() => setSubTab('settings')}
                 >
-                  ⚙ ÁUDIO/CÂMERA
+                  ÁUDIO / CÂMERA
                 </button>
                 <button
                   type="button"
@@ -896,7 +1220,7 @@ export default function GameMenus({
                     setFbModalOpen(true);
                   }}
                 >
-                  ⚙️ Chaves Firebase
+                  Chaves Firebase
                 </button>
               </div>
 
@@ -1035,7 +1359,7 @@ export default function GameMenus({
 
           {activeTab === 'admin' && isAdmin && (
             <div id="admin-panel" className="mil-subpane">
-              <AdminPanel />
+              <AdminPanel onLaunchSandbox={() => onPlaySandbox?.(selectedMode, selectedMapId)} />
             </div>
           )}
 
@@ -1143,14 +1467,16 @@ export default function GameMenus({
                     ▸ CONTINUAR SALVA ({savedBattles[0].gameMode?.toUpperCase()})
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="mil-btn-secondary"
-                  style={{ borderColor: '#c28e38', color: '#c28e38' }}
-                  onClick={() => onPlaySandbox?.(selectedMode, selectedMapId)}
-                >
-                  🛠️ MODO CAIXA DE AREIA (TESTE LIVRE)
-                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    className="mil-btn-secondary"
+                    style={{ borderColor: '#c28e38', color: '#c28e38' }}
+                    onClick={() => onPlaySandbox?.(selectedMode, selectedMapId)}
+                  >
+                    🛠️ MODO CAIXA DE AREIA (ADMIN)
+                  </button>
+                )}
                 <button
                   type="button"
                   className="mil-btn-primary"
@@ -1158,7 +1484,7 @@ export default function GameMenus({
                     onPlayMode(selectedMode, startingResources, selectedMapId, selectedDifficulty)
                   }
                 >
-                  ⚔ INICIAR OPERAÇÃO
+                  <IconPlay size={14} /> INICIAR OPERAÇÃO
                 </button>
               </footer>
             </div>
@@ -1463,7 +1789,9 @@ export default function GameMenus({
               )}
             </div>
           )}
-        </main>
+            </div>
+          </main>
+        </div>
       </div>
 
       {fbModalOpen && (
