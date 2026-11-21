@@ -271,8 +271,9 @@ No **Lobby Skirmish**, escolha o campo de batalha antes de mobilizar o batalhão
    - **Chave de Segurança Mestra:** Qualquer comandante pode validar privilégios administrativos no botão **`[🔑 Admin]`** digitando a chave mestra (`FRONT-ADMIN-1944` ou `admin`).
    - **Funcionalidades do Painel Admin:**
      - **Punições & Disciplina:** Lista de todas as contas registradas no Firebase RTDB, com ações para **`🚫 Banir Conta`** (bloqueio total de login e multiplayer com tela de aviso), **`✅ Desbanir`**, **`🔇 Silenciar Chat`** e **`⚠️ Bloquear Acesso a Partidas PvP`**.
-     - **Gerador de Recursos & Ouro:** Injeção de quantias predefinidas (`+500`, `+1.000`, `+2.500`, `+10.000`, `+50.000` Ouro) ou definição exata de saldo para si mesmo ou para qualquer jogador cadastrado, incluindo opção de zerar ouro.
-     - **Concessão de Itens:** Liberar individualmente ou conceder **`⭐ TODOS os Batalhões`** e **`👑 COMBO VIP Completo`** para o jogador selecionado.
+     - **Gerador de Recursos & Ouro:** Injeção de quantias predefinidas (`+500`, `+1.000`, `+2.500`, `+5.000`, `+10.000`, `+50.000` Ouro) ou definição exata de saldo para si mesmo ou para qualquer jogador cadastrado, incluindo opção de zerar ouro.
+     - **Concessão & Remoção de Itens:** Liberar ou remover individualmente batalhões e pacotes VIP, ou conceder **`⭐ TODOS os Batalhões`** e **`👑 COMBO VIP Completo`** para o jogador selecionado, com KPIs de resumo no topo, badge de status Firebase e validação real de sucesso/erro em todas as ações.
+     - **Sincronização Segura de Perfil (`_pullCloudProfile`):** Ao fazer login ou abrir o jogo, o cliente lê o perfil salvo no Firebase **antes** de sincronizar, evitando sobrescrever Ouro Militar, Batalhões e Pacotes VIP concedidos pelo Administrador.
      - **Patente & Reset Limpo:** Ajustar patente para qualquer nível (1 ao 10) ou **`⚠️ Resetar Conta para Nv. 1`** (0 Ouro, 0 XP, bloqueando todos os itens) para realização de testes limpos de novos jogadores.
 
 3. **Limpeza da Aba `📖 GUIA / SIST.` & `TUTORIAL`:**

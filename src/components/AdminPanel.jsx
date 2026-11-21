@@ -9,23 +9,35 @@ import {
 export default function AdminPanel({ onLaunchSandbox }) {
   const [players, setPlayers] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
   const [selectedPlayerUid, setSelectedPlayerUid] = useState(
     networkManager.currentUser?.uid || ''
   );
   const [goldInput, setGoldInput] = useState('1000');
   const [banReasonInput, setBanReasonInput] = useState('Violação das regras de combate.');
-  const [msg, setMsg] = useState('');
+  const [toast, setToast] = useState({ text: '', type: 'ok' });
   const [searchFilter, setSearchFilter] = useState('');
   const [activeAdminSubTab, setActiveAdminSubTab] = useState('players'); // 'players' | 'economy' | 'items' | 'server'
+
+  const flashMsg = (text, type = 'ok') => {
+    setToast({ text, type });
+    setTimeout(() => setToast((prev) => (prev.text === text ? { text: '', type: 'ok' } : prev)), 4500);
+  };
 
   const refreshPlayers = async () => {
     setLoading(true);
     try {
       const list = await networkManager.getAllPlayers();
       setPlayers(list);
-      if (!selectedPlayerUid && list[0]) {
-        setSelectedPlayerUid(list[0].uid);
-      }
+      setSelectedPlayerUid((prev) => {
+        if (prev && list.some((p) => p.uid === prev)) return prev;
+        if (networkManager.currentUser?.uid && list.some((p) => p.uid === networkManager.currentUser.uid)) {
+          return networkManager.currentUser.uid;
+        }
+        return list[0]?.uid || '';
+      });
+    } catch (err) {
+      flashMsg(`Erro ao carregar contas: ${err?.message || 'Firebase indisponível'}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -35,9 +47,26 @@ export default function AdminPanel({ onLaunchSandbox }) {
     refreshPlayers();
   }, []);
 
-  const flashMsg = (text) => {
-    setMsg(text);
-    setTimeout(() => setMsg(''), 4000);
+  const runAdminAction = async (actionFn, successMsg) => {
+    if (actionBusy) return;
+    if (!selectedPlayer?.uid || selectedPlayer.uid === 'local') {
+      flashMsg('Nenhum jogador válido selecionado.', 'error');
+      return;
+    }
+    setActionBusy(true);
+    try {
+      const res = await actionFn();
+      if (res && res.ok === false) {
+        flashMsg(`Falha: ${res.error || 'Ação não autorizada ou erro no Firebase.'}`, 'error');
+        return;
+      }
+      flashMsg(typeof successMsg === 'function' ? successMsg(res) : successMsg, 'ok');
+      await refreshPlayers();
+    } catch (err) {
+      flashMsg(`Erro: ${err?.message || 'Falha inesperada.'}`, 'error');
+    } finally {
+      setActionBusy(false);
+    }
   };
 
   const selectedPlayer =
@@ -58,6 +87,9 @@ export default function AdminPanel({ onLaunchSandbox }) {
       p.uid?.toLowerCase().includes(searchFilter.toLowerCase())
   );
 
+  const bannedCount = players.filter((p) => p.banned).length;
+  const selfUid = networkManager.currentUser?.uid;
+
   return (
     <div className="admin-panel-container">
       {/* CABEÇALHO DO PAINEL ADMIN */}
@@ -75,6 +107,15 @@ export default function AdminPanel({ onLaunchSandbox }) {
         </div>
 
         <div className="admin-quick-actions">
+          <span
+            className="mp-ping-badge"
+            style={{
+              borderColor: networkManager.isOnline ? '#22c55e' : '#eab308',
+              color: networkManager.isOnline ? '#86efac' : '#fde047',
+            }}
+          >
+            {networkManager.isOnline ? '🟢 Firebase Conectado' : '🟡 Modo Local'}
+          </span>
           {onLaunchSandbox && (
             <button
               type="button"
@@ -82,7 +123,7 @@ export default function AdminPanel({ onLaunchSandbox }) {
               style={{ borderColor: '#f59e0b', background: 'rgba(217, 119, 6, 0.22)', color: '#fde68a', fontWeight: 800 }}
               onClick={onLaunchSandbox}
             >
-              🛠️ Entrar no Modo Sandbox (Admin)
+              🛠️ Modo Sandbox (Admin)
             </button>
           )}
           <button
@@ -90,17 +131,70 @@ export default function AdminPanel({ onLaunchSandbox }) {
             className="mil-pill"
             style={{ borderColor: '#ef4444', color: '#fca5a5' }}
             onClick={refreshPlayers}
-            disabled={loading}
+            disabled={loading || actionBusy}
           >
-            {loading ? '⟳ Atualizando...' : '⟳ Atualizar Lista de Players'}
+            {loading ? '⟳ Atualizando...' : '⟳ Atualizar Lista'}
           </button>
         </div>
       </div>
 
-      {msg && <div className="admin-status-toast">{msg}</div>}
+      {/* RESUMO RÁPIDO DO COMANDO */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(155px, 1fr))',
+          gap: 8,
+          marginBottom: 12,
+        }}
+      >
+        <div className="mp-card" style={{ padding: '10px 12px', margin: 0 }}>
+          <small style={{ color: '#9ca3af' }}>CONTAS REGISTRADAS</small>
+          <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#f3f4f6' }}>{players.length}</div>
+        </div>
+        <div className="mp-card" style={{ padding: '10px 12px', margin: 0 }}>
+          <small style={{ color: '#9ca3af' }}>CONTAS BANIDAS</small>
+          <div style={{ fontSize: '1.15rem', fontWeight: 800, color: bannedCount > 0 ? '#f87171' : '#86efac' }}>
+            {bannedCount}
+          </div>
+        </div>
+        <div className="mp-card" style={{ padding: '10px 12px', margin: 0 }}>
+          <small style={{ color: '#9ca3af' }}>OURO DO ALVO</small>
+          <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fde047' }}>
+            💰 {selectedPlayer.militaryGold || 0}
+          </div>
+        </div>
+        <div className="mp-card" style={{ padding: '10px 12px', margin: 0 }}>
+          <small style={{ color: '#9ca3af' }}>DESBLOQUEIOS DO ALVO</small>
+          <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#93c5fd' }}>
+            {(selectedPlayer.unlockedBattalions || []).length}/{BATTALION_UNLOCKS.length} Bat •{' '}
+            {(selectedPlayer.ownedCampaignPacks || []).length}/{CAMPAIGN_PACKS.length} VIP
+          </div>
+        </div>
+      </div>
+
+      {toast.text && (
+        <div
+          className="admin-status-toast"
+          style={
+            toast.type === 'error'
+              ? {
+                  borderColor: '#ef4444',
+                  background: 'rgba(127, 29, 29, 0.72)',
+                  color: '#fecaca',
+                }
+              : {
+                  borderColor: '#22c55e',
+                  background: 'rgba(20, 83, 45, 0.72)',
+                  color: '#bbf7d0',
+                }
+          }
+        >
+          {toast.text}
+        </div>
+      )}
 
       {/* SUB-ABAS DO PAINEL ADMIN */}
-      <div className="mil-subbar" style={{ marginBottom: 16 }}>
+      <div className="mil-subbar" style={{ marginBottom: 14 }}>
         <button
           type="button"
           className={`mil-pill ${activeAdminSubTab === 'players' ? 'active' : ''}`}
@@ -135,21 +229,31 @@ export default function AdminPanel({ onLaunchSandbox }) {
         </button>
       </div>
 
-      {/* SELETOR RÁPIDO DO JOGADOR ALVO (VISÍVEL EM TODAS AS ABAS OPERACIONAIS) */}
+      {/* SELETOR RÁPIDO DO JOGADOR ALVO */}
       <div className="admin-target-bar">
         <span>JOGADOR ALVO:</span>
         <select
           className="mil-input"
-          style={{ maxWidth: 320, padding: '4px 10px', height: 34 }}
-          value={selectedPlayerUid}
+          style={{ maxWidth: 340, padding: '4px 10px', height: 34 }}
+          value={selectedPlayer.uid}
           onChange={(e) => setSelectedPlayerUid(e.target.value)}
         >
           {players.map((p) => (
             <option key={p.uid} value={p.uid}>
-              {p.callsign} (Nv.{p.level} • {p.militaryGold} Ouro) {p.banned ? '[BANIDO]' : ''} {p.uid === networkManager.currentUser?.uid ? '★ (Você)' : ''}
+              {p.callsign} (Nv.{p.level} • {p.militaryGold} Ouro) {p.banned ? '[BANIDO]' : ''}{' '}
+              {p.uid === selfUid ? '★ (Você)' : ''}
             </option>
           ))}
         </select>
+        {selfUid && selectedPlayer.uid !== selfUid && (
+          <button
+            type="button"
+            className="mil-pill"
+            onClick={() => setSelectedPlayerUid(selfUid)}
+          >
+            ★ Minha Conta
+          </button>
+        )}
         <span className="mp-ping-badge" style={{ color: '#fde047' }}>
           Ouro: {selectedPlayer.militaryGold || 0}
         </span>
@@ -179,8 +283,8 @@ export default function AdminPanel({ onLaunchSandbox }) {
 
             <div className="admin-player-table">
               {filteredPlayers.map((p) => {
-                const isTarget = p.uid === selectedPlayerUid;
-                const isSelf = p.uid === networkManager.currentUser?.uid;
+                const isTarget = p.uid === selectedPlayer.uid;
+                const isSelf = p.uid === selfUid;
                 return (
                   <div
                     key={p.uid}
@@ -190,9 +294,10 @@ export default function AdminPanel({ onLaunchSandbox }) {
                     <div className="admin-player-info">
                       <strong>
                         {p.banned ? '🚫 ' : p.muted ? '🔇 ' : '🟢 '}
-                        {p.callsign} {isSelf ? '★ (Você)' : ''}
+                        {p.callsign} {isSelf ? '★ (Você)' : ''}{' '}
+                        {p.role === 'admin' ? '[ADMIN]' : ''}
                       </strong>
-                      <small style={{ color: '#8c948c' }}>
+                      <small style={{ color: '#a1a1aa' }}>
                         UID: {p.uid} • Nv.{p.level} ({p.rank}) • 💰 {p.militaryGold} Ouro
                       </small>
                       {p.banned && (
@@ -207,12 +312,14 @@ export default function AdminPanel({ onLaunchSandbox }) {
                         <button
                           type="button"
                           className="mil-pill"
+                          disabled={actionBusy}
                           style={{ borderColor: '#4ade80', color: '#4ade80' }}
-                          onClick={async (e) => {
+                          onClick={(e) => {
                             e.stopPropagation();
-                            const res = await networkManager.adminUnbanPlayer(p.uid);
-                            flashMsg(res.message || 'Jogador desbanido.');
-                            refreshPlayers();
+                            runAdminAction(
+                              () => networkManager.adminUnbanPlayer(p.uid),
+                              (res) => res?.message || 'Jogador desbanido.'
+                            );
                           }}
                         >
                           ✅ Desbanir
@@ -221,17 +328,19 @@ export default function AdminPanel({ onLaunchSandbox }) {
                         <button
                           type="button"
                           className="mil-pill"
+                          disabled={actionBusy}
                           style={{ borderColor: '#ef4444', color: '#f87171' }}
-                          onClick={async (e) => {
+                          onClick={(e) => {
                             e.stopPropagation();
                             const reason = window.prompt(
                               `Motivo do banimento para ${p.callsign}:`,
                               banReasonInput
                             );
                             if (reason) {
-                              const res = await networkManager.adminBanPlayer(p.uid, reason);
-                              flashMsg(res.message || 'Jogador banido.');
-                              refreshPlayers();
+                              runAdminAction(
+                                () => networkManager.adminBanPlayer(p.uid, reason),
+                                (res) => res?.message || 'Jogador banido.'
+                              );
                             }
                           }}
                         >
@@ -273,12 +382,14 @@ export default function AdminPanel({ onLaunchSandbox }) {
                   <button
                     type="button"
                     className="mil-btn-primary"
+                    disabled={actionBusy}
                     style={{ borderColor: '#4ade80', background: '#166534' }}
-                    onClick={async () => {
-                      const res = await networkManager.adminUnbanPlayer(selectedPlayer.uid);
-                      flashMsg(res.message || 'Jogador desbanido.');
-                      refreshPlayers();
-                    }}
+                    onClick={() =>
+                      runAdminAction(
+                        () => networkManager.adminUnbanPlayer(selectedPlayer.uid),
+                        (res) => res?.message || 'Jogador desbanido.'
+                      )
+                    }
                   >
                     ✅ Desbanir Jogador Imediatamente
                   </button>
@@ -286,12 +397,14 @@ export default function AdminPanel({ onLaunchSandbox }) {
                   <button
                     type="button"
                     className="mil-btn-primary"
+                    disabled={actionBusy}
                     style={{ borderColor: '#ef4444', background: '#991b1b' }}
-                    onClick={async () => {
-                      const res = await networkManager.adminBanPlayer(selectedPlayer.uid, banReasonInput);
-                      flashMsg(res.message || 'Jogador banido.');
-                      refreshPlayers();
-                    }}
+                    onClick={() =>
+                      runAdminAction(
+                        () => networkManager.adminBanPlayer(selectedPlayer.uid, banReasonInput),
+                        (res) => res?.message || 'Jogador banido.'
+                      )
+                    }
                   >
                     🚫 Aplicar Banimento Completo
                   </button>
@@ -300,13 +413,16 @@ export default function AdminPanel({ onLaunchSandbox }) {
                 <button
                   type="button"
                   className="mil-btn-secondary"
-                  onClick={async () => {
+                  disabled={actionBusy}
+                  onClick={() => {
                     const nextMute = !selectedPlayer.muted;
-                    await networkManager.adminSetPlayerRestrictions(selectedPlayer.uid, {
-                      muted: nextMute,
-                    });
-                    flashMsg(nextMute ? 'Jogador silenciado.' : 'Silenciamento removido.');
-                    refreshPlayers();
+                    runAdminAction(
+                      () =>
+                        networkManager.adminSetPlayerRestrictions(selectedPlayer.uid, {
+                          muted: nextMute,
+                        }),
+                      nextMute ? 'Jogador silenciado.' : 'Silenciamento removido.'
+                    );
                   }}
                 >
                   {selectedPlayer.muted ? '🔊 Desmutar Chat' : '🔇 Silenciar (Mutar Chat)'}
@@ -315,13 +431,16 @@ export default function AdminPanel({ onLaunchSandbox }) {
                 <button
                   type="button"
                   className="mil-btn-secondary"
-                  onClick={async () => {
+                  disabled={actionBusy}
+                  onClick={() => {
                     const nextRestr = !selectedPlayer.restricted;
-                    await networkManager.adminSetPlayerRestrictions(selectedPlayer.uid, {
-                      restricted: nextRestr,
-                    });
-                    flashMsg(nextRestr ? 'Restrição de PvP ativada.' : 'Restrição removida.');
-                    refreshPlayers();
+                    runAdminAction(
+                      () =>
+                        networkManager.adminSetPlayerRestrictions(selectedPlayer.uid, {
+                          restricted: nextRestr,
+                        }),
+                      nextRestr ? 'Restrição de PvP ativada.' : 'Restrição removida.'
+                    );
                   }}
                 >
                   {selectedPlayer.restricted ? '🔓 Liberar PvP / Salas' : '⚠️ Bloquear Acesso a Salas PvP'}
@@ -346,11 +465,11 @@ export default function AdminPanel({ onLaunchSandbox }) {
           </div>
 
           <div style={{ padding: 12 }}>
-            <p style={{ color: '#b7beb7' }}>
+            <p style={{ color: '#d4d4d8' }}>
               Adicione ouro militar à conta selecionada ou defina uma quantia exata diretamente na nuvem.
             </p>
 
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
               <input
                 type="number"
                 className="mil-input"
@@ -362,14 +481,17 @@ export default function AdminPanel({ onLaunchSandbox }) {
               <button
                 type="button"
                 className="mil-btn-primary"
-                onClick={async () => {
-                  const val = Number(goldInput);
-                  await networkManager.adminSetPlayerGold(
-                    selectedPlayer.uid,
-                    (selectedPlayer.militaryGold || 0) + val
+                disabled={actionBusy}
+                onClick={() => {
+                  const val = Math.max(0, Math.round(Number(goldInput) || 0));
+                  runAdminAction(
+                    () =>
+                      networkManager.adminSetPlayerGold(
+                        selectedPlayer.uid,
+                        (selectedPlayer.militaryGold || 0) + val
+                      ),
+                    `+${val} Ouro adicionado a ${selectedPlayer.callsign}!`
                   );
-                  flashMsg(`+${val} Ouro adicionado a ${selectedPlayer.callsign}!`);
-                  refreshPlayers();
                 }}
               >
                 ➕ Injetar Ouro
@@ -377,11 +499,13 @@ export default function AdminPanel({ onLaunchSandbox }) {
               <button
                 type="button"
                 className="mil-btn-secondary"
-                onClick={async () => {
-                  const val = Number(goldInput);
-                  await networkManager.adminSetPlayerGold(selectedPlayer.uid, val);
-                  flashMsg(`Saldo de ${selectedPlayer.callsign} definido para ${val} Ouro.`);
-                  refreshPlayers();
+                disabled={actionBusy}
+                onClick={() => {
+                  const val = Math.max(0, Math.round(Number(goldInput) || 0));
+                  runAdminAction(
+                    () => networkManager.adminSetPlayerGold(selectedPlayer.uid, val),
+                    `Saldo de ${selectedPlayer.callsign} definido para ${val} Ouro.`
+                  );
                 }}
               >
                 Definir Saldo Exato
@@ -389,12 +513,14 @@ export default function AdminPanel({ onLaunchSandbox }) {
               <button
                 type="button"
                 className="mil-btn-secondary"
+                disabled={actionBusy}
                 style={{ borderColor: '#ef4444', color: '#f87171' }}
-                onClick={async () => {
-                  await networkManager.adminSetPlayerGold(selectedPlayer.uid, 0);
-                  flashMsg(`Saldo de ${selectedPlayer.callsign} zerado com sucesso!`);
-                  refreshPlayers();
-                }}
+                onClick={() =>
+                  runAdminAction(
+                    () => networkManager.adminSetPlayerGold(selectedPlayer.uid, 0),
+                    `Saldo de ${selectedPlayer.callsign} zerado com sucesso!`
+                  )
+                }
               >
                 🪙 Zerar Ouro (0)
               </button>
@@ -407,15 +533,18 @@ export default function AdminPanel({ onLaunchSandbox }) {
                   key={amt}
                   type="button"
                   className="mil-pill"
+                  disabled={actionBusy}
                   style={{ borderColor: '#eab308', color: '#fde047' }}
-                  onClick={async () => {
-                    await networkManager.adminSetPlayerGold(
-                      selectedPlayer.uid,
-                      (selectedPlayer.militaryGold || 0) + amt
-                    );
-                    flashMsg(`+${amt} Ouro injetado em ${selectedPlayer.callsign}!`);
-                    refreshPlayers();
-                  }}
+                  onClick={() =>
+                    runAdminAction(
+                      () =>
+                        networkManager.adminSetPlayerGold(
+                          selectedPlayer.uid,
+                          (selectedPlayer.militaryGold || 0) + amt
+                        ),
+                      `+${amt} Ouro injetado em ${selectedPlayer.callsign}!`
+                    )
+                  }
                 >
                   +{amt} Ouro
                 </button>
@@ -438,12 +567,14 @@ export default function AdminPanel({ onLaunchSandbox }) {
               <button
                 type="button"
                 className="mil-btn-primary"
+                disabled={actionBusy}
                 style={{ minHeight: 32, padding: '0 12px' }}
-                onClick={async () => {
-                  await networkManager.adminGrantBattalion(selectedPlayer.uid, 'ALL');
-                  flashMsg(`TODOS os Batalhões liberados para ${selectedPlayer.callsign}!`);
-                  refreshPlayers();
-                }}
+                onClick={() =>
+                  runAdminAction(
+                    () => networkManager.adminGrantBattalion(selectedPlayer.uid, 'ALL'),
+                    `TODOS os Batalhões liberados para ${selectedPlayer.callsign}!`
+                  )
+                }
               >
                 ⭐ Liberar TODOS os Batalhões
               </button>
@@ -469,25 +600,43 @@ export default function AdminPanel({ onLaunchSandbox }) {
                       <strong>
                         {b.icon} {b.name}
                       </strong>
-                      <small style={{ display: 'block', color: '#8c948c' }}>
+                      <small style={{ display: 'block', color: '#a1a1aa' }}>
                         Nv.{b.requiredLevel} ({b.rankName}) • {b.priceGold || 200} Ouro
                       </small>
                     </div>
 
                     {hasIt ? (
-                      <span className="mp-ping-badge" style={{ color: '#4ade80' }}>
-                        ✓ Liberado
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span className="mp-ping-badge" style={{ color: '#4ade80' }}>
+                          ✓ Liberado
+                        </span>
+                        <button
+                          type="button"
+                          className="mil-pill"
+                          disabled={actionBusy}
+                          style={{ borderColor: '#ef4444', color: '#fca5a5' }}
+                          onClick={() =>
+                            runAdminAction(
+                              () => networkManager.adminRevokeBattalion(selectedPlayer.uid, b.id),
+                              `${b.name} removido de ${selectedPlayer.callsign}.`
+                            )
+                          }
+                        >
+                          ✕ Remover
+                        </button>
+                      </div>
                     ) : (
                       <button
                         type="button"
                         className="mil-pill"
+                        disabled={actionBusy}
                         style={{ borderColor: '#4ade80', color: '#4ade80' }}
-                        onClick={async () => {
-                          await networkManager.adminGrantBattalion(selectedPlayer.uid, b.id);
-                          flashMsg(`${b.name} liberado para ${selectedPlayer.callsign}!`);
-                          refreshPlayers();
-                        }}
+                        onClick={() =>
+                          runAdminAction(
+                            () => networkManager.adminGrantBattalion(selectedPlayer.uid, b.id),
+                            `${b.name} liberado para ${selectedPlayer.callsign}!`
+                          )
+                        }
                       >
                         + Conceder
                       </button>
@@ -508,12 +657,14 @@ export default function AdminPanel({ onLaunchSandbox }) {
               <button
                 type="button"
                 className="mil-btn-primary"
+                disabled={actionBusy}
                 style={{ minHeight: 32, padding: '0 12px' }}
-                onClick={async () => {
-                  await networkManager.adminGrantCampaignPack(selectedPlayer.uid, 'vip_combo');
-                  flashMsg(`COMBO VIP COMPLETO concedido a ${selectedPlayer.callsign}!`);
-                  refreshPlayers();
-                }}
+                onClick={() =>
+                  runAdminAction(
+                    () => networkManager.adminGrantCampaignPack(selectedPlayer.uid, 'vip_combo'),
+                    `COMBO VIP COMPLETO concedido a ${selectedPlayer.callsign}!`
+                  )
+                }
               >
                 👑 Conceder COMBO VIP
               </button>
@@ -539,25 +690,43 @@ export default function AdminPanel({ onLaunchSandbox }) {
                       <strong>
                         {pk.icon} {pk.name}
                       </strong>
-                      <small style={{ display: 'block', color: '#8c948c' }}>
+                      <small style={{ display: 'block', color: '#a1a1aa' }}>
                         {pk.badge} • Valor: {pk.priceGold} Ouro
                       </small>
                     </div>
 
                     {hasIt ? (
-                      <span className="mp-ping-badge" style={{ color: '#4ade80' }}>
-                        ✓ Possui
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span className="mp-ping-badge" style={{ color: '#4ade80' }}>
+                          ✓ Possui
+                        </span>
+                        <button
+                          type="button"
+                          className="mil-pill"
+                          disabled={actionBusy}
+                          style={{ borderColor: '#ef4444', color: '#fca5a5' }}
+                          onClick={() =>
+                            runAdminAction(
+                              () => networkManager.adminRevokeCampaignPack(selectedPlayer.uid, pk.id),
+                              `${pk.name} removido de ${selectedPlayer.callsign}.`
+                            )
+                          }
+                        >
+                          ✕ Remover
+                        </button>
+                      </div>
                     ) : (
                       <button
                         type="button"
                         className="mil-pill"
+                        disabled={actionBusy}
                         style={{ borderColor: '#4ade80', color: '#4ade80' }}
-                        onClick={async () => {
-                          await networkManager.adminGrantCampaignPack(selectedPlayer.uid, pk.id);
-                          flashMsg(`${pk.name} concedido a ${selectedPlayer.callsign}!`);
-                          refreshPlayers();
-                        }}
+                        onClick={() =>
+                          runAdminAction(
+                            () => networkManager.adminGrantCampaignPack(selectedPlayer.uid, pk.id),
+                            `${pk.name} concedido a ${selectedPlayer.callsign}!`
+                          )
+                        }
                       >
                         + Conceder
                       </button>
@@ -590,12 +759,14 @@ export default function AdminPanel({ onLaunchSandbox }) {
                 <button
                   key={r.level}
                   type="button"
+                  disabled={actionBusy}
                   className={`mil-pill ${selectedPlayer.level === r.level ? 'active' : ''}`}
-                  onClick={async () => {
-                    await networkManager.adminSetPlayerLevel(selectedPlayer.uid, r.level);
-                    flashMsg(`Patente de ${selectedPlayer.callsign} alterada para Nv.${r.level} (${r.rank})!`);
-                    refreshPlayers();
-                  }}
+                  onClick={() =>
+                    runAdminAction(
+                      () => networkManager.adminSetPlayerLevel(selectedPlayer.uid, r.level),
+                      `Patente de ${selectedPlayer.callsign} alterada para Nv.${r.level} (${r.rank})!`
+                    )
+                  }
                 >
                   Nv.{r.level} {r.rank}
                 </button>
@@ -607,16 +778,18 @@ export default function AdminPanel({ onLaunchSandbox }) {
               <button
                 type="button"
                 className="mil-btn-secondary"
+                disabled={actionBusy}
                 style={{ borderColor: '#ef4444', color: '#fca5a5' }}
-                onClick={async () => {
+                onClick={() => {
                   if (
                     window.confirm(
                       `ATENÇÃO: Deseja zerar completamente a conta de ${selectedPlayer.callsign} para Nível 1, 0 XP, 0 Ouro e sem itens?`
                     )
                   ) {
-                    await networkManager.adminResetPlayerAccount(selectedPlayer.uid);
-                    flashMsg(`Conta de ${selectedPlayer.callsign} resetada com sucesso para Nível 1 (0 Ouro, 0 XP)!`);
-                    refreshPlayers();
+                    runAdminAction(
+                      () => networkManager.adminResetPlayerAccount(selectedPlayer.uid),
+                      `Conta de ${selectedPlayer.callsign} resetada com sucesso para Nível 1 (0 Ouro, 0 XP)!`
+                    );
                   }
                 }}
               >

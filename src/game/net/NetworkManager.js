@@ -122,7 +122,10 @@ export class NetworkManager {
 
     this._initDualLayerSync();
     if (this.isOnline && this.hasFirebaseConfig()) {
-      this._ensureValidToken().finally(() => this._refreshOpenRooms());
+      this._ensureValidToken().finally(() => {
+        this._refreshOpenRooms();
+        this._pullCloudProfile();
+      });
     } else {
       this._refreshOpenRooms();
     }
@@ -490,55 +493,69 @@ export class NetworkManager {
     this._saveStoredUser(user);
 
     if (isFirebase && this.hasFirebaseConfig()) {
-      this._syncUserToCloud(user);
-      // Tenta recuperar perfil da nuvem para sincronizar XP/compras entre dispositivos
-      this._rtdbGet(`players/${user.uid}`)
-        .then((cloud) => {
-          if (cloud && typeof cloud === 'object' && this.currentUser?.uid === user.uid) {
-            const mergedXp = Math.max(this.currentUser.xp || 0, cloud.xp || 0);
-            const mergedProg = computeLevelFromXp(mergedXp);
-            const mergedPacks = Array.from(
-              new Set([
-                ...(this.currentUser.ownedCampaignPacks || []),
-                ...(Array.isArray(cloud.ownedCampaignPacks) ? cloud.ownedCampaignPacks : []),
-              ])
-            );
-            const mergedBats = Array.from(
-              new Set([
-                ...(this.currentUser.unlockedBattalions || []),
-                ...(Array.isArray(cloud.unlockedBattalions) ? cloud.unlockedBattalions : []),
-              ])
-            );
-            const isCloudAdmin = this._checkIsAdmin(cloud) || cloud.role === 'admin' || this._checkIsAdmin(this.currentUser);
-            const isCloudBanned = Boolean(cloud.banned) || this.currentUser.banned;
-            this.currentUser = {
-              ...this.currentUser,
-              xp: mergedXp,
-              level: mergedProg.level,
-              rank: mergedProg.rank,
-              unlockedBattalions: mergedBats,
-              ownedCampaignPacks: mergedPacks,
-              hasGoldInsignia: mergedPacks.includes('vip_combo'),
-              militaryGold:
-                typeof cloud.militaryGold === 'number'
-                  ? cloud.militaryGold
-                  : (this.currentUser.militaryGold ?? 0),
-              wins: Math.max(this.currentUser.wins || 0, cloud.wins || 0),
-              losses: Math.max(this.currentUser.losses || 0, cloud.losses || 0),
-              role: isCloudAdmin ? 'admin' : (this.currentUser.role || 'user'),
-              banned: isCloudBanned,
-              banReason: cloud.banReason || this.currentUser.banReason,
-            };
-            this._saveStoredUser(this.currentUser);
-            this._emit();
-          }
-        })
-        .catch(() => {});
+      // Primeiro lê o perfil da nuvem para NÃO sobrescrever ouro/batalhões/itens existentes com 0
+      this._pullCloudProfile(user.uid).finally(() => {
+        if (this.currentUser?.uid === user.uid) {
+          this._syncUserToCloud(this.currentUser);
+        }
+      });
     }
 
     this._refreshOpenRooms();
     this._emit();
-    return { ok: true, user };
+    return { ok: true, user: this.currentUser };
+  }
+
+  async _pullCloudProfile(expectedUid = this.currentUser?.uid) {
+    if (!expectedUid || !this.isOnline || !this.hasFirebaseConfig()) return null;
+    try {
+      const cloud = await this._rtdbGet(`players/${expectedUid}`);
+      if (cloud && typeof cloud === 'object' && this.currentUser?.uid === expectedUid) {
+        const mergedXp = Math.max(this.currentUser.xp || 0, cloud.xp || 0);
+        const mergedProg = computeLevelFromXp(mergedXp);
+        const mergedPacks = Array.from(
+          new Set([
+            ...(this.currentUser.ownedCampaignPacks || []),
+            ...(Array.isArray(cloud.ownedCampaignPacks) ? cloud.ownedCampaignPacks : []),
+          ])
+        );
+        const mergedBats = Array.from(
+          new Set([
+            ...(this.currentUser.unlockedBattalions || []),
+            ...(Array.isArray(cloud.unlockedBattalions) ? cloud.unlockedBattalions : []),
+          ])
+        );
+        const isCloudAdmin =
+          this._checkIsAdmin(cloud) || cloud.role === 'admin' || this._checkIsAdmin(this.currentUser);
+        const isCloudBanned = Boolean(cloud.banned) || this.currentUser.banned;
+        this.currentUser = {
+          ...this.currentUser,
+          xp: mergedXp,
+          level: mergedProg.level,
+          rank: mergedProg.rank,
+          unlockedBattalions: mergedBats,
+          ownedCampaignPacks: mergedPacks,
+          hasGoldInsignia: mergedPacks.includes('vip_combo'),
+          militaryGold:
+            typeof cloud.militaryGold === 'number'
+              ? cloud.militaryGold
+              : (this.currentUser.militaryGold ?? 0),
+          wins: Math.max(this.currentUser.wins || 0, cloud.wins || 0),
+          losses: Math.max(this.currentUser.losses || 0, cloud.losses || 0),
+          role: isCloudAdmin ? 'admin' : (this.currentUser.role || 'user'),
+          banned: isCloudBanned,
+          banReason: cloud.banReason || this.currentUser.banReason,
+          muted: Boolean(cloud.muted),
+          restricted: Boolean(cloud.restricted),
+        };
+        this._saveStoredUser(this.currentUser);
+        this._emit();
+        return this.currentUser;
+      }
+    } catch {
+      // mantém perfil local se o RTDB ainda não tiver registro
+    }
+    return null;
   }
 
   _syncUserToCloud(user = this.currentUser) {
@@ -793,6 +810,31 @@ export class NetworkManager {
     }
   }
 
+  async adminRevokeBattalion(targetUid, battalionId) {
+    if (!this.isAdmin()) return { ok: false, error: 'Acesso negado.' };
+    try {
+      let existingBats = [];
+      if (this.currentUser?.uid === targetUid) {
+        existingBats = this.currentUser.unlockedBattalions || [];
+      } else if (this.isOnline && this.hasFirebaseConfig()) {
+        const remote = await this._rtdbGet(`players/${targetUid}/unlockedBattalions`);
+        if (Array.isArray(remote)) existingBats = remote;
+      }
+      const arr = existingBats.filter((id) => id !== battalionId);
+      if (this.isOnline && this.hasFirebaseConfig()) {
+        await this._rtdbPut(`players/${targetUid}/unlockedBattalions`, arr);
+      }
+      if (this.currentUser?.uid === targetUid) {
+        this.currentUser.unlockedBattalions = arr;
+        this._saveStoredUser(this.currentUser);
+        this._emit();
+      }
+      return { ok: true, unlockedBattalions: arr };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
   async adminGrantCampaignPack(targetUid, packId) {
     if (!this.isAdmin()) return { ok: false, error: 'Acesso negado.' };
     try {
@@ -817,6 +859,33 @@ export class NetworkManager {
         if (arr.includes('vip_combo')) {
           await this._rtdbPut(`players/${targetUid}/hasGoldInsignia`, true);
         }
+      }
+      if (this.currentUser?.uid === targetUid) {
+        this.currentUser.ownedCampaignPacks = arr;
+        this.currentUser.hasGoldInsignia = arr.includes('vip_combo');
+        this._saveStoredUser(this.currentUser);
+        this._emit();
+      }
+      return { ok: true, ownedCampaignPacks: arr };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  async adminRevokeCampaignPack(targetUid, packId) {
+    if (!this.isAdmin()) return { ok: false, error: 'Acesso negado.' };
+    try {
+      let existingPacks = [];
+      if (this.currentUser?.uid === targetUid) {
+        existingPacks = this.currentUser.ownedCampaignPacks || [];
+      } else if (this.isOnline && this.hasFirebaseConfig()) {
+        const remote = await this._rtdbGet(`players/${targetUid}/ownedCampaignPacks`);
+        if (Array.isArray(remote)) existingPacks = remote;
+      }
+      const arr = existingPacks.filter((id) => id !== packId);
+      if (this.isOnline && this.hasFirebaseConfig()) {
+        await this._rtdbPut(`players/${targetUid}/ownedCampaignPacks`, arr);
+        await this._rtdbPut(`players/${targetUid}/hasGoldInsignia`, arr.includes('vip_combo'));
       }
       if (this.currentUser?.uid === targetUid) {
         this.currentUser.ownedCampaignPacks = arr;
@@ -1173,7 +1242,9 @@ export class NetworkManager {
     if (measurePing) this.pingMs = Math.max(8, Date.now() - t0);
     if (!res.ok) {
       if (res.status === 401) {
-        this.lastSyncError = 'Sessão expirada no Firebase. Saia da conta e entre novamente com e-mail e senha.';
+        this.lastSyncError = this.refreshToken
+          ? 'Permissão negada no Firebase RTDB (401). Verifique as Regras de Segurança do banco.'
+          : 'Sessão expirada no Firebase. Saia da conta e entre novamente com e-mail e senha.';
         this._emit();
       }
       throw new Error(`RTDB ${options.method || 'GET'} ${res.status}`);
