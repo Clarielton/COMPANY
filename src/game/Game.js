@@ -523,35 +523,8 @@ export class Game {
 
   startOnlineMatch({ networkManager, room, localSlot = 1 } = {}) {
     this.isMultiplayer = true;
-    this.networkManager = networkManager;
-    this.localSlot = localSlot;
-    this.localPlayerFaction = localSlot === 2 ? 'enemy_1' : 'player';
-    this.localPlayerTeam = localSlot === 2 ? 'enemies' : 'allies';
-    if (this.map) {
-      this.map.visionTeam = this.localPlayerTeam;
-      this.map.resetFog();
-      this.map.updateFogOfWar(
-        this.units,
-        this.baseBuildings.filter((b) => b.alive !== false),
-        0.05,
-        this.localPlayerTeam
-      );
-    }
-    this.mpHeartbeatTimer = 1.5;
-
-    const mapId = room?.mapId || 'normandy_fields';
-    const mapSeed = room?.mapSeed || 1944;
-    const startingRes = room?.startingResources || 600;
-    const isCampaign = Boolean(room?.isCampaign);
-
-    this.mapId = mapId;
-    this.map = new BattlefieldMap({ seed: mapSeed, mapId });
-    this.renderer?.buildWorld(this.map);
-
-    this.setupMatch(room?.mode === '2v2' ? '2v2' : '1v1', startingRes, mapId, 'medium');
-    this.isMultiplayer = true;
-    this.isCampaign = isCampaign;
-    this.campaignDay = room?.campaignDay || 1;
+    this.spectatorMode = false;
+    this.intelRevealed = false;
     this.networkManager = networkManager;
     this.localSlot = localSlot;
     const slotMap = {
@@ -563,6 +536,44 @@ export class Game {
     const slotMeta = slotMap[localSlot] || slotMap[1];
     this.localPlayerFaction = slotMeta.faction;
     this.localPlayerTeam = slotMeta.team;
+    this.mpHeartbeatTimer = 0.25;
+
+    const mapId = room?.mapId || 'normandy_fields';
+    const mapSeed = room?.mapSeed || 1944;
+    const startingRes = room?.startingResources || 600;
+    const isCampaign = Boolean(room?.isCampaign);
+    const mode = room?.mode === '2v2' ? '2v2' : '1v1';
+
+    this.mapId = mapId;
+    this.map = new BattlefieldMap({ seed: mapSeed, mapId });
+    this.map.applyCornerRandomSpawns(mode, mapSeed);
+    this.renderer?.buildWorld(this.map);
+
+    this.setupMatch(mode, startingRes, mapId, 'medium', {
+      isOnline: true,
+      mapSeed,
+    });
+    this.isMultiplayer = true;
+    this.spectatorMode = false;
+    this.intelRevealed = false;
+    this.isCampaign = isCampaign;
+    this.campaignDay = room?.campaignDay || 1;
+    this.networkManager = networkManager;
+    this.localSlot = localSlot;
+    this.localPlayerFaction = slotMeta.faction;
+    this.localPlayerTeam = slotMeta.team;
+    this.onlineBotFactions = new Set();
+    for (const [sKey, botInfo] of Object.entries(room?.bots || {})) {
+      const sNum = Number(sKey);
+      if (botInfo && !room?.slots?.[sNum] && slotMap[sNum]) {
+        this.onlineBotFactions.add(slotMap[sNum].faction);
+      }
+    }
+    const localHq = this.map.hqs?.[this.localPlayerFaction];
+    if (localHq) {
+      this.camera.x = clamp(localHq.x, 420, BATTLEFIELD_SIZE - 420);
+      this.camera.y = clamp(localHq.y, 420, BATTLEFIELD_SIZE - 420);
+    }
     if (this.map) {
       this.map.visionTeam = this.localPlayerTeam;
       this.map.resetFog();
@@ -618,11 +629,11 @@ export class Game {
       }
     }
 
-    // Inversão de Câmera & Facção para Jogador 2 (Eixo - Base Norte/Leste)
-    if (localSlot === 2) {
-      const axisHq = this.map.hqs?.enemy_1 || { x: 8450, y: 4280 };
-      this.camera.x = axisHq.x - 450;
-      this.camera.y = axisHq.y + 120;
+    // Câmera inicial focada no QG do jogador local
+    const myHqFocus = this.map.hqs?.[this.localPlayerFaction || 'player'];
+    if (myHqFocus) {
+      this.camera.x = clamp(myHqFocus.x, 420, BATTLEFIELD_SIZE - 420);
+      this.camera.y = clamp(myHqFocus.y, 420, BATTLEFIELD_SIZE - 420);
     }
 
     // Assina ordens remotas e heartbeat de estado (a cada 1.5s)
@@ -646,10 +657,13 @@ export class Game {
   }
 
   _handleRemoteCommand(cmd) {
-    if (!cmd || cmd.slot === this.localSlot) return;
+    if (!cmd) return;
+    const effectiveSlot = cmd.overrideSlot || cmd.slot;
+    if (effectiveSlot === this.localSlot && !cmd.overrideSlot) return;
     const slotFactionMap = { 1: 'player', 2: 'enemy_1', 3: 'ally_ai', 4: 'enemy_2' };
-    const remoteFaction = slotFactionMap[cmd.slot] || 'enemy_1';
+    const remoteFaction = slotFactionMap[effectiveSlot] || 'enemy_1';
     if (remoteFaction === this.myFaction) return;
+    const remoteTeam = remoteFaction === 'player' || remoteFaction === 'ally_ai' ? 'allies' : 'enemies';
     const matchingUnits = Array.isArray(cmd.unitIds)
       ? this.units.filter((u) => u.alive && u.faction === remoteFaction && cmd.unitIds.includes(u.id))
       : this.units.filter((u) => u.alive && u.faction === remoteFaction).slice(0, 2);
@@ -672,7 +686,39 @@ export class Game {
       }
     } else if (cmd.type === 'produce' && cmd.unitType) {
       const hq = this.map?.hqs?.[remoteFaction];
-      if (hq) this.spawnUnit(remoteFaction, cmd.unitType, hq.x - 140, hq.y + 80, Math.PI);
+      if (hq) {
+        const offX = remoteTeam === 'enemies' ? -140 : 140;
+        const u = this.spawnUnit(remoteFaction, cmd.unitType, hq.x + offX, hq.y + 80, remoteTeam === 'enemies' ? Math.PI : 0);
+        if (u && typeof cmd.targetX === 'number' && typeof cmd.targetY === 'number') {
+          u.setMoveOrder(cmd.targetX, cmd.targetY);
+        }
+      }
+    } else if (cmd.type === 'build_base' && cmd.buildingId) {
+      const spec = BASE_BUILDING_BY_ID[cmd.buildingId];
+      if (spec) {
+        this.baseBuildings.push({
+          id: `${remoteFaction}_base_${cmd.buildingId}_${Date.now()}`,
+          buildingType: cmd.buildingId,
+          name: spec.name,
+          short: spec.short,
+          subtitle: spec.subtitle,
+          team: remoteTeam,
+          faction: remoteFaction,
+          x: cmd.x,
+          y: cmd.y,
+          sightRadius: spec.sightRadius || 620,
+          hp: spec.maxHp || 1500,
+          maxHp: spec.maxHp || 1500,
+          radius: spec.radius || 84,
+          rallyX: cmd.x + (remoteTeam === 'enemies' ? -560 : 560),
+          rallyY: cmd.y,
+          produces: [...(spec.produces || [])],
+          productionQueue: [],
+          productionProgress: 0,
+          alive: true,
+        });
+        this.map.syncAllColliders?.(this.baseBuildings);
+      }
     }
   }
 
@@ -693,8 +739,11 @@ export class Game {
         if (lu) {
           lu.hp = ru.hp;
           if (!lu.selected) {
-            lu.x = lu.x + (ru.x - lu.x) * 0.35;
-            lu.y = lu.y + (ru.y - lu.y) * 0.35;
+            lu.networkTargetPos = {
+              x: ru.x,
+              z: ru.y,
+              rotY: typeof ru.angle === 'number' ? ru.angle : lu.angle,
+            };
           }
         }
       }
@@ -760,8 +809,10 @@ export class Game {
     mode = '1v1',
     startingResources = this.startingResourcesPreset,
     mapId = this.mapId,
-    aiDifficulty = this.aiDifficulty
+    aiDifficulty = this.aiDifficulty,
+    options = {}
   ) {
+    const isOnline = Boolean(options?.isOnline);
     this.gameMode = mode === '2v2' ? '2v2' : '1v1';
     if (aiDifficulty === 'easy' || aiDifficulty === 'medium' || aiDifficulty === 'hard') {
       this.aiDifficulty = aiDifficulty;
@@ -888,107 +939,120 @@ export class Game {
     this.camera.y = 4800;
     this.camera.zoom = 660;
 
-    // 1. Trincheiras Escavadas Iniciais em Zig-Zag (Baioneta) nas laterais das estradas (NUNCA sobre a pista)
-    this.trenches.push(
-      new TrenchSegment({
-        points: [
-          { x: 3500, y: 4260 },
-          { x: 3545, y: 4380 },
-          { x: 3495, y: 4490 },
-        ],
-        team: 'allies',
-        revealed: true,
-      }),
-      new TrenchSegment({
-        points: [
-          { x: 3520, y: 5060 },
-          { x: 3570, y: 5180 },
-          { x: 3520, y: 5300 },
-        ],
-        team: 'allies',
-        revealed: true,
-      }),
-      new TrenchSegment({
-        points: [
-          { x: 6040, y: 4260 },
-          { x: 6090, y: 4380 },
-          { x: 6040, y: 4500 },
-          { x: 6180, y: 4500 },
-        ],
-        team: 'enemies',
-        isLShape: true,
-        revealed: false,
-      }),
-      new TrenchSegment({
-        points: [
-          { x: 6060, y: 2020 },
-          { x: 6100, y: 2160 },
-          { x: 6060, y: 2300 },
-        ],
-        team: 'enemies',
-        revealed: false,
-      }),
-      new TrenchSegment({
-        points: [
-          { x: 6060, y: 7260 },
-          { x: 6100, y: 7400 },
-          { x: 6060, y: 7540 },
-        ],
-        team: 'enemies',
-        revealed: false,
-      })
-    );
-    if (Array.isArray(this.map.customTrenches)) {
-      for (const ct of this.map.customTrenches) {
-        if (Array.isArray(ct.points) && ct.points.length >= 2) {
-          this.trenches.push(
-            new TrenchSegment({
-              points: ct.points,
-              team: 'allies',
-              revealed: true,
-              openStart: Boolean(ct.openStart),
-              openEnd: Boolean(ct.openEnd),
-            })
-          );
-        }
-      }
-    }
-
-    // 2. Barricadas Iniciais de Dentes de Dragão e Arame Farpado (fora das trincheiras)
-    this.barricades.push(
-      new BarricadeLine({ x1: 3860, y1: 4680, x2: 3860, y2: 4820, team: 'allies' }),
-      new BarricadeLine({ x1: 5760, y1: 4920, x2: 5760, y2: 5060, team: 'enemies' })
-    );
-
-    this.barbedWires.push(
-      new BarbedWireLine({ x1: 3720, y1: 4280, x2: 3720, y2: 4460, team: 'allies' }),
-      new BarbedWireLine({ x1: 5880, y1: 4280, x2: 5880, y2: 4480, team: 'enemies' })
-    );
-
-    // 3. Campos Minados Ocultos do Inimigo (invisíveis na Névoa de Guerra até batedor/drone/interrogatório)
-    const enemyMineSpots = [
-      { x: 5520, y: 4680 },
-      { x: 5560, y: 4780 },
-      { x: 5520, y: 4900 },
-      { x: 5640, y: 2080 },
-      { x: 5680, y: 2180 },
-      { x: 5640, y: 7340 },
-      { x: 5680, y: 7440 },
-    ];
-    for (const mp of enemyMineSpots) {
-      this.mines.push(
-        new Landmine({
-          x: mp.x,
-          y: mp.y,
+    // 1. Trincheiras, Barricadas e Minas Iniciais (apenas fora do modo Online limpo)
+    if (!isOnline) {
+      this.trenches.push(
+        new TrenchSegment({
+          points: [
+            { x: 3500, y: 4260 },
+            { x: 3545, y: 4380 },
+            { x: 3495, y: 4490 },
+          ],
+          team: 'allies',
+          revealed: true,
+        }),
+        new TrenchSegment({
+          points: [
+            { x: 3520, y: 5060 },
+            { x: 3570, y: 5180 },
+            { x: 3520, y: 5300 },
+          ],
+          team: 'allies',
+          revealed: true,
+        }),
+        new TrenchSegment({
+          points: [
+            { x: 6040, y: 4260 },
+            { x: 6090, y: 4380 },
+            { x: 6040, y: 4500 },
+            { x: 6180, y: 4500 },
+          ],
           team: 'enemies',
-          faction: 'enemy_1',
+          isLShape: true,
+          revealed: false,
+        }),
+        new TrenchSegment({
+          points: [
+            { x: 6060, y: 2020 },
+            { x: 6100, y: 2160 },
+            { x: 6060, y: 2300 },
+          ],
+          team: 'enemies',
+          revealed: false,
+        }),
+        new TrenchSegment({
+          points: [
+            { x: 6060, y: 7260 },
+            { x: 6100, y: 7400 },
+            { x: 6060, y: 7540 },
+          ],
+          team: 'enemies',
           revealed: false,
         })
       );
+      if (Array.isArray(this.map.customTrenches)) {
+        for (const ct of this.map.customTrenches) {
+          if (Array.isArray(ct.points) && ct.points.length >= 2) {
+            this.trenches.push(
+              new TrenchSegment({
+                points: ct.points,
+                team: 'allies',
+                revealed: true,
+                openStart: Boolean(ct.openStart),
+                openEnd: Boolean(ct.openEnd),
+              })
+            );
+          }
+        }
+      }
+
+      // 2. Barricadas Iniciais de Dentes de Dragão e Arame Farpado (fora das trincheiras)
+      this.barricades.push(
+        new BarricadeLine({ x1: 3860, y1: 4680, x2: 3860, y2: 4820, team: 'allies' }),
+        new BarricadeLine({ x1: 5760, y1: 4920, x2: 5760, y2: 5060, team: 'enemies' })
+      );
+
+      this.barbedWires.push(
+        new BarbedWireLine({ x1: 3720, y1: 4280, x2: 3720, y2: 4460, team: 'allies' }),
+        new BarbedWireLine({ x1: 5880, y1: 4280, x2: 5880, y2: 4480, team: 'enemies' })
+      );
+
+      // 3. Campos Minados Ocultos do Inimigo (invisíveis na Névoa de Guerra até batedor/drone/interrogatório)
+      const enemyMineSpots = [
+        { x: 5520, y: 4680 },
+        { x: 5560, y: 4780 },
+        { x: 5520, y: 4900 },
+        { x: 5640, y: 2080 },
+        { x: 5680, y: 2180 },
+        { x: 5640, y: 7340 },
+        { x: 5680, y: 7440 },
+      ];
+      for (const mp of enemyMineSpots) {
+        this.mines.push(
+          new Landmine({
+            x: mp.x,
+            y: mp.y,
+            team: 'enemies',
+            faction: 'enemy_1',
+            revealed: false,
+          })
+        );
+      }
     }
 
     // 4. Estruturas de Base Militar 3D (Interativas, Selecionáveis e Destrutíveis com HP e Ponto de Encontro)
     const playerHqPos = this.map.hqs.player;
+    const centerPos = BATTLEFIELD_SIZE * 0.5;
+    const rallyOffset = (pos, distOff = 440) => {
+      const dx = centerPos - pos.x;
+      const dy = centerPos - pos.y;
+      const len = Math.hypot(dx, dy) || 1;
+      return {
+        x: clamp(pos.x + (dx / len) * distOff, 320, BATTLEFIELD_SIZE - 320),
+        y: clamp(pos.y + (dy / len) * distOff, 320, BATTLEFIELD_SIZE - 320),
+      };
+    };
+    const pRally = rallyOffset(playerHqPos, 480);
     this.baseBuildings.push({
       id: 'ally_main_hq',
       buildingType: 'hq_command',
@@ -1003,8 +1067,8 @@ export class Game {
       hp: HQ_BUILDING_SPEC.maxHp,
       maxHp: HQ_BUILDING_SPEC.maxHp,
       radius: HQ_BUILDING_SPEC.radius,
-      rallyX: playerHqPos.x + 560,
-      rallyY: playerHqPos.y,
+      rallyX: pRally.x,
+      rallyY: pRally.y,
       produces: [...HQ_BUILDING_SPEC.produces],
       productionQueue: [],
       productionProgress: 0,
@@ -1013,6 +1077,7 @@ export class Game {
     });
 
     const enemy1HqPos = this.map.hqs.enemy_1;
+    const e1Rally = rallyOffset(enemy1HqPos, 480);
     this.baseBuildings.push({
       id: 'enemy_1_main_hq',
       buildingType: 'hq_command',
@@ -1027,8 +1092,8 @@ export class Game {
       hp: HQ_BUILDING_SPEC.maxHp,
       maxHp: HQ_BUILDING_SPEC.maxHp,
       radius: HQ_BUILDING_SPEC.radius,
-      rallyX: enemy1HqPos.x - 560,
-      rallyY: enemy1HqPos.y,
+      rallyX: e1Rally.x,
+      rallyY: e1Rally.y,
       produces: [...HQ_BUILDING_SPEC.produces],
       productionQueue: [],
       productionProgress: 0,
@@ -1036,79 +1101,83 @@ export class Game {
       alive: true,
     });
 
-    const specOpsSpec = BASE_BUILDING_BY_ID.spec_ops_center;
-    const motorPoolSpec = BASE_BUILDING_BY_ID.motor_pool;
+    if (!isOnline) {
+      const specOpsSpec = BASE_BUILDING_BY_ID.spec_ops_center;
+      const motorPoolSpec = BASE_BUILDING_BY_ID.motor_pool;
 
-    this.baseBuildings.push({
-      id: 'enemy_base_spec_ops',
-      buildingType: 'spec_ops_center',
-      name: 'Quartel de Op. Especiais Inimigo',
-      short: 'Quartel Inimigo',
-      subtitle: specOpsSpec.subtitle,
-      team: 'enemies',
-      faction: 'enemy_1',
-      x: 8220,
-      y: 4460,
-      sightRadius: 520,
-      hp: specOpsSpec.maxHp || 1450,
-      maxHp: specOpsSpec.maxHp || 1450,
-      radius: specOpsSpec.radius || 82,
-      rallyX: 7780,
-      rallyY: 4460,
-      produces: [...(specOpsSpec.produces || [])],
-      productionQueue: [],
-      productionProgress: 0,
-      alive: true,
-    });
-    this.baseBuildings.push({
-      id: 'enemy_base_motor_pool',
-      buildingType: 'motor_pool',
-      name: 'Arsenal Blindado Inimigo',
-      short: 'Fábrica Inimiga',
-      subtitle: motorPoolSpec.subtitle,
-      team: 'enemies',
-      faction: 'enemy_1',
-      x: 8220,
-      y: 5140,
-      sightRadius: 520,
-      hp: motorPoolSpec.maxHp || 1700,
-      maxHp: motorPoolSpec.maxHp || 1700,
-      radius: motorPoolSpec.radius || 88,
-      rallyX: 7780,
-      rallyY: 5140,
-      produces: [...(motorPoolSpec.produces || [])],
-      productionQueue: [],
-      productionProgress: 0,
-      alive: true,
-    });
+      this.baseBuildings.push({
+        id: 'enemy_base_spec_ops',
+        buildingType: 'spec_ops_center',
+        name: 'Quartel de Op. Especiais Inimigo',
+        short: 'Quartel Inimigo',
+        subtitle: specOpsSpec.subtitle,
+        team: 'enemies',
+        faction: 'enemy_1',
+        x: 8220,
+        y: 4460,
+        sightRadius: 520,
+        hp: specOpsSpec.maxHp || 1450,
+        maxHp: specOpsSpec.maxHp || 1450,
+        radius: specOpsSpec.radius || 82,
+        rallyX: 7780,
+        rallyY: 4460,
+        produces: [...(specOpsSpec.produces || [])],
+        productionQueue: [],
+        productionProgress: 0,
+        alive: true,
+      });
+      this.baseBuildings.push({
+        id: 'enemy_base_motor_pool',
+        buildingType: 'motor_pool',
+        name: 'Arsenal Blindado Inimigo',
+        short: 'Fábrica Inimiga',
+        subtitle: motorPoolSpec.subtitle,
+        team: 'enemies',
+        faction: 'enemy_1',
+        x: 8220,
+        y: 5140,
+        sightRadius: 520,
+        hp: motorPoolSpec.maxHp || 1700,
+        maxHp: motorPoolSpec.maxHp || 1700,
+        radius: motorPoolSpec.radius || 88,
+        rallyX: 7780,
+        rallyY: 5140,
+        produces: [...(motorPoolSpec.produces || [])],
+        productionQueue: [],
+        productionProgress: 0,
+        alive: true,
+      });
 
-    // Guaritas Blindadas (Watchtowers) protegendo a entrada da base inimiga
-    this.spawnUnit('enemy_1', 'watchtower_emplacement', 7820, 4560, Math.PI);
-    this.spawnUnit('enemy_1', 'watchtower_emplacement', 7820, 5040, Math.PI);
+      // Guaritas Blindadas (Watchtowers) protegendo a entrada da base inimiga
+      this.spawnUnit('enemy_1', 'watchtower_emplacement', 7820, 4560, Math.PI);
+      this.spawnUnit('enemy_1', 'watchtower_emplacement', 7820, 5040, Math.PI);
 
-    // 5. Tropas Iniciais do Jogador (1ª Divisão Aliada)
-    const p1 = this.spawnUnit('player', 'rifle_squad', 3540, 4760, 0);
-    p1.inTrench = true;
-    p1.inTrenchId = this.trenches[0].id;
+      // 5. Tropas Iniciais do Jogador (1ª Divisão Aliada)
+      const p1 = this.spawnUnit('player', 'rifle_squad', 3540, 4760, 0);
+      p1.inTrench = true;
+      p1.inTrenchId = this.trenches[0].id;
 
-    const p2 = this.spawnUnit('player', 'assault_squad', 2160, 4820, 0);
-    const p3 = this.spawnUnit('player', 'humvee', 1840, 4980, 0);
-    p1.selected = true;
-    p2.selected = true;
+      const p2 = this.spawnUnit('player', 'assault_squad', 2160, 4820, 0);
+      const p3 = this.spawnUnit('player', 'humvee', 1840, 4980, 0);
+      p1.selected = true;
+      p2.selected = true;
 
-    // 6. Tropas Iniciais do Exército Inimigo 1 (ocultas na Névoa de Guerra)
-    const e1 = this.spawnUnit('enemy_1', 'rifle_squad', 6060, 4720, Math.PI);
-    e1.inTrench = true;
-    e1.inTrenchId = this.trenches[2].id;
-    this.spawnUnit('enemy_1', 'assault_squad', 6840, 4860, Math.PI);
-    this.spawnUnit('enemy_1', 'humvee', 7260, 4640, Math.PI);
-    this.spawnUnit('enemy_1', 'command_officer', 6580, 4520, Math.PI);
+      // 6. Tropas Iniciais do Exército Inimigo 1 (ocultas na Névoa de Guerra)
+      const e1 = this.spawnUnit('enemy_1', 'rifle_squad', 6060, 4720, Math.PI);
+      e1.inTrench = true;
+      e1.inTrenchId = this.trenches[2].id;
+      this.spawnUnit('enemy_1', 'assault_squad', 6840, 4860, Math.PI);
+      this.spawnUnit('enemy_1', 'humvee', 7260, 4640, Math.PI);
+      this.spawnUnit('enemy_1', 'command_officer', 6580, 4520, Math.PI);
+    }
     this.map.syncAllColliders?.(this.baseBuildings);
 
     // 7. Modo 2 vs 2: Adiciona IA Aliada + 2º Exército Inimigo + QGs secundários
     if (this.gameMode === '2v2') {
       const allyAiHqPos = this.map.hqs.ally_ai;
       const enemy2HqPos = this.map.hqs.enemy_2;
+      const aRally = rallyOffset(allyAiHqPos, 460);
+      const e2Rally = rallyOffset(enemy2HqPos, 460);
       this.baseBuildings.push(
         {
           id: 'ally_ai_main_hq',
@@ -1124,8 +1193,8 @@ export class Game {
           hp: 2600,
           maxHp: 2600,
           radius: 120,
-          rallyX: allyAiHqPos.x + 500,
-          rallyY: allyAiHqPos.y,
+          rallyX: aRally.x,
+          rallyY: aRally.y,
           produces: [...HQ_BUILDING_SPEC.produces],
           productionQueue: [],
           productionProgress: 0,
@@ -1146,8 +1215,8 @@ export class Game {
           hp: 2600,
           maxHp: 2600,
           radius: 120,
-          rallyX: enemy2HqPos.x - 500,
-          rallyY: enemy2HqPos.y,
+          rallyX: e2Rally.x,
+          rallyY: e2Rally.y,
           produces: [...HQ_BUILDING_SPEC.produces],
           productionQueue: [],
           productionProgress: 0,
@@ -1156,18 +1225,20 @@ export class Game {
         }
       );
 
-      const a1 = this.spawnUnit('ally_ai', 'rifle_squad', 1850, 7320, 0);
-      const a2 = this.spawnUnit('ally_ai', 'assault_squad', 1960, 7480, 0);
-      const a3 = this.spawnUnit('ally_ai', 'humvee', 1650, 7400, 0);
-      a1.setMoveOrder(3600, 7400);
-      a2.setMoveOrder(3720, 7520);
-      a3.setMoveOrder(3440, 7320);
+      if (!isOnline) {
+        const a1 = this.spawnUnit('ally_ai', 'rifle_squad', 1850, 7320, 0);
+        const a2 = this.spawnUnit('ally_ai', 'assault_squad', 1960, 7480, 0);
+        const a3 = this.spawnUnit('ally_ai', 'humvee', 1650, 7400, 0);
+        a1.setMoveOrder(3600, 7400);
+        a2.setMoveOrder(3720, 7520);
+        a3.setMoveOrder(3440, 7320);
 
-      const e2_1 = this.spawnUnit('enemy_2', 'rifle_squad', 6060, 2140, Math.PI);
-      e2_1.inTrench = true;
-      e2_1.inTrenchId = this.trenches[3].id;
-      this.spawnUnit('enemy_2', 'assault_squad', 6920, 2220, Math.PI);
-      this.spawnUnit('enemy_2', 'humvee', 7360, 2400, Math.PI);
+        const e2_1 = this.spawnUnit('enemy_2', 'rifle_squad', 6060, 2140, Math.PI);
+        e2_1.inTrench = true;
+        e2_1.inTrenchId = this.trenches[3].id;
+        this.spawnUnit('enemy_2', 'assault_squad', 6920, 2220, Math.PI);
+        this.spawnUnit('enemy_2', 'humvee', 7360, 2400, Math.PI);
+      }
     }
 
     // Atualiza Névoa de Guerra e Linha de Frente inicial
@@ -1637,6 +1708,9 @@ export class Game {
     };
 
     this.baseBuildings.push(newBld);
+    if (this.isMultiplayer && this.networkManager) {
+      this.networkManager.sendCommand({ type: 'build_base', buildingId, x: bx, y: by });
+    }
     this.map.clearFoliageAndFlattenUnderBuilding?.(bx, by, myRad + 35);
     this.map.syncAllColliders?.(this.baseBuildings);
     this.selectedBuildingId = newBld.id;
@@ -6577,7 +6651,8 @@ export class Game {
       this.map.updateFogOfWar(
         this.units,
         this.baseBuildings.filter((b) => b.alive !== false),
-        simDt
+        simDt,
+        this.localPlayerTeam || 'allies'
       );
       this.map.updateFrontline(this.units, simDt);
       this._updateParticlesAndTexts(simDt);
@@ -6591,11 +6666,11 @@ export class Game {
         }
       }
 
-      // Heartbeat de Estado Multiplayer (a cada 1.5s pelo Host)
+      // Heartbeat de Estado Multiplayer (suave a cada 0.25s pelo Host)
       if (this.isMultiplayer && this.localSlot === 1 && this.networkManager) {
         this.mpHeartbeatTimer = (this.mpHeartbeatTimer || 0) - simDt;
         if (this.mpHeartbeatTimer <= 0) {
-          this.mpHeartbeatTimer = 1.5;
+          this.mpHeartbeatTimer = 0.25;
           this.networkManager.sendStateHeartbeat({
             sectors: this.map.sectors.map((s) => ({
               id: s.id,
@@ -6604,12 +6679,13 @@ export class Game {
             })),
             units: this.units
               .filter((u) => u.alive)
-              .slice(0, 40)
+              .slice(0, 80)
               .map((u) => ({
                 id: u.id,
                 hp: Math.round(u.hp),
                 x: Math.round(u.x),
                 y: Math.round(u.y),
+                angle: Number((u.angle || 0).toFixed(3)),
               })),
             powCount: this.powPrisoners?.length || 0,
           });
@@ -7010,14 +7086,16 @@ export class Game {
 
   // IA Inimiga e Aliada com 3 Níveis de Dificuldade (Fácil/Recruta, Médio/Veterano, Difícil/General)
   _updateAICommanders(dt) {
-    if (this.sandboxAiPaused || this.isMultiplayer) return;
+    if (this.sandboxAiPaused) return;
+    if (this.isMultiplayer && (this.localSlot !== 1 || !this.onlineBotFactions?.size)) return;
     this.aiWaveTimer -= dt;
     this.aiTacticalOrderTimer -= dt;
 
     const diff = this.spectatorMode ? 'hard' : this.aiDifficulty || 'medium';
     const fullAiAllies = Boolean(this.spectatorMode || this.menuActive);
-    const activeFactions =
-      this.gameMode === '2v2'
+    const activeFactions = this.isMultiplayer
+      ? Array.from(this.onlineBotFactions)
+      : this.gameMode === '2v2'
         ? fullAiAllies
           ? ['player', 'ally_ai', 'enemy_1', 'enemy_2']
           : ['ally_ai', 'enemy_1', 'enemy_2']
@@ -7268,6 +7346,31 @@ export class Game {
           continue;
         } else {
           u.embarkedInId = null;
+        }
+      }
+
+      // Interpolação suave de rede para unidades sincronizadas em clientes remotos
+      if (this.isMultiplayer && this.localSlot !== 1 && u.networkTargetPos && !u.selected) {
+        const lerpAlpha = Math.min(1, dt * 12);
+        const netPrevX = u.x;
+        const netPrevY = u.y;
+        u.x = netPrevX + (u.networkTargetPos.x - netPrevX) * lerpAlpha;
+        u.y = netPrevY + (u.networkTargetPos.z - netPrevY) * lerpAlpha;
+        const netMoveDist = Math.hypot(u.x - netPrevX, u.y - netPrevY);
+        if (netMoveDist > 0.05) {
+          u.walkPhase += dt * 7.8;
+          if (typeof u.networkTargetPos.rotY === 'number') {
+            let dAng = u.networkTargetPos.rotY - u.angle;
+            while (dAng > Math.PI) dAng -= Math.PI * 2;
+            while (dAng < -Math.PI) dAng += Math.PI * 2;
+            u.angle += dAng * Math.min(1, dt * 10);
+          }
+          u.vx = (u.x - netPrevX) / Math.max(dt, 0.001);
+          u.vy = (u.y - netPrevY) / Math.max(dt, 0.001);
+          if (u.spec.type === 'infantry') u.stepAutonomousSoldiers?.(dt);
+        } else {
+          u.vx = 0;
+          u.vy = 0;
         }
       }
 
@@ -7749,17 +7852,28 @@ export class Game {
           const prevStepX = u.x;
           const prevStepY = u.y;
 
-          // Calcula vetor de Steering e Desvio Suave ao redor de casas, muros, árvores e carcaças
-          const steered = this.map.computeSteeringVelocity(
-            u.x,
-            u.y,
-            activeDestX,
-            activeDestY,
-            spd,
-            u.radius,
-            ignoreBldId,
-            this.fortifiedWalls
-          );
+          // Calcula vetor de Steering e Desvio Suave (ou desvio tangencial anti-travamento)
+          let steered;
+          if ((u._tangentialDetourTimer || 0) > 0) {
+            u._tangentialDetourTimer = Math.max(0, u._tangentialDetourTimer - dt);
+            const tAng = Math.atan2(u._tangentialVy || 0, u._tangentialVx || 1);
+            steered = {
+              vx: (u._tangentialVx || 0) * spd,
+              vy: (u._tangentialVy || 0) * spd,
+              angle: tAng,
+            };
+          } else {
+            steered = this.map.computeSteeringVelocity(
+              u.x,
+              u.y,
+              activeDestX,
+              activeDestY,
+              spd,
+              u.radius,
+              ignoreBldId,
+              this.fortifiedWalls
+            );
+          }
 
           u.vx = Number.isFinite(steered.vx) ? steered.vx : 0;
           u.vy = Number.isFinite(steered.vy) ? steered.vy : 0;
@@ -7777,32 +7891,50 @@ export class Game {
           if (Number.isFinite(resolved.x)) u.x = clamp(resolved.x, 70, BATTLEFIELD_SIZE - 70);
           if (Number.isFinite(resolved.y)) u.y = clamp(resolved.y, 70, BATTLEFIELD_SIZE - 70);
 
-          // Auto-Destravamento: se a tropa ficar presa numa construção, recalcula a rota A* a partir da posição atual
+          // Anti-Stuck & Slide Tangencial: se tentar andar por >0.6s com deslocamento real <0.15m (1.5u), aplica desvio perpendicular
           u._repathCooldown = Math.max(0, (u._repathCooldown || 0) - dt);
-          const stepMoved = Math.hypot(u.x - prevStepX, u.y - prevStepY);
-          if (stepMoved < spd * dt * 0.3) {
-            u.wallStuckTimer = (u.wallStuckTimer || 0) + dt;
-          } else {
-            u.wallStuckTimer = Math.max(0, (u.wallStuckTimer || 0) - dt * 2);
+          u._stuckSampleTimer = (u._stuckSampleTimer || 0) + dt;
+          if (u._stuckOriginX === undefined) {
+            u._stuckOriginX = u.x;
+            u._stuckOriginY = u.y;
           }
-          if (u.wallStuckTimer > 0.8 && u._repathCooldown <= 0 && dFinal > 40) {
-            u.wallStuckTimer = 0;
-            u._repathCooldown = 1.6;
-            const repath = this.map.computeObstacleDetourPath(
-              u.x,
-              u.y,
-              finalDest.x,
-              finalDest.y,
-              u.radius || 24,
-              this.fortifiedWalls,
-              this.barricades
-            );
-            if (Array.isArray(repath) && repath.length >= 2) {
-              u.waypoints = repath
-                .slice(1)
-                .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
-                .map((p) => ({ x: p.x, y: p.y }));
+          if (u._stuckSampleTimer >= 0.6) {
+            const realDisp = Math.hypot(u.x - u._stuckOriginX, u.y - u._stuckOriginY);
+            if (realDisp < 1.5 && dFinal > 30) {
+              const dirLen = Math.hypot(activeDestX - u.x, activeDestY - u.y) || 1;
+              const nx = (activeDestX - u.x) / dirLen;
+              const ny = (activeDestY - u.y) / dirLen;
+              u._tangentialSign = (u._tangentialSign || (u.id % 2 === 0 ? 1 : -1)) * -1;
+              const sgn = u._tangentialSign;
+              const tx = -ny * sgn + nx * 0.22;
+              const ty = nx * sgn + ny * 0.22;
+              const tMag = Math.hypot(tx, ty) || 1;
+              u._tangentialVx = tx / tMag;
+              u._tangentialVy = ty / tMag;
+              u._tangentialDetourTimer = 0.85;
+
+              if (u._repathCooldown <= 0 && dFinal > 40) {
+                u._repathCooldown = 1.6;
+                const repath = this.map.computeObstacleDetourPath(
+                  u.x,
+                  u.y,
+                  finalDest.x,
+                  finalDest.y,
+                  u.radius || 24,
+                  this.fortifiedWalls,
+                  this.barricades
+                );
+                if (Array.isArray(repath) && repath.length >= 2) {
+                  u.waypoints = repath
+                    .slice(1)
+                    .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
+                    .map((p) => ({ x: p.x, y: p.y }));
+                }
+              }
             }
+            u._stuckSampleTimer = 0;
+            u._stuckOriginX = u.x;
+            u._stuckOriginY = u.y;
           }
 
           // Giro suave para veículos e infantaria (evita trepidação dos soldados em formação ao desviar)

@@ -106,23 +106,86 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
           </div>
 
           <div className="mp-slots-grid">
-            <div className="mp-slot-card ally">
-              <span className="mp-slot-tag">COMANDANTE 1 • ALIADOS (SUL/OESTE)</span>
-              <strong>{room.host?.name || 'Host'}</strong>
-              <small className="mp-ready-ok">✓ PRONTO {net.localSlot === 1 ? '(VOCÊ)' : ''}</small>
-            </div>
-
-            <div className="mp-slot-vs">VS</div>
-
-            <div className={`mp-slot-card axis ${room.guest ? 'filled' : ''}`}>
-              <span className="mp-slot-tag">COMANDANTE 2 • EIXO (NORTE/LESTE)</span>
-              <strong>{room.guest ? room.guest.name : 'Aguardando oponente...'}</strong>
-              <small className={room.guest ? 'mp-ready-ok' : 'mp-ready-wait'}>
-                {room.guest
-                  ? `✓ PRONTO ${net.localSlot === 2 ? '(VOCÊ)' : ''}`
-                  : '⏳ Sala visível na Lista de Salas Abertas'}
-              </small>
-            </div>
+            {(room.mode === '2v2' ? [1, 3, 2, 4] : [1, 2]).map((slotNum) => {
+              const isAlly = slotNum === 1 || slotNum === 3;
+              const humanUid = room.slots?.[slotNum];
+              const bot = room.bots?.[slotNum];
+              const label =
+                slotNum === 1
+                  ? 'COMANDANTE 1 • ALIADOS (SUL/OESTE)'
+                  : slotNum === 3
+                  ? 'COMANDANTE 3 • ALIADOS (SUPORTE)'
+                  : slotNum === 2
+                  ? 'COMANDANTE 2 • EIXO (NORTE/LESTE)'
+                  : 'COMANDANTE 4 • EIXO (SUPORTE)';
+              const displayName =
+                slotNum === 1
+                  ? room.host?.name || 'Host'
+                  : humanUid
+                  ? slotNum === 2 && room.guest?.uid === humanUid
+                    ? room.guest.name
+                    : `Comandante #${slotNum}`
+                  : bot
+                  ? bot.name
+                  : 'Vaga Aberta...';
+              return (
+                <div
+                  key={slotNum}
+                  className={`mp-slot-card ${isAlly ? 'ally' : 'axis'} ${humanUid || bot ? 'filled' : ''}`}
+                >
+                  <span className="mp-slot-tag">{label}</span>
+                  <strong>{displayName}</strong>
+                  <small className={humanUid || bot ? 'mp-ready-ok' : 'mp-ready-wait'}>
+                    {humanUid
+                      ? `✓ PRONTO ${net.localSlot === slotNum ? '(VOCÊ)' : ''}`
+                      : bot
+                      ? '🤖 BOT IA ATIVO'
+                      : '⏳ Aguardando jogador ou Bot IA'}
+                  </small>
+                  {net.localSlot === 1 && !humanUid && slotNum !== 1 && (
+                    <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {!bot ? (
+                        <button
+                          type="button"
+                          className="mil-pill"
+                          onClick={() => networkManager.setRoomBot(slotNum, true, 'medium')}
+                        >
+                          + Adicionar Comandante IA
+                        </button>
+                      ) : (
+                        <>
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                            {[
+                              { id: 'easy', label: 'Fácil' },
+                              { id: 'medium', label: 'Normal' },
+                              { id: 'hard', label: 'Difícil' },
+                            ].map((d) => (
+                              <button
+                                key={d.id}
+                                type="button"
+                                className={`mil-pill ${(bot.difficulty || 'medium') === d.id ? 'active' : ''}`}
+                                style={{ padding: '2px 7px', fontSize: '0.72rem' }}
+                                onClick={() => networkManager.setRoomBot(slotNum, true, d.id)}
+                              >
+                                {d.label}
+                              </button>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            className="mil-pill"
+                            style={{ borderColor: 'rgba(239,68,68,0.45)', color: '#fca5a5' }}
+                            onClick={() => networkManager.setRoomBot(slotNum, false)}
+                          >
+                            ✕ Remover
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <div className="mp-form-row">

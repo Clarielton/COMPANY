@@ -1309,6 +1309,7 @@ export class NetworkManager {
       host: { uid: this.uid, name: this.commanderName, ready: true },
       guest: null,
       slots: { 1: this.uid },
+      bots: {},
     };
 
     this.roomId = roomId;
@@ -1395,8 +1396,11 @@ export class NetworkManager {
         targetRoom.guest = { uid: this.uid, name: this.commanderName, ready: true };
       }
     }
+    const bots = { ...(targetRoom.bots || {}) };
+    if (assignedSlot && bots[assignedSlot]) delete bots[assignedSlot];
     targetRoom.slots = slots;
-    targetRoom.playersCount = Math.min(maxPlayers, Object.keys(slots).length);
+    targetRoom.bots = bots;
+    targetRoom.playersCount = Math.min(maxPlayers, Object.keys(slots).length + Object.keys(bots).length);
 
     this.roomId = roomId;
     this.room = targetRoom;
@@ -1438,6 +1442,40 @@ export class NetworkManager {
       startingResources,
     });
     return { ok: true, room: created, createdNew: true };
+  }
+
+  async setRoomBot(slot, enabled, difficulty = 'medium') {
+    if (!this.room || this.localSlot !== 1) return false;
+    const maxPlayers = this.room.mode === '2v2' ? 4 : 2;
+    if (slot < 2 || slot > maxPlayers) return false;
+    const slots = { ...(this.room.slots || {}) };
+    const bots = { ...(this.room.bots || {}) };
+    if (enabled) {
+      if (slots[slot]) return false;
+      const isAlly = slot === 3;
+      bots[slot] = {
+        slot,
+        name: isAlly ? 'Bot IA (Aliado)' : `Bot IA (Eixo ${slot === 4 ? '2' : '1'})`,
+        team: isAlly ? 'allies' : 'enemies',
+        difficulty,
+      };
+    } else {
+      delete bots[slot];
+    }
+    this.room.bots = bots;
+    this.room.playersCount = Math.min(maxPlayers, Object.keys(slots).length + Object.keys(bots).length);
+    this._saveLocalRoom(this.room);
+    if (this.isOnline && this.hasFirebaseConfig()) {
+      try {
+        await this._rtdbPut(`rooms/${this.roomId}`, this.room);
+      } catch {
+        // noop
+      }
+    }
+    this._postBroadcast({ kind: 'room_sync', room: this.room });
+    this._postBroadcast({ kind: 'rooms_updated' });
+    this._emit();
+    return true;
   }
 
   async updateRoomMap(mapId) {

@@ -4890,7 +4890,7 @@ export class Renderer3D {
     this._updateFrontlineVisuals(game.map);
 
     if (this.fogMesh) {
-      this.fogMesh.visible = !game.menuActive && !game.mapEditorOpen;
+      this.fogMesh.visible = !game.menuActive && !game.mapEditorOpen && !game.spectatorMode;
     }
     this.fogSyncTimer -= dt;
     if (this.fogSyncTimer <= 0) {
@@ -5038,8 +5038,10 @@ export class Renderer3D {
       }
       const c = tr.getCenter();
       tm.visible =
-        tr.team === 'allies' ||
+        tr.team === (game.localPlayerTeam || 'allies') ||
         tr.revealed ||
+        game.intelRevealed ||
+        game.spectatorMode ||
         game.map.isPositionVisibleToAllies(c.x, c.y);
     }
     for (const [id, mesh] of this.trenchMeshes.entries()) {
@@ -6084,10 +6086,14 @@ export class Renderer3D {
     }
 
     // 7. Indicadores Discretos de Construções Ocupáveis (Guarnição)
+    const localTeam = game.localPlayerTeam || 'allies';
     for (const st of game.map.structures) {
       if (!st.garrisonable || game.map.getFogStateAt(st.x, st.y) === 0) continue;
-      const vis = game.map.isPositionVisibleToAllies(st.x, st.y);
-      const occupiedBy = st.garrisonTeam === 'allies' || vis ? st.garrisonTeam : null;
+      const vis =
+        game.intelRevealed ||
+        game.spectatorMode ||
+        game.map.isPositionVisibleToAllies(st.x, st.y);
+      const occupiedBy = st.garrisonTeam === localTeam || vis ? st.garrisonTeam : null;
       if (!occupiedBy) continue; // Mostra badge apenas quando ocupada para não poluir o mapa!
 
       const sc = this.worldToScreen(st.x, st.y, st.h + 14);

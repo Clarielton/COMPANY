@@ -70,13 +70,16 @@ export default function Minimap({ gameRef, expanded = false }) {
         ctx.stroke();
       }
 
+      const myTeam = game.localPlayerTeam || 'allies';
+      const myFaction = game.localPlayerFaction || 'player';
+
       // 3. Construções Rurais / Vilarejos / Casas / Igrejas
       for (const st of map.structures || []) {
         const fogState = map.getFogStateAtWorld(st.x, st.y);
         ctx.fillStyle =
-          st.garrisonTeam === 'allies'
+          st.garrisonTeam === myTeam
             ? '#7faed9'
-            : st.garrisonTeam === 'enemies' && fogState === 2
+            : st.garrisonTeam && st.garrisonTeam !== myTeam && fogState === 2
             ? '#d9534f'
             : '#8a795d';
         const sw = Math.max(expanded ? 6 : 3.5, st.w * scale);
@@ -107,19 +110,21 @@ export default function Minimap({ gameRef, expanded = false }) {
       }
       ctx.stroke();
 
-      // 5. Camada de Névoa de Guerra Real (passo 2x2 para rodar a 60 FPS fluidos)
-      const cellPx = size / FOG_GRID_SIZE;
-      const g = map.fogGrid;
-      for (let gy = 0; gy < FOG_GRID_SIZE; gy += 2) {
-        const rowOff = gy * FOG_GRID_SIZE;
-        for (let gx = 0; gx < FOG_GRID_SIZE; gx += 2) {
-          const st = g[rowOff + gx];
-          if (st === 0) {
-            ctx.fillStyle = 'rgba(10, 14, 10, 0.56)';
-            ctx.fillRect(gx * cellPx, gy * cellPx, cellPx * 2 + 0.6, cellPx * 2 + 0.6);
-          } else if (st === 1) {
-            ctx.fillStyle = 'rgba(16, 20, 14, 0.28)';
-            ctx.fillRect(gx * cellPx, gy * cellPx, cellPx * 2 + 0.6, cellPx * 2 + 0.6);
+      // 5. Camada de Névoa de Guerra Real (passo 2x2 para rodar a 60 FPS fluidos; oculta no Modo Espectador)
+      if (!game.spectatorMode && !game.intelRevealed) {
+        const cellPx = size / FOG_GRID_SIZE;
+        const g = map.fogGrid;
+        for (let gy = 0; gy < FOG_GRID_SIZE; gy += 2) {
+          const rowOff = gy * FOG_GRID_SIZE;
+          for (let gx = 0; gx < FOG_GRID_SIZE; gx += 2) {
+            const st = g[rowOff + gx];
+            if (st === 0) {
+              ctx.fillStyle = 'rgba(8, 12, 8, 0.80)';
+              ctx.fillRect(gx * cellPx, gy * cellPx, cellPx * 2 + 0.6, cellPx * 2 + 0.6);
+            } else if (st === 1) {
+              ctx.fillStyle = 'rgba(14, 18, 14, 0.40)';
+              ctx.fillRect(gx * cellPx, gy * cellPx, cellPx * 2 + 0.6, cellPx * 2 + 0.6);
+            }
           }
         }
       }
@@ -128,12 +133,12 @@ export default function Minimap({ gameRef, expanded = false }) {
       for (const tr of game.trenches) {
         const c = tr.getCenter();
         const isVis =
-          tr.team === 'allies' ||
+          tr.team === myTeam ||
           tr.revealed ||
           game.intelRevealed ||
           map.isPositionVisibleToAllies(c.x, c.y);
         if (!isVis) continue;
-        ctx.strokeStyle = tr.team === 'allies' ? '#a5c4d4' : '#e08276';
+        ctx.strokeStyle = tr.team === myTeam ? '#a5c4d4' : '#e08276';
         ctx.lineWidth = expanded ? 3.2 : 2.2;
         ctx.beginPath();
         tr.points.forEach((pt, idx) => {
@@ -156,14 +161,14 @@ export default function Minimap({ gameRef, expanded = false }) {
       for (const bld of game.baseBuildings || []) {
         if (bld.alive === false) continue;
         const isVis =
-          bld.team === 'allies' ||
+          bld.team === myTeam ||
           game.intelRevealed ||
           map.isPositionVisibleToAllies(bld.x, bld.y);
         if (!isVis) continue;
         const bx = bld.x * scale;
         const by = bld.y * scale;
         const bs = bld.isMainHQ ? (expanded ? 11 : 7) : expanded ? 8 : 5;
-        ctx.fillStyle = bld.team === 'allies' ? '#38bdf8' : '#ef4444';
+        ctx.fillStyle = bld.team === myTeam ? '#38bdf8' : '#ef4444';
         ctx.fillRect(bx - bs * 0.5, by - bs * 0.5, bs, bs);
         ctx.strokeStyle = game.selectedBuildingId === bld.id ? '#a3be8c' : '#141712';
         ctx.lineWidth = game.selectedBuildingId === bld.id ? 2 : 1;
@@ -172,7 +177,7 @@ export default function Minimap({ gameRef, expanded = false }) {
         if (expanded) {
           ctx.font = "700 9.5px 'Inter', sans-serif";
           ctx.textAlign = 'center';
-          ctx.fillStyle = bld.team === 'allies' ? '#bae6fd' : '#fecaca';
+          ctx.fillStyle = bld.team === myTeam ? '#bae6fd' : '#fecaca';
           ctx.fillText(bld.short || 'BASE', bx, by - bs * 0.5 - 3);
         }
       }
@@ -238,10 +243,10 @@ export default function Minimap({ gameRef, expanded = false }) {
         ctx.fillText(label, lx, ly + (expanded ? 3.2 : 2.8));
       }
 
-      // 8b. Linhas Tracejadas Animadas de Rota das Tropas Aliadas (cor por modo de ordem)
+      // 8b. Linhas Tracejadas Animadas de Rota das Tropas do Time Local
       const dashOffset = -(Date.now() * 0.025);
       for (const u of game.units) {
-        if (!u.alive || u.captured || u.team !== 'allies' || u.order.type === 'hold') continue;
+        if (!u.alive || u.captured || u.team !== myTeam || u.order.type === 'hold') continue;
         const mode = u.tacticalOrderMode || (u.order.type === 'attack' ? 'ASSAULT' : null);
         const lineCol =
           mode === 'DEFEND'
@@ -304,12 +309,12 @@ export default function Minimap({ gameRef, expanded = false }) {
         ctx.restore();
       }
 
-      // 9. Esquadrões e Veículos (com anel branco/dourado pulsante nos selecionados)
+      // 9. Esquadrões e Veículos (apenas time local ou inimigos visíveis na Névoa)
       const pulse = 0.55 + 0.45 * Math.sin(Date.now() * 0.008);
       for (const u of game.units) {
         if (!u.alive || u.captured) continue;
         const isVisible =
-          u.team === 'allies' ||
+          u.team === myTeam ||
           u.surrendered ||
           game.intelRevealed ||
           map.isPositionVisibleToAllies(u.x, u.y);
@@ -319,9 +324,9 @@ export default function Minimap({ gameRef, expanded = false }) {
         const uy = u.y * scale;
         ctx.fillStyle = u.surrendered
           ? '#ffffff'
-          : u.faction === 'player'
+          : u.faction === myFaction
           ? '#7faed9'
-          : u.faction === 'ally_ai'
+          : u.team === myTeam
           ? '#d4a338'
           : '#d9534f';
         ctx.beginPath();
@@ -442,10 +447,11 @@ export default function Minimap({ gameRef, expanded = false }) {
   };
 
   const findVisibleEnemyNear = (game, wx, wy, maxWorldDist) => {
+    const enemyTeam = (game.localPlayerTeam || 'allies') === 'enemies' ? 'allies' : 'enemies';
     let best = null;
     let bestDist = maxWorldDist;
     for (const u of game.units) {
-      if (!u.alive || u.team !== 'enemies' || u.surrendered) continue;
+      if (!u.alive || u.team !== enemyTeam || u.surrendered) continue;
       if (!game.intelRevealed && !game.map.isPositionVisibleToAllies(u.x, u.y)) continue;
       const d = Math.hypot(wx - u.x, wy - u.y);
       if (d <= bestDist) {
@@ -458,7 +464,7 @@ export default function Minimap({ gameRef, expanded = false }) {
 
   const isMobilePlayerUnit = (u) =>
     u.alive &&
-    u.faction === 'player' &&
+    u.faction === (gameRef.current?.localPlayerFaction || 'player') &&
     !u.embarkedInId &&
     (u.spec?.speed || 0) > 0 &&
     !u.spec?.isStructure &&

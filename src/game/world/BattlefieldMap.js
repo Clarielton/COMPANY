@@ -2011,18 +2011,25 @@ export class BattlefieldMap {
     }
     this.tempVisionZones = this.tempVisionZones.filter((z) => z.timer > 0);
 
-    // 3. Visão dos QGs pertencentes ao time do jogador local ('allies' ou 'enemies')
-    for (const [key, hq] of Object.entries(this.hqs || {})) {
-      if (hq && hq.team === visionTeam) {
-        const hqRadius = key === 'player' || key === 'enemy_1' ? 1250 : 980;
-        this._revealCircle(hq.x, hq.y, hqRadius);
+    // 3. Visão dos Prédios da Base Construídos do time local (QG: ~36m/720u, Radar: 65m/1050u)
+    let hasTeamHQBuilding = false;
+    for (const b of baseBuildings) {
+      if (b.alive === false) continue;
+      if (b.team === visionTeam) {
+        if (b.isMainHQ || b.buildingType === 'hq_command') hasTeamHQBuilding = true;
+        const bSight = b.isMainHQ || b.buildingType === 'hq_command'
+          ? Math.min(b.sightRadius || 720, 720)
+          : (b.sightRadius || 560);
+        this._revealCircle(b.x, b.y, bSight);
       }
     }
 
-    // 4. Visão dos Prédios da Base Construídos do time local
-    for (const b of baseBuildings) {
-      if (b.team === visionTeam) {
-        this._revealCircle(b.x, b.y, b.sightRadius || 560);
+    // Fallback de visão de QG caso ainda não existam prédios instanciados
+    if (!hasTeamHQBuilding) {
+      for (const hq of Object.values(this.hqs || {})) {
+        if (hq && hq.team === visionTeam) {
+          this._revealCircle(hq.x, hq.y, 720);
+        }
       }
     }
 
@@ -2079,6 +2086,61 @@ export class BattlefieldMap {
 
   isPositionVisibleToAllies(wx, wy) {
     return this.getFogStateAt(wx, wy) === 2;
+  }
+
+  _findClearCornerPos(bx, by) {
+    const offsets = [
+      [0, 0], [160, 0], [-160, 0], [0, 160], [0, -160],
+      [280, 280], [-280, 280], [280, -280], [-280, -280],
+      [420, 0], [-420, 0], [0, 420], [0, -420],
+    ];
+    for (const [ox, oy] of offsets) {
+      const cx = clamp(bx + ox, 260, this.size - 260);
+      const cy = clamp(by + oy, 260, this.size - 260);
+      if (!this.isPointBlocked(cx, cy, 130, null, [])) {
+        return { x: cx, y: cy };
+      }
+    }
+    return { x: clamp(bx, 260, this.size - 260), y: clamp(by, 260, this.size - 260) };
+  }
+
+  applyCornerRandomSpawns(mode = '1v1', seed = this.seed) {
+    const rng = mulberry32((Number(seed) || 1944) + 7919);
+    const corners = {
+      NW: this._findClearCornerPos(820, 820),
+      NE: this._findClearCornerPos(this.size - 820, 820),
+      SW: this._findClearCornerPos(820, this.size - 820),
+      SE: this._findClearCornerPos(this.size - 820, this.size - 820),
+    };
+    const opposite = { NW: 'SE', SE: 'NW', NE: 'SW', SW: 'NE' };
+    const keys = ['NW', 'NE', 'SW', 'SE'];
+
+    if (mode === '2v2') {
+      const pairings = [
+        { allies: ['NW', 'SW'], enemies: ['NE', 'SE'] },
+        { allies: ['NE', 'SE'], enemies: ['NW', 'SW'] },
+        { allies: ['NW', 'NE'], enemies: ['SW', 'SE'] },
+        { allies: ['SW', 'SE'], enemies: ['NW', 'NE'] },
+      ];
+      const pick = pairings[Math.floor(rng() * pairings.length)];
+      this.hqs = {
+        player: { ...corners[pick.allies[0]], team: 'allies', faction: 'player', name: 'QG 1ª Divisão Aliada' },
+        ally_ai: { ...corners[pick.allies[1]], team: 'allies', faction: 'ally_ai', name: 'QG 2ª Divisão Aliada' },
+        enemy_1: { ...corners[pick.enemies[0]], team: 'enemies', faction: 'enemy_1', name: 'QG 1ª Divisão Eixo' },
+        enemy_2: { ...corners[pick.enemies[1]], team: 'enemies', faction: 'enemy_2', name: 'QG 2ª Divisão Eixo' },
+      };
+    } else {
+      const c1 = keys[Math.floor(rng() * keys.length)];
+      const c2 = opposite[c1];
+      const rem = keys.filter((k) => k !== c1 && k !== c2);
+      this.hqs = {
+        player: { ...corners[c1], team: 'allies', faction: 'player', name: 'QG 1ª Divisão Aliada' },
+        enemy_1: { ...corners[c2], team: 'enemies', faction: 'enemy_1', name: 'QG 1ª Divisão Eixo' },
+        ally_ai: { ...corners[rem[0]], team: 'allies', faction: 'ally_ai', name: 'QG 2ª Divisão Aliada' },
+        enemy_2: { ...corners[rem[1]], team: 'enemies', faction: 'enemy_2', name: 'QG 2ª Divisão Eixo' },
+      };
+    }
+    return this.hqs;
   }
 
   // ===========================================================================
