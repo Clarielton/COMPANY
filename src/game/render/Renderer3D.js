@@ -256,8 +256,8 @@ export class Renderer3D {
   }
 
   _setupDaylight() {
-    const hemi = new THREE.HemisphereLight(0xdbeafe, 0x4f622c, 1.32);
-    this.scene.add(hemi);
+    this.hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x4f622c, 1.32);
+    this.scene.add(this.hemiLight);
 
     this.sunLight = new THREE.DirectionalLight(0xfffbeb, 1.85);
     this.sunLight.position.set(2200, 1550, 2200);
@@ -273,6 +273,35 @@ export class Renderer3D {
     this.sunLight.shadow.bias = -0.0004;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
+  }
+
+  setLightingMood(mood = 'day') {
+    if (!this.scene || !this.sunLight || !this.hemiLight) return;
+    if (mood === 'night') {
+      this.scene.background = new THREE.Color(0x0b1020);
+      if (this.scene.fog) this.scene.fog.color.setHex(0x0d1326);
+      this.hemiLight.color.setHex(0x334155);
+      this.hemiLight.groundColor.setHex(0x0f172a);
+      this.hemiLight.intensity = 0.62;
+      this.sunLight.color.setHex(0x93c5fd);
+      this.sunLight.intensity = 0.78;
+    } else if (mood === 'sunset') {
+      this.scene.background = new THREE.Color(0xd97757);
+      if (this.scene.fog) this.scene.fog.color.setHex(0xc26d53);
+      this.hemiLight.color.setHex(0xfed7aa);
+      this.hemiLight.groundColor.setHex(0x3f2e21);
+      this.hemiLight.intensity = 1.05;
+      this.sunLight.color.setHex(0xfb923c);
+      this.sunLight.intensity = 1.65;
+    } else {
+      this.scene.background = new THREE.Color(0x98b0c4);
+      if (this.scene.fog) this.scene.fog.color.setHex(0xa3b8c9);
+      this.hemiLight.color.setHex(0xdbeafe);
+      this.hemiLight.groundColor.setHex(0x4f622c);
+      this.hemiLight.intensity = 1.32;
+      this.sunLight.color.setHex(0xfffbeb);
+      this.sunLight.intensity = 1.85;
+    }
   }
 
   _initSharedAssets() {
@@ -4846,10 +4875,11 @@ export class Renderer3D {
 
     this.camTarget.set(camX + jx, 0, camY + jy);
 
-    const height = this.camZoom;
-    const backOffset = this.camZoom * 0.74;
+    const lowCam = Boolean(game.cinematicLowCam);
+    const height = lowCam ? Math.min(this.camZoom, 270) : this.camZoom;
+    const backOffset = lowCam ? height * 1.55 : this.camZoom * 0.74;
     this.camera.position.set(this.camTarget.x, height, this.camTarget.z + backOffset);
-    this.camera.lookAt(this.camTarget.x, 0, this.camTarget.z - 40);
+    this.camera.lookAt(this.camTarget.x, lowCam ? 18 : 0, this.camTarget.z - (lowCam ? 95 : 40));
 
     this.sunLight.position.set(this.camTarget.x + 700, 1300, this.camTarget.z - 600);
     this.sunLight.target.position.copy(this.camTarget);

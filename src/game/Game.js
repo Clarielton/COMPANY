@@ -33,6 +33,7 @@ import {
 } from './entities/SquadUnit.js';
 import { FloatingText } from './entities/Particle.js';
 import { Renderer3D } from './render/Renderer3D.js';
+import { runDirectorScene } from './spectator/SceneDirector.js';
 
 // Exportações compatíveis para testes legados
 import { CityMap } from './world/CityMap.js';
@@ -207,6 +208,9 @@ export class Game {
     this.spectatorMode = false;
     this.directorCamActive = false;
     this.spectatorHudHidden = false;
+    this.activeDirectorSceneId = null;
+    this.timeOfDay = 'day';
+    this.cinematicLowCam = false;
     this._directorTarget = { x: 4800, y: 4800 };
     this._directorSwitchTimer = 0;
     this.sandboxMode = false;
@@ -814,6 +818,9 @@ export class Game {
     this.spectatorMode = false;
     this.directorCamActive = false;
     this.spectatorHudHidden = false;
+    this.activeDirectorSceneId = null;
+    this.timeOfDay = 'day';
+    this.cinematicLowCam = false;
     this._directorTarget = { x: 4800, y: 4800 };
     this._directorSwitchTimer = 0;
     this.sandboxMode = false;
@@ -6876,6 +6883,38 @@ export class Game {
     this._emitHud();
   }
 
+  runDirectorScene(sceneId) {
+    return runDirectorScene(this, sceneId);
+  }
+
+  repeatDirectorScene() {
+    return this.runDirectorScene(this.activeDirectorSceneId || 'trenches');
+  }
+
+  setTimeOfDay(mood = 'day', quiet = false) {
+    if (!this.isAdminUser()) return false;
+    this.timeOfDay = mood === 'night' || mood === 'sunset' ? mood : 'day';
+    this.renderer?.setLightingMood?.(this.timeOfDay);
+    if (!quiet) {
+      this.audio?.play?.('switch');
+      this._emitHud();
+    }
+    return true;
+  }
+
+  toggleCinematicLowCam() {
+    if (!this.isAdminUser()) return false;
+    this.cinematicLowCam = !this.cinematicLowCam;
+    if (this.cinematicLowCam) {
+      this.camera.zoom = Math.min(this.camera.zoom, 300);
+    } else {
+      this.camera.zoom = 860;
+    }
+    this.audio?.play?.('switch');
+    this._emitHud();
+    return this.cinematicLowCam;
+  }
+
   toggleDirectorCam() {
     this.directorCamActive = !this.directorCamActive;
     this.notify(
@@ -8604,6 +8643,9 @@ export class Game {
       spectatorMode: Boolean(this.spectatorMode),
       directorCamActive: Boolean(this.directorCamActive),
       spectatorHudHidden: Boolean(this.spectatorHudHidden),
+      activeDirectorSceneId: this.activeDirectorSceneId || null,
+      timeOfDay: this.timeOfDay || 'day',
+      cinematicLowCam: Boolean(this.cinematicLowCam),
       sandboxMode: Boolean(this.sandboxMode),
       mapEditorOpen: Boolean(this.mapEditorOpen),
       mapEditorTool: this.mapEditorTool || null,

@@ -6251,6 +6251,90 @@ body,
   opacity: 0.95;
 }
 
+.spectator-director-panel {
+  position: absolute;
+  top: 64px;
+  left: 14px;
+  width: min(460px, calc(100vw - 28px));
+  z-index: 38;
+  pointer-events: auto;
+  background: rgba(12, 15, 12, 0.92);
+  border: 1px solid #c28e38;
+  border-radius: 6px;
+  padding: 10px 12px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.78);
+  backdrop-filter: blur(5px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.spec-dir-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.spec-dir-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: #fde68a;
+}
+
+.spec-dir-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.spec-scene-btn {
+  text-align: left;
+  padding: 7px 9px;
+  background: rgba(24, 29, 23, 0.94);
+  border: 1px solid #354033;
+  border-radius: 4px;
+  color: #f3f6f0;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.spec-scene-btn:hover {
+  border-color: #c28e38;
+  background: rgba(42, 49, 36, 0.96);
+}
+
+.spec-scene-btn.active {
+  border-color: #fbbf24;
+  background: rgba(84, 59, 27, 0.9);
+}
+
+.spec-scene-btn strong {
+  font-size: 11.5px;
+  color: #fef3c7;
+}
+
+.spec-scene-btn small {
+  font-size: 10px;
+  color: #a8b4a5;
+}
+
+.spec-dir-extras {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px solid #2a3329;
+}
+
 @media (max-width: 900px) {
   .mil-hub-columns {
     grid-template-columns: 1fr;

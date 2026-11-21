@@ -30,6 +30,7 @@ import {
 } from './MilIcons.jsx';
 import { BATTALION_UNLOCKS } from '../game/data/accountData.js';
 import { networkManager } from '../game/net/NetworkManager.js';
+import { DIRECTOR_SCENES } from '../game/spectator/SceneDirector.js';
 import { HudPanel, useHudLayout } from './HudPanel.jsx';
 import {
   COMMAND_BY_ID,
@@ -71,6 +72,7 @@ export default function HUD({
   const [systemMenuOpen, setSystemMenuOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [sandboxCollapsed, setSandboxCollapsed] = useState(false);
+  const [directorPanelCollapsed, setDirectorPanelCollapsed] = useState(false);
   const [isAdminState, setIsAdminState] = useState(() => Boolean(networkManager.isAdmin()));
   const layoutApi = useHudLayout(); // Menus responsivos, redimensionáveis e fixáveis
 
@@ -209,6 +211,81 @@ export default function HUD({
             <span>Menu [ESC]</span>
           </button>
         </div>
+
+        {isAdmin && (
+          <div className={`spectator-director-panel ${directorPanelCollapsed ? 'collapsed' : ''}`}>
+            <div className="spec-dir-head">
+              <div className="spec-dir-title">
+                <IconCamera size={14} />
+                <span>DIRETOR DE CENAS (GERADOR DE BATALHAS)</span>
+              </div>
+              <button
+                type="button"
+                className="spec-btn"
+                onClick={() => setDirectorPanelCollapsed((v) => !v)}
+              >
+                {directorPanelCollapsed ? 'Expandir ▾' : 'Recolher ▴'}
+              </button>
+            </div>
+
+            {!directorPanelCollapsed && (
+              <>
+                <div className="spec-dir-grid">
+                  {DIRECTOR_SCENES.map((sc) => (
+                    <button
+                      key={sc.id}
+                      type="button"
+                      className={`spec-scene-btn ${hud.activeDirectorSceneId === sc.id ? 'active' : ''}`}
+                      onClick={() => gameRef.current?.runDirectorScene(sc.id)}
+                      title={sc.sub}
+                    >
+                      <strong>{sc.title}</strong>
+                      <small>{sc.sub}</small>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="spec-dir-extras">
+                  <button
+                    type="button"
+                    className="spec-btn"
+                    onClick={() => gameRef.current?.repeatDirectorScene()}
+                    title="Reiniciar cena atual em 1 segundo"
+                  >
+                    Repetir Cena Atual
+                  </button>
+
+                  <div className="spec-speed-group">
+                    {[
+                      { id: 'day', label: 'Dia' },
+                      { id: 'sunset', label: 'Fim de Tarde' },
+                      { id: 'night', label: 'Noite' },
+                    ].map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className={`spec-speed-btn ${(hud.timeOfDay || 'day') === m.id ? 'active' : ''}`}
+                        onClick={() => gameRef.current?.setTimeOfDay(m.id)}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    className={`spec-btn ${hud.cinematicLowCam ? 'active' : ''}`}
+                    onClick={() => gameRef.current?.toggleCinematicLowCam()}
+                    title="Aproximar câmera ao nível dos soldados e tanques"
+                  >
+                    <IconCamera size={13} />
+                    <span>Câmera Baixa (Close-up)</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
     );
   }
