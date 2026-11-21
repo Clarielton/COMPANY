@@ -301,7 +301,8 @@ No **Lobby Skirmish**, escolha o campo de batalha antes de mobilizar o batalhão
 
 ### 21.3 Status e Validação do Banco de Dados Firebase Realtime Database
 - **URL Ativa:** `https://companyoffrontline-default-rtdb.firebaseio.com/`.
-- **Modo Seguro REST com Autenticação Anônima:** As regras de segurança exigem autenticação ativa (`auth != null`). Ao efetuar o login anônimo ou Google pelo jogo, as requisições incluem o token de autorização. Caso o jogador esteja offline ou em rede local, o motor comuta suavemente para o canal de sincronização `BroadcastChannel`, mantendo a jogabilidade ininterrupta.
+- **Autenticação REST com Renovação Automática de Token (`refreshToken`):** As regras de segurança exigem autenticação ativa (`auth != null`). O `NetworkManager` persiste `refreshToken` e `tokenExpiresAt`, renovando automaticamente o `idToken` via `securetoken.googleapis.com/v1/token` antes de expirar ou em respostas `401 Unauthorized`. O login por **E-mail e Senha** autentica diretamente no Firebase (`isOnline = true`), enquanto sessões de Convidado/Offline operam em `BroadcastChannel` local quando a autenticação anônima estiver desabilitada no projeto Firebase.
+- **Conexão por Código de Sala:** `joinRoom` aceita tanto `#FRT-XXX`, `FRTXXX` quanto os 3 dígitos diretos (`XXX`), informando claramente caso haja erro de autenticação ou modo local.
 
 ---
 

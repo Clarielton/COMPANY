@@ -193,12 +193,12 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
             value={joinCode}
             onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
             placeholder="#FRT-849"
-            maxLength={8}
+            maxLength={12}
           />
           <button
             type="button"
             className="mil-btn-secondary"
-            disabled={busy || joinCode.trim().length < 4}
+            disabled={busy || joinCode.trim().length < 3}
             onClick={() => handleJoinRoom(joinCode, false)}
           >
             🔑 ENTRAR POR CÓDIGO
@@ -206,6 +206,14 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
         </div>
       </div>
 
+      {!net.isOnline && (
+        <div className="mp-status-note">
+          ⚠️ Modo Local ativo ({net.currentUser?.provider === 'guest_local' ? 'Convidado' : 'Offline'}). Salas criadas aqui só aparecem neste navegador. Para jogar online entre dispositivos, saia e entre com E-mail e Senha.
+        </div>
+      )}
+      {net.isOnline && net.lastSyncError && (
+        <div className="mp-status-note">⚠️ {net.lastSyncError}</div>
+      )}
       {statusMsg && <div className="mp-status-note">{statusMsg}</div>}
 
       {/* Formulário de Criação Rápida */}

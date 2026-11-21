@@ -71,10 +71,11 @@ export function saveStoredFirebaseConfig(cfg) {
 }
 
 function normalizeCode(code) {
-  return String(code || '')
+  const clean = String(code || '')
     .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '')
-    .slice(0, 6);
+    .replace(/[^A-Z0-9]/g, '');
+  if (/^\d{3,4}$/.test(clean)) return `FRT${clean}`;
+  return clean.slice(0, 7);
 }
 
 export function formatRoomCode(raw) {
@@ -94,6 +95,10 @@ export class NetworkManager {
     this.currentUser = this._loadStoredUser();
     this.uid = this.currentUser?.uid || `cmd_${Math.random().toString(36).slice(2, 10)}`;
     this.idToken = this.currentUser?.idToken || null;
+    this.refreshToken = this.currentUser?.refreshToken || null;
+    this.tokenExpiresAt = this.currentUser?.tokenExpiresAt || 0;
+    this.lastSyncError = null;
+    this._refreshPromise = null;
     this.commanderName = this.currentUser?.callsign || 'Comandante';
     this.isOnline = Boolean(this.currentUser && this.currentUser.isFirebase);
     this.mode = this.isOnline ? 'firebase' : 'local_broadcast';
@@ -116,7 +121,11 @@ export class NetworkManager {
     this._channel = null;
 
     this._initDualLayerSync();
-    this._refreshOpenRooms();
+    if (this.isOnline && this.hasFirebaseConfig()) {
+      this._ensureValidToken().finally(() => this._refreshOpenRooms());
+    } else {
+      this._refreshOpenRooms();
+    }
     this._startBrowserPoll();
   }
 
@@ -230,7 +239,7 @@ export class NetworkManager {
 
       // Equivalente ao onDisconnect: remove sala abandonada ao fechar a aba
       window.addEventListener('beforeunload', () => {
-        if (this.roomId && this.localSlot === 1 && this.room?.status === 'waiting') {
+        if (this.roomId && this.localSlot === 1 && this.room?.status === 'WAITING') {
           this._removeLocalRoom(this.roomId);
           this._postBroadcast({ kind: 'rooms_updated' });
         }
@@ -326,18 +335,27 @@ export class NetworkManager {
     if (this.hasFirebaseConfig() && this.isOnline) {
       try {
         const remote = await this._rtdbGet('rooms');
+        this.lastSyncError = null;
         if (remote && typeof remote === 'object') {
           for (const [id, r] of Object.entries(remote)) {
             if (r && r.roomId) merged[id] = r;
           }
         }
-      } catch {
-        // Mantém fallback local se Firebase RTDB estiver restrito ou offline
+      } catch (err) {
+        this.lastSyncError =
+          err?.message?.includes('401')
+            ? 'Sessão expirada no Firebase. Saia da conta e entre novamente com e-mail e senha.'
+            : 'Falha ao sincronizar salas com o servidor Firebase.';
       }
     }
 
+    const now = Date.now();
     const list = Object.values(merged).filter(
-      (r) => r && r.status === 'WAITING' && (r.playersCount || 1) < (r.maxPlayers || 2)
+      (r) =>
+        r &&
+        r.status === 'WAITING' &&
+        (r.playersCount || 1) < (r.maxPlayers || 2) &&
+        (!r.createdAt || now - r.createdAt < 6 * 3600 * 1000)
     );
     list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     this.openRooms = list;
@@ -410,7 +428,16 @@ export class NetworkManager {
     }
   }
 
-  _applyAuthenticatedUser({ uid, callsign, email = '', provider = 'guest', idToken = null, isFirebase = false }) {
+  _applyAuthenticatedUser({
+    uid,
+    callsign,
+    email = '',
+    provider = 'guest',
+    idToken = null,
+    refreshToken = null,
+    expiresIn = 3600,
+    isFirebase = false,
+  }) {
     const existing = this._loadStoredUser();
     const xp = existing?.xp ?? 0;
     const prog = computeLevelFromXp(xp);
@@ -447,11 +474,16 @@ export class NetworkManager {
       banned: isBanned,
       banReason,
       idToken: idToken || null,
+      refreshToken: refreshToken || null,
+      tokenExpiresAt: idToken ? Date.now() + Math.max(60, Number(expiresIn || 3600) - 120) * 1000 : 0,
       isFirebase,
     };
     this.currentUser = user;
     this.uid = user.uid;
     this.idToken = user.idToken;
+    this.refreshToken = user.refreshToken;
+    this.tokenExpiresAt = user.tokenExpiresAt;
+    this.lastSyncError = null;
     this.commanderName = user.callsign;
     this.isOnline = isFirebase;
     this.mode = isFirebase ? 'firebase' : 'local_broadcast';
@@ -947,6 +979,8 @@ export class NetworkManager {
             callsign: cleanName,
             provider: 'anonymous',
             idToken: data.idToken,
+            refreshToken: data.refreshToken || null,
+            expiresIn: Number(data.expiresIn || 3600),
             isFirebase: true,
           });
         }
@@ -985,6 +1019,8 @@ export class NetworkManager {
             email,
             provider: 'email',
             idToken: data.idToken,
+            refreshToken: data.refreshToken || null,
+            expiresIn: Number(data.expiresIn || 3600),
             isFirebase: true,
           });
         }
@@ -1025,6 +1061,8 @@ export class NetworkManager {
             email,
             provider: 'email',
             idToken: data.idToken,
+            refreshToken: data.refreshToken || null,
+            expiresIn: Number(data.expiresIn || 3600),
             isFirebase: true,
           });
         }
@@ -1057,48 +1095,115 @@ export class NetworkManager {
     this.leaveRoom();
     this.currentUser = null;
     this.idToken = null;
+    this.refreshToken = null;
+    this.tokenExpiresAt = 0;
+    this.lastSyncError = null;
     this.isOnline = false;
     this._saveStoredUser(null);
     this._emit();
   }
 
   // =========================================================================
-  // RTDB HELPERS
+  // RTDB HELPERS + AUTO REFRESH TOKEN
   // =========================================================================
+  async _refreshIdToken() {
+    if (!this.refreshToken || !this.hasFirebaseConfig()) return false;
+    if (this._refreshPromise) return this._refreshPromise;
+    this._refreshPromise = (async () => {
+      try {
+        const res = await fetch(
+          `https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(this.config.apiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(this.refreshToken)}`,
+          }
+        );
+        const data = await res.json();
+        if (res.ok && data.id_token) {
+          this.idToken = data.id_token;
+          this.refreshToken = data.refresh_token || this.refreshToken;
+          this.tokenExpiresAt = Date.now() + Math.max(60, Number(data.expires_in || 3600) - 120) * 1000;
+          this.lastSyncError = null;
+          if (this.currentUser) {
+            this.currentUser = {
+              ...this.currentUser,
+              idToken: this.idToken,
+              refreshToken: this.refreshToken,
+              tokenExpiresAt: this.tokenExpiresAt,
+            };
+            this._saveStoredUser(this.currentUser);
+          }
+          return true;
+        }
+      } catch {
+        // noop
+      }
+      return false;
+    })();
+    try {
+      return await this._refreshPromise;
+    } finally {
+      this._refreshPromise = null;
+    }
+  }
+
+  async _ensureValidToken() {
+    if (!this.isOnline || !this.hasFirebaseConfig()) return false;
+    if (this.idToken && (!this.tokenExpiresAt || Date.now() < this.tokenExpiresAt)) return true;
+    return this._refreshIdToken();
+  }
+
   _rtdbUrl(path) {
     const base = String(this.config?.databaseURL || '').replace(/\/+$/, '');
     const auth = this.idToken ? `?auth=${encodeURIComponent(this.idToken)}` : '';
     return `${base}/${path}.json${auth}`;
   }
 
-  async _rtdbGet(path) {
+  async _rtdbFetch(path, options = {}, measurePing = false) {
+    await this._ensureValidToken();
     const t0 = Date.now();
-    const res = await fetch(this._rtdbUrl(path));
-    this.pingMs = Math.max(8, Date.now() - t0);
-    if (!res.ok) throw new Error(`RTDB GET ${res.status}`);
+    let res = await fetch(this._rtdbUrl(path), options);
+    if (res.status === 401 && this.refreshToken) {
+      const ok = await this._refreshIdToken();
+      if (ok) {
+        res = await fetch(this._rtdbUrl(path), options);
+      }
+    }
+    if (measurePing) this.pingMs = Math.max(8, Date.now() - t0);
+    if (!res.ok) {
+      if (res.status === 401) {
+        this.lastSyncError = 'Sessão expirada no Firebase. Saia da conta e entre novamente com e-mail e senha.';
+        this._emit();
+      }
+      throw new Error(`RTDB ${options.method || 'GET'} ${res.status}`);
+    }
+    this.lastSyncError = null;
     return res.json();
+  }
+
+  async _rtdbGet(path) {
+    return this._rtdbFetch(path, {}, true);
   }
 
   async _rtdbPut(path, payload) {
-    const t0 = Date.now();
-    const res = await fetch(this._rtdbUrl(path), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    this.pingMs = Math.max(8, Date.now() - t0);
-    if (!res.ok) throw new Error(`RTDB PUT ${res.status}`);
-    return res.json();
+    return this._rtdbFetch(
+      path,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      true
+    );
   }
 
   async _rtdbPost(path, payload) {
-    const res = await fetch(this._rtdbUrl(path), {
+    return this._rtdbFetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(`RTDB POST ${res.status}`);
-    return res.json();
   }
 
   // =========================================================================
@@ -1142,8 +1247,12 @@ export class NetworkManager {
     if (this.isOnline && this.hasFirebaseConfig()) {
       try {
         await this._rtdbPut(`rooms/${roomId}`, room);
-      } catch {
-        // Fallback local já salvo em COF_ACTIVE_ROOMS
+      } catch (err) {
+        this.lastSyncError =
+          err?.message?.includes('401')
+            ? 'Sessão expirada no Firebase. Saia da conta e entre novamente para publicar salas online.'
+            : 'Não foi possível publicar a sala no Firebase (modo local ativo).';
+        this._emit();
       }
     }
 
@@ -1159,10 +1268,12 @@ export class NetworkManager {
     if (roomId.length < 4) return { ok: false, error: 'Código inválido.' };
 
     let targetRoom = null;
+    let firebaseErr = null;
     if (this.isOnline && this.hasFirebaseConfig()) {
       try {
         targetRoom = await this._rtdbGet(`rooms/${roomId}`);
-      } catch {
+      } catch (err) {
+        firebaseErr = err;
         targetRoom = null;
       }
     }
@@ -1171,6 +1282,20 @@ export class NetworkManager {
       targetRoom = localRooms[roomId] || null;
     }
     if (!targetRoom) {
+      if (firebaseErr) {
+        return {
+          ok: false,
+          error: firebaseErr.message?.includes('401')
+            ? 'Sessão expirada no Firebase. Saia da conta e entre novamente com e-mail e senha.'
+            : 'Falha de conexão com o Firebase ao buscar a sala.',
+        };
+      }
+      if (!this.isOnline) {
+        return {
+          ok: false,
+          error: `Sala ${formatRoomCode(roomId)} não encontrada localmente. Entre com E-mail e Senha para conectar online.`,
+        };
+      }
       return { ok: false, error: `Sala ${formatRoomCode(roomId)} não encontrada.` };
     }
     if (targetRoom.isPrivate && targetRoom.password && targetRoom.password !== passwordAttempt) {
