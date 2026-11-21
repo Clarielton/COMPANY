@@ -329,7 +329,8 @@ export class SquadUnit {
   stepAutonomousSoldiers(dt) {
     if (this.spec.type !== 'infantry' || !this.soldiers || this.soldiers.length === 0) return;
     this.updateSoldierWorldPositions();
-    const baseSpd = Math.max(45, (this.spec.speed || 62) * 1.18);
+    const baseSpd = Math.max(48, (this.spec.speed || 62) * 1.24);
+    const hasMoveOrder = this.order && this.order.type !== 'hold';
 
     const lerpAngle = (cur, target, t) => {
       let diff = target - cur;
@@ -342,10 +343,12 @@ export class SquadUnit {
       const s = this.soldiers[i];
       if (!s.alive) continue;
       if (s.reactionTimer > 0) {
-        s.reactionTimer = Math.max(0, s.reactionTimer - dt);
-        s.vx = 0;
-        s.vy = 0;
-        continue;
+        s.reactionTimer = Math.max(0, s.reactionTimer - dt * (hasMoveOrder ? 2.8 : 1.0));
+        if (s.reactionTimer > 0 && !hasMoveOrder) {
+          s.vx = 0;
+          s.vy = 0;
+          continue;
+        }
       }
 
       const tgt = s.personalTarget || s.targetPos || { x: this.x, y: this.y };
@@ -353,20 +356,21 @@ export class SquadUnit {
       const dy = tgt.y - s.worldY;
       const d = Math.hypot(dx, dy);
 
-      if (d > 6.5) {
-        const spd = baseSpd * (s.speedMultiplier || 1.0);
+      if (d > 4.5) {
+        const catchup = d > 65 ? 1.38 : d < 20 ? Math.max(0.45, d / 20) : 1.0;
+        const spd = baseSpd * (s.speedMultiplier || 1.0) * catchup;
         const step = Math.min(d, spd * dt);
         const invD = d < 0.001 ? 0.001 : d;
         s.vx = (dx / invD) * spd;
         s.vy = (dy / invD) * spd;
         s.worldX += (dx / invD) * step;
         s.worldY += (dy / invD) * step;
-        s.walkPhase = (s.walkPhase || 0) + dt * (s.strideFrequency || 7.5);
+        s.walkPhase = (s.walkPhase || 0) + dt * (s.strideFrequency || 8.2) * Math.min(1.25, catchup);
 
         const moveYaw = Math.atan2(dx, dy);
-        s.currentYaw = lerpAngle(s.currentYaw ?? moveYaw, moveYaw, dt * 6);
+        s.currentYaw = lerpAngle(s.currentYaw ?? moveYaw, moveYaw, dt * 10);
       } else {
-        // Zona morta de chegada (~0.45m): zera velocidade e mantém soldado firme sem oscilar
+        // Zona morta de chegada: zera velocidade e mantém soldado firme mirando no alvo
         s.vx = 0;
         s.vy = 0;
         let desiredYaw = Math.PI / 2 - this.angle;
@@ -378,7 +382,7 @@ export class SquadUnit {
         } else if (this.aimAngle !== undefined && this.muzzleFlashTimer > 0) {
           desiredYaw = Math.PI / 2 - this.aimAngle;
         }
-        s.currentYaw = lerpAngle(s.currentYaw ?? desiredYaw, desiredYaw, dt * 6);
+        s.currentYaw = lerpAngle(s.currentYaw ?? desiredYaw, desiredYaw, dt * 10);
       }
     }
   }

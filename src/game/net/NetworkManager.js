@@ -1308,6 +1308,7 @@ export class NetworkManager {
       createdAt: Date.now(),
       host: { uid: this.uid, name: this.commanderName, ready: true },
       guest: null,
+      slots: { 1: this.uid },
     };
 
     this.roomId = roomId;
@@ -1373,14 +1374,33 @@ export class NetworkManager {
       return { ok: false, error: 'Senha incorreta para esta sala privada.' };
     }
 
-    if (targetRoom.host?.uid !== this.uid) {
-      targetRoom.guest = { uid: this.uid, name: this.commanderName, ready: true };
-      targetRoom.playersCount = Math.min(targetRoom.maxPlayers || 2, 2);
+    const maxPlayers = targetRoom.maxPlayers || 2;
+    const slots = { ...(targetRoom.slots || {}) };
+    if (!slots[1] && targetRoom.host?.uid) slots[1] = targetRoom.host.uid;
+    let assignedSlot = Object.entries(slots).find(([, uid]) => uid === this.uid)?.[0];
+    assignedSlot = assignedSlot ? Number(assignedSlot) : null;
+
+    if (!assignedSlot && targetRoom.host?.uid !== this.uid) {
+      for (let s = 2; s <= maxPlayers; s++) {
+        if (!slots[s]) {
+          slots[s] = this.uid;
+          assignedSlot = s;
+          break;
+        }
+      }
+      if (!assignedSlot) {
+        return { ok: false, error: 'Esta sala já está lotada.' };
+      }
+      if (!targetRoom.guest) {
+        targetRoom.guest = { uid: this.uid, name: this.commanderName, ready: true };
+      }
     }
+    targetRoom.slots = slots;
+    targetRoom.playersCount = Math.min(maxPlayers, Object.keys(slots).length);
 
     this.roomId = roomId;
     this.room = targetRoom;
-    this.localSlot = targetRoom.host?.uid === this.uid ? 1 : 2;
+    this.localSlot = assignedSlot || (targetRoom.host?.uid === this.uid ? 1 : 2);
     this._saveLocalRoom(targetRoom);
 
     if (this.isOnline && this.hasFirebaseConfig()) {

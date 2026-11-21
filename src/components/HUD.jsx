@@ -7,6 +7,26 @@ import {
   IconFastForward,
   IconBolt,
   IconLogout,
+  IconSupply,
+  IconAmmo,
+  IconFuel,
+  IconBuilding,
+  IconAir,
+  IconDrone,
+  IconResearch,
+  IconCompass,
+  IconBook,
+  IconGear,
+  IconWrench,
+  IconGrenade,
+  IconFlame,
+  IconMedkit,
+  IconLock,
+  IconUnlock,
+  IconParachute,
+  IconShield,
+  IconStar,
+  GameCategoryIcon,
 } from './MilIcons.jsx';
 import { BATTALION_UNLOCKS } from '../game/data/accountData.js';
 import { networkManager } from '../game/net/NetworkManager.js';
@@ -50,6 +70,7 @@ export default function HUD({
   const [showTransferPicker, setShowTransferPicker] = useState(false);
   const [systemMenuOpen, setSystemMenuOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [sandboxCollapsed, setSandboxCollapsed] = useState(false);
   const [isAdminState, setIsAdminState] = useState(() => Boolean(networkManager.isAdmin()));
   const layoutApi = useHudLayout(); // Menus responsivos, redimensionáveis e fixáveis
 
@@ -490,25 +511,30 @@ export default function HUD({
         {!editorDrawerOpen && (
           <>
             <div className="toolbar-row compact-combat-bar">
-              {completedTechSet.has('uav_recon') && (
+              {(hud.droneStock?.uav_recon || 0) > 0 && (
                 <button
                   type="button"
                   className={`hud-btn ${hud.activeDroneLaunchMode === 'uav_recon' ? 'active' : ''}`}
                   onClick={() => gameRef.current?.triggerDroneLaunchMode('uav_recon')}
-                  title="Lançar Drone UAV 3D (350 SUP + 120 MUN)"
+                  title="Lançar Drone UAV do Hangar"
                 >
-                  🛸 UAV
+                  <IconDrone size={13} /> UAV ({hud.droneStock.uav_recon})
                 </button>
               )}
-              {completedTechSet.has('fpv_kamikaze') && (
+              {(hud.droneStock?.fpv_kamikaze || 0) > 0 && (
                 <button
                   type="button"
                   className={`hud-btn ${hud.activeDroneLaunchMode === 'fpv_kamikaze' ? 'active' : ''}`}
                   onClick={() => gameRef.current?.triggerDroneLaunchMode('fpv_kamikaze')}
-                  title="Lançar Drone Kamikaze FPV (500 SUP + 200 MUN)"
+                  title="Lançar Drone Kamikaze FPV do Hangar"
                 >
-                  💥 FPV
+                  <IconDrone size={13} /> FPV ({hud.droneStock.fpv_kamikaze})
                 </button>
+              )}
+              {hud.droneQueue?.length > 0 && (
+                <span className="hud-btn" style={{ cursor: 'default', opacity: 0.9 }}>
+                  <IconDrone size={12} /> {hud.droneQueue[0].remaining}s
+                </span>
               )}
 
               <button
@@ -517,7 +543,7 @@ export default function HUD({
                 onClick={() => gameRef.current?.toggleTechModal()}
                 title="Árvore de Pesquisa & Drones [T]"
               >
-                🔬 [T]
+                <IconResearch size={13} /> [T]
               </button>
               <button
                 type="button"
@@ -525,7 +551,7 @@ export default function HUD({
                 onClick={() => gameRef.current?.toggleTacticalMap()}
                 title="Mapa Estratégico [TAB]"
               >
-                🗺️ [TAB]
+                <IconCompass size={13} /> [TAB]
               </button>
               {isAdmin && (
                 <button
@@ -534,7 +560,7 @@ export default function HUD({
                   onClick={() => gameRef.current?.toggleSandboxMode()}
                   title="Modo Caixa de Areia / Campo de Testes [F10] (Exclusivo Admin)"
                 >
-                  🛠️ SANDBOX — F10
+                  <IconWrench size={13} /> F10
                 </button>
               )}
               <button
@@ -543,7 +569,7 @@ export default function HUD({
                 onClick={() => setTutorialOpen((v) => !v)}
                 title="Tutorial Completo & Guia Tático de Campo"
               >
-                📖 TUTORIAL
+                <IconBook size={13} /> GUIA
               </button>
               <button
                 type="button"
@@ -551,7 +577,7 @@ export default function HUD({
                 onClick={() => setSystemMenuOpen((v) => !v)}
                 title="Opções do Sistema [ESC]"
               >
-                ⚙️
+                <IconGear size={14} />
               </button>
             </div>
 
@@ -568,8 +594,12 @@ export default function HUD({
                 hud.ammo >= (nextSpec.ammoCost || 0);
               return (
                 <div className="hq-progression-bar">
-                  <span className="hq-lvl-badge">🏛 QG NV. {lvl}/3</span>
-                  <span className="hq-cp-badge">⭐ {cp} CP</span>
+                  <span className="hq-lvl-badge">
+                    <IconBuilding size={12} /> QG NV. {lvl}/3
+                  </span>
+                  <span className="hq-cp-badge">
+                    <IconStar size={12} /> {cp} CP
+                  </span>
                   {nextSpec ? (
                     <button
                       type="button"
@@ -577,10 +607,12 @@ export default function HUD({
                       onClick={() => gameRef.current?.upgradeHq()}
                       title={`${nextSpec.name}: ${nextSpec.unlocks}`}
                     >
-                      ⬆ QG NV.{lvl + 1} ({nextSpec.supplyCost}S/{nextSpec.fuelCost}C • {nextSpec.requiredCp}CP)
+                      +QG NV.{lvl + 1} ({nextSpec.supplyCost}S/{nextSpec.fuelCost}C • {nextSpec.requiredCp}CP)
                     </button>
                   ) : (
-                    <span className="hq-max-badge">🎖 COMANDO SUPREMO</span>
+                    <span className="hq-max-badge">
+                      <IconShield size={12} /> NÍVEL MÁX.
+                    </span>
                   )}
                 </div>
               );
@@ -588,18 +620,24 @@ export default function HUD({
 
             <div className="resources-bar">
               <div className="res-pill sup" title="Suprimentos Militares">
-                <span>⚙ {hud.supplies} SUP</span>
+                <span>
+                  <IconSupply size={13} /> {hud.supplies} SUP
+                </span>
                 <small>+{hud.supplyIncome}</small>
               </div>
               <div className="res-pill ammo" title="Munição Tática (Tropas de Elite e Suporte Aéreo)">
-                <span>弹 {hud.ammo} MUN</span>
+                <span>
+                  <IconAmmo size={13} /> {hud.ammo} MUN
+                </span>
                 <small>+{hud.ammoIncome}</small>
               </div>
               <div
                 className="res-pill fuel"
                 title="Combustível Militar (Prédios de Base e Blindados Pesados)"
               >
-                <span>⛽ {hud.fuel} COMB</span>
+                <span>
+                  <IconFuel size={13} /> {hud.fuel} COMB
+                </span>
                 <small>+{hud.fuelIncome}</small>
               </div>
             </div>
@@ -617,10 +655,12 @@ export default function HUD({
                       onClick={() => gameRef.current?.selectBaseBuilding(b.id)}
                       title={`Selecionar ${b.name} no mapa 3D (${b.hp}/${b.maxHp} HP)`}
                     >
-                      <span>🏭 {b.short}</span>
+                      <span>
+                        <IconBuilding size={12} /> {b.short}
+                      </span>
                       {b.queueLength > 0 && (
                         <small className="bstrip-prog">
-                          ⚙ {b.progress}% ({b.queueLength})
+                          {b.progress}% ({b.queueLength})
                         </small>
                       )}
                     </button>
@@ -631,7 +671,7 @@ export default function HUD({
           </>
         )}
 
-        {/* BARRA DE ACESSO RÁPIDO NA LATERAL ESQUERDA (CONSTRUÇÕES & EDITOR) */}
+        {/* BARRA DE ACESSO RÁPIDO (CONSTRUÇÕES & COMANDO AÉREO) */}
         {!editorDrawerOpen && (
           <div className="left-quick-bar">
             <button
@@ -646,8 +686,10 @@ export default function HUD({
               }}
               title="Abrir / Fechar Menu de Construções da Base (Atalho B)"
             >
-              <span>🏗️ CONSTRUÇÕES DA BASE</span>
-              <small>[B] ({Math.max(0, builtSet.size - 1)}/4)</small>
+              <span>
+                <IconBuilding size={13} /> CONSTRUÇÕES DA BASE
+              </span>
+              <small>[B] ({Math.max(0, builtSet.size - 1)}/5)</small>
             </button>
 
             <button
@@ -681,7 +723,10 @@ export default function HUD({
                   : 'Construa o Comando Aéreo / Radar no Menu de Construções para desbloquear os ataques aéreos!'
               }
             >
-              <span>{hasAirCommand ? '✈️ COMANDO AÉREO (ATIVO)' : '🔒 COMANDO AÉREO (Requer Radar)'}</span>
+              <span>
+                {hasAirCommand ? <IconAir size={13} /> : <IconLock size={13} />}{' '}
+                {hasAirCommand ? 'COMANDO AÉREO (ATIVO)' : 'COMANDO AÉREO (Requer Radar)'}
+              </span>
               <small>[V]</small>
             </button>
 
@@ -699,7 +744,9 @@ export default function HUD({
                 }}
                 title="Editor de Mapa 3D Local (Oculta HUD do jogo, pausa partida, libera Zoom amplo e salva em customMaps.json)"
               >
-                <span>🛠️ EDITOR DE MAPA (LOCAL)</span>
+                <span>
+                  <IconWrench size={13} /> EDITOR DE MAPA (LOCAL)
+                </span>
                 <small>PAUSA + ZOOM</small>
               </button>
             )}
@@ -1303,7 +1350,9 @@ export default function HUD({
                   onClick={() => gameRef.current?.setBottomCategory(cat.id)}
                   title={`Categoria ${tabLabel} (${tabKey})`}
                 >
-                  <span className="cat-tab-icon">{cat.icon}</span>
+                  <span className="cat-tab-icon">
+                    <GameCategoryIcon catId={cat.id} size={13} />
+                  </span>
                   <span className="cat-tab-label">{tabLabel}</span>
                   <small className="cat-tab-key">[{tabKey}]</small>
                 </button>
@@ -1315,7 +1364,9 @@ export default function HUD({
               onClick={() => gameRef.current?.setBottomCategory('all')}
               title="Exibir todos os grupos empilhados ([F5])"
             >
-              <span className="cat-tab-icon">▪</span>
+              <span className="cat-tab-icon">
+                <GameCategoryIcon catId="all" size={13} />
+              </span>
               <span className="cat-tab-label">TODOS</span>
               <small className="cat-tab-key">[F5]</small>
             </button>
@@ -1365,7 +1416,7 @@ export default function HUD({
                       onClick={() => gameRef.current?.activateParatrooperDrop()}
                       title={b.desc}
                     >
-                      🪂 Lançar Paraquedistas
+                      <IconParachute size={13} /> Lançar Paraquedistas
                       {hud.paradropCooldown > 0 ? ` (${hud.paradropCooldown}s)` : ` (${b.costSup} SUP)`}
                     </button>
                   ) : (
@@ -1378,7 +1429,7 @@ export default function HUD({
                       }
                       title={b.desc}
                     >
-                      {b.icon} {b.name.split('(')[0].trim()} ({b.costSup} SUP)
+                      <IconShield size={13} /> {b.name.split('(')[0].trim()} ({b.costSup} SUP)
                     </button>
                   )
                 )}
@@ -1471,7 +1522,10 @@ export default function HUD({
                 {selectedBld.produces.map((unitId) => {
                   const uSpec = COMMAND_BY_ID[unitId];
                   if (!uSpec) return null;
+                  const reqHq = uSpec.requiredHqLevel || 1;
+                  const hqUnlocked = (hud.hqLevel || 1) >= reqHq;
                   const canAfford =
+                    hqUnlocked &&
                     hud.supplies >= (uSpec.cost || 0) &&
                     hud.ammo >= (uSpec.ammoCost || 0) &&
                     hud.fuel >= (uSpec.fuelCost || 0);
@@ -1486,10 +1540,9 @@ export default function HUD({
                       <div className="base-item-top">
                         <strong>▸ {uSpec.short}</strong>
                         <span>
-                          {uSpec.cost} SUP
-                          {uSpec.ammoCost ? ` • ${uSpec.ammoCost} MUN` : ''}
-                          {uSpec.fuelCost ? ` • ${uSpec.fuelCost} COMB` : ''}
-                          {uSpec.buildTime ? ` • ⏱ ${Math.round(uSpec.buildTime)}s` : ''}
+                          {!hqUnlocked
+                            ? `🔒 Req. QG Nv.${reqHq}`
+                            : `${uSpec.cost} SUP${uSpec.ammoCost ? ` • ${uSpec.ammoCost} MUN` : ''}${uSpec.fuelCost ? ` • ${uSpec.fuelCost} COMB` : ''}${uSpec.buildTime ? ` • ⏱ ${Math.round(uSpec.buildTime)}s` : ''}`}
                         </span>
                       </div>
                       <div className="base-item-sub">
@@ -1505,6 +1558,81 @@ export default function HUD({
                     </button>
                   );
                 })}
+              </div>
+            ) : selectedBld.buildingType === 'drone_factory' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
+                <div
+                  style={{
+                    padding: '8px 10px',
+                    background: 'rgba(15, 23, 42, 0.72)',
+                    border: '1px solid rgba(56, 189, 248, 0.45)',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    color: '#f8fafc',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <span>🛸 Hangar de Drones:</span>
+                  <strong style={{ color: '#38bdf8' }}>
+                    {(hud.droneStock?.uav_recon || 0) + (hud.droneStock?.fpv_kamikaze || 0)}/
+                    {hud.maxDroneStock || 3} estoque • {hud.activeDronesCount || 0}/
+                    {hud.maxActiveDrones || 2} ativos
+                  </strong>
+                </div>
+
+                {[
+                  {
+                    id: 'uav_recon',
+                    name: '🛸 Drone UAV Recon',
+                    cost: '350 SUP • 120 MUN • 7s',
+                    desc: 'Reconhecimento aéreo contínuo que revela névoa de guerra.',
+                  },
+                  {
+                    id: 'fpv_kamikaze',
+                    name: '💥 Drone Kamikaze FPV',
+                    cost: '500 SUP • 200 MUN • 9s',
+                    desc: 'Mergulho explosivo de alta penetração contra tanques e bases.',
+                  },
+                ].map((dr) => {
+                  const researched = completedTechSet.has(dr.id);
+                  const stockCount = hud.droneStock?.[dr.id] || 0;
+                  return (
+                    <div key={dr.id} className="base-item-btn" style={{ cursor: 'default' }}>
+                      <div className="base-item-top">
+                        <strong>{dr.name}</strong>
+                        <span>{dr.cost}</span>
+                      </div>
+                      <div className="base-item-sub">{dr.desc}</div>
+                      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                        <button
+                          type="button"
+                          className="mil-pill"
+                          disabled={!researched || (hud.hqLevel || 1) < 3}
+                          onClick={() => gameRef.current?.queueDroneProduction(dr.id)}
+                        >
+                          {researched && (hud.hqLevel || 1) >= 3
+                            ? '🏭 Fabricar'
+                            : '🔒 Req. QG Nv.3 + Pesquisa [T]'}
+                        </button>
+                        <button
+                          type="button"
+                          className={`mil-pill ${hud.activeDroneLaunchMode === dr.id ? 'active' : ''}`}
+                          disabled={stockCount <= 0}
+                          onClick={() => gameRef.current?.triggerDroneLaunchMode(dr.id)}
+                        >
+                          🚀 Lançar ({stockCount})
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {hud.droneQueue?.length > 0 && (
+                  <div style={{ fontSize: 12, color: '#93c5fd', fontWeight: 700 }}>
+                    ⏳ Fabricando drone... {hud.droneQueue[0].remaining}s restantes
+                  </div>
+                )}
               </div>
             ) : selectedBld.buildingType === 'pow_camp' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
@@ -1655,41 +1783,24 @@ export default function HUD({
                   ))}
                 </div>
 
-                {/* 2. CONTROLE DE DISTÂNCIA / ESPAÇAMENTO ENTRE SOLDADOS (1m a 8m + Presets Rápidos) */}
-                <div className="spacing-control-box">
-                  <div className="spacing-header-row">
-                    <span>↔ DISTANCIAMENTO TÁTICO (SPACING)</span>
-                    <strong>{(hud.selectedSpacing || 3.0).toFixed(1)}m</strong>
-                  </div>
-                  <input
-                    type="range"
-                    min="1.0"
-                    max="8.0"
-                    step="0.5"
-                    value={hud.selectedSpacing || 3.0}
-                    onChange={(e) =>
-                      gameRef.current?.setSelectedSpacing(parseFloat(e.target.value))
-                    }
-                    className="spacing-slider"
-                    title="Ajustar distância em metros entre os soldados 3D do esquadrão (1m a 8m)"
-                  />
-                  <div className="spacing-presets-row">
-                    {SPACING_PRESETS.map((preset) => {
-                      const isPresetActive =
-                        Math.abs((hud.selectedSpacing || 3.0) - preset.meters) < 0.2;
-                      return (
-                        <button
-                          key={preset.id}
-                          type="button"
-                          className={`spacing-preset-btn ${isPresetActive ? 'active' : ''}`}
-                          onClick={() => gameRef.current?.setSelectedSpacing(preset.meters)}
-                          title={`${preset.label} (${preset.meters}m)`}
-                        >
-                          {preset.short}
-                        </button>
-                      );
-                    })}
-                  </div>
+                {/* 2. ESPAÇAMENTO TÁTICO COMPACTO EM 1 LINHA (SEM OCUPAR MEIA TELA) */}
+                <div className="compact-spacing-bar">
+                  <span className="compact-spacing-label">ESPAÇO:</span>
+                  {SPACING_PRESETS.map((preset) => {
+                    const isPresetActive =
+                      Math.abs((hud.selectedSpacing || 3.0) - preset.meters) < 0.2;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        className={`spacing-preset-btn ${isPresetActive ? 'active' : ''}`}
+                        onClick={() => gameRef.current?.setSelectedSpacing(preset.meters)}
+                        title={`${preset.label} (${preset.meters}m)`}
+                      >
+                        {preset.meters}m
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {/* 3. TRAVAR POSIÇÃO [H], RETORNAR À BASE [B/R] & DESOCUPAR GUARNIÇÃO [U] */}
@@ -1700,7 +1811,8 @@ export default function HUD({
                     onClick={() => gameRef.current?.toggleSelectedHoldPosition()}
                     title="Travar Posição [H]: O esquadrão não sai da cobertura/trincheira para perseguir inimigos"
                   >
-                    {hud.selectedHoldPosition ? '🔒 POSIÇÃO TRAVADA [H]' : '🔓 TRAVAR POSIÇÃO [H]'}
+                    {hud.selectedHoldPosition ? <IconLock size={12} /> : <IconUnlock size={12} />}{' '}
+                    {hud.selectedHoldPosition ? 'POSIÇÃO TRAVADA [H]' : 'TRAVAR POSIÇÃO [H]'}
                   </button>
                   {leadSquad && (
                     <button
@@ -1709,7 +1821,7 @@ export default function HUD({
                       onClick={() => gameRef.current?.returnSelectedToBase()}
                       title="Recuar rápido para o QG para se curar [Tecla R]"
                     >
-                      ▸ RECUAR P/ QG [R]
+                      RECUAR P/ QG [R]
                     </button>
                   )}
                   {hud.anySelectedGarrisoned && (
@@ -1719,7 +1831,7 @@ export default function HUD({
                       onClick={() => gameRef.current?.ungarrisonSelected()}
                       title="Desocupar Casa/Prédio [U]"
                     >
-                      ▸ SAIR DO PRÉDIO [U]
+                      SAIR DO PRÉDIO [U]
                     </button>
                   )}
                   {leadSquad && (leadSquad.unitType === 'engineers' || leadSquad.canBuild) && (
@@ -1728,9 +1840,9 @@ export default function HUD({
                       className="stance-btn"
                       style={{ borderColor: '#38bdf8', color: '#7dd3fc' }}
                       onClick={() => gameRef.current?.repairNearestVehicleForSelected()}
-                      title="Enviar Engenheiros para consertar o veículo aliado danificado mais próximo (+40 HP/s grátis)"
+                      title="Enviar Engenheiros para consertar o veículo aliado danificado mais próximo"
                     >
-                      🔧 Consertar Veículo Mais Próximo
+                      <IconWrench size={12} /> Consertar Veículo
                     </button>
                   )}
                 </div>
@@ -1753,8 +1865,10 @@ export default function HUD({
                               onClick={() => gameRef.current?.throwSelectedGrenade()}
                               title="Lançar Granada Fragmentação [G] (15 MUN • Recarga 12s)"
                             >
-                              <span>💣 Granada [G]</span>
-                              <small>{cdG > 0 ? `⏳ ${cdG}s` : '15 MUN'}</small>
+                              <span>
+                                <IconGrenade size={12} /> Granada [G]
+                              </span>
+                              <small>{cdG > 0 ? `${cdG}s` : '15 MUN'}</small>
                             </button>
                             <button
                               type="button"
@@ -1762,8 +1876,10 @@ export default function HUD({
                               onClick={() => gameRef.current?.toggleSelectedSuppression()}
                               title="Fogo de Supressão [F] (2x Cadência • Pinned -70% vel. • 10 MUN • 15s)"
                             >
-                              <span>🔥 Supressão [F]</span>
-                              <small>{leadSquad.suppressionMode ? 'ATIVO' : cdF > 0 ? `⏳ ${cdF}s` : '10 MUN'}</small>
+                              <span>
+                                <IconFlame size={12} /> Supressão [F]
+                              </span>
+                              <small>{leadSquad.suppressionMode ? 'ATIVO' : cdF > 0 ? `${cdF}s` : '10 MUN'}</small>
                             </button>
                             <button
                               type="button"
@@ -1771,8 +1887,10 @@ export default function HUD({
                               onClick={() => gameRef.current?.useSelectedMedkit()}
                               title="Kit Médico [C] (+45 HP em 5s • 20 SUP • Recarga 20s)"
                             >
-                              <span>🩹 Médico [C]</span>
-                              <small>{leadSquad.medkitHealing ? 'CURANDO' : cdC > 0 ? `⏳ ${cdC}s` : '20 SUP'}</small>
+                              <span>
+                                <IconMedkit size={12} /> Médico [C]
+                              </span>
+                              <small>{leadSquad.medkitHealing ? 'CURANDO' : cdC > 0 ? `${cdC}s` : '20 SUP'}</small>
                             </button>
                           </>
                         );
@@ -2011,106 +2129,90 @@ export default function HUD({
       </HudPanel>
       )}
 
-      {/* BARRA SANDBOX (Oculta quando Editor de Mapa está aberto) */}
+      {/* BARRA SANDBOX COMPACTA E RECOLHÍVEL (Sem colidir com o topo direito ou avisos) */}
       {!editorDrawerOpen && isAdmin && hud.sandboxMode && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 8,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 35,
-            background: 'rgba(18, 20, 18, 0.94)',
-            border: '1px solid #c28e38',
-            borderRadius: 4,
-            padding: '6px 10px',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 4,
-            maxWidth: '92vw',
-            pointerEvents: 'auto',
-            alignItems: 'center',
-          }}
-        >
-          <strong style={{ fontSize: 11, color: '#c28e38', marginRight: 4 }}>🛠️ SANDBOX:</strong>
-          {[
-            { label: '+Fuzileiros', fac: 'player', id: 'rifle_squad' },
-            { label: '+Assalto', fac: 'player', id: 'assault_squad' },
-            { label: '+AT Bazuca', fac: 'player', id: 'at_javelin_squad' },
-            { label: '+Snipers', fac: 'player', id: 'sniper_squad' },
-            { label: '+Engenheiros', fac: 'player', id: 'engineer_squad' },
-            { label: '+Caminhão', fac: 'player', id: 'troop_transport' },
-            { label: '+Humvee', fac: 'player', id: 'humvee' },
-            { label: '+APC Stryker', fac: 'player', id: 'apc_stryker' },
-            { label: '+Tanque MBT', fac: 'player', id: 'mbt_tank' },
-            { label: '+Artilharia', fac: 'player', id: 'rocket_artillery' },
-          ].map((sp) => (
-            <button
-              key={sp.label}
-              type="button"
-              className="hud-btn"
-              style={{ fontSize: 10, padding: '3px 6px' }}
-              onClick={() => gameRef.current?.sandboxSpawnUnit(sp.fac, sp.id)}
-            >
-              {sp.label}
-            </button>
-          ))}
+        <div className="sandbox-floating-dock">
           <button
             type="button"
-            className="hud-btn"
-            style={{ fontSize: 10, padding: '3px 6px', borderColor: '#7f1d1d' }}
-            onClick={() => gameRef.current?.sandboxSpawnUnit('enemy_1', 'rifle_squad')}
+            className="hud-btn active"
+            style={{ fontSize: 10.5, padding: '3px 8px' }}
+            onClick={() => setSandboxCollapsed((v) => !v)}
           >
-            +Inimigos
+            <IconWrench size={12} /> SANDBOX {sandboxCollapsed ? '▸' : '▾'}
           </button>
-          <button
-            type="button"
-            className="hud-btn"
-            style={{ fontSize: 10, padding: '3px 6px', borderColor: '#7f1d1d' }}
-            onClick={() => gameRef.current?.sandboxSpawnUnit('enemy_1', 'mbt_tank', { holdPosition: true })}
-          >
-            +Tanque Inimigo
-          </button>
-          <button
-            type="button"
-            className="hud-btn"
-            style={{ fontSize: 10, padding: '3px 6px', borderColor: '#c28e38', color: '#facc15' }}
-            onClick={() => gameRef.current?.sandboxSpawnUnit('enemy_1', 'command_officer', { surrendered: true })}
-          >
-            +★ Comandante Rendido
-          </button>
-          <button
-            type="button"
-            className={`hud-btn ${hud.sandboxFogDisabled ? 'active' : ''}`}
-            style={{ fontSize: 10, padding: '3px 6px' }}
-            onClick={() => gameRef.current?.sandboxToggleFog()}
-          >
-            👁️ Névoa
-          </button>
-          <button
-            type="button"
-            className={`hud-btn ${hud.sandboxAiPaused ? 'active' : ''}`}
-            style={{ fontSize: 10, padding: '3px 6px' }}
-            onClick={() => gameRef.current?.sandboxToggleAi()}
-          >
-            🤖 {hud.sandboxAiPaused ? 'IA Pausada' : 'IA Ativa'}
-          </button>
-          <button
-            type="button"
-            className="hud-btn"
-            style={{ fontSize: 10, padding: '3px 6px' }}
-            onClick={() => gameRef.current?.sandboxHealAll()}
-          >
-            💚 Curar Tudo
-          </button>
-          <button
-            type="button"
-            className="hud-btn"
-            style={{ fontSize: 10, padding: '3px 6px' }}
-            onClick={() => gameRef.current?.sandboxDestroySelected()}
-          >
-            💥 Destruir Sel.
-          </button>
+          {!sandboxCollapsed && (
+            <>
+              {[
+                { label: '+Fuzileiros', fac: 'player', id: 'rifle_squad' },
+                { label: '+Assalto', fac: 'player', id: 'assault_squad' },
+                { label: '+AT Bazuca', fac: 'player', id: 'at_javelin_squad' },
+                { label: '+Snipers', fac: 'player', id: 'sniper_squad' },
+                { label: '+Engenheiros', fac: 'player', id: 'engineer_squad' },
+                { label: '+Humvee', fac: 'player', id: 'humvee' },
+                { label: '+APC', fac: 'player', id: 'apc_stryker' },
+                { label: '+Tanque MBT', fac: 'player', id: 'mbt_tank' },
+                { label: '+Artilharia', fac: 'player', id: 'rocket_artillery' },
+              ].map((sp) => (
+                <button
+                  key={sp.label}
+                  type="button"
+                  className="hud-btn"
+                  style={{ fontSize: 10, padding: '3px 6px' }}
+                  onClick={() => gameRef.current?.sandboxSpawnUnit(sp.fac, sp.id)}
+                >
+                  {sp.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="hud-btn"
+                style={{ fontSize: 10, padding: '3px 6px', borderColor: '#7f1d1d' }}
+                onClick={() => gameRef.current?.sandboxSpawnUnit('enemy_1', 'rifle_squad')}
+              >
+                +Inimigos
+              </button>
+              <button
+                type="button"
+                className="hud-btn"
+                style={{ fontSize: 10, padding: '3px 6px', borderColor: '#7f1d1d' }}
+                onClick={() => gameRef.current?.sandboxSpawnUnit('enemy_1', 'mbt_tank', { holdPosition: true })}
+              >
+                +Tanque Inim.
+              </button>
+              <button
+                type="button"
+                className={`hud-btn ${hud.sandboxFogDisabled ? 'active' : ''}`}
+                style={{ fontSize: 10, padding: '3px 6px' }}
+                onClick={() => gameRef.current?.sandboxToggleFog()}
+              >
+                Névoa
+              </button>
+              <button
+                type="button"
+                className={`hud-btn ${hud.sandboxAiPaused ? 'active' : ''}`}
+                style={{ fontSize: 10, padding: '3px 6px' }}
+                onClick={() => gameRef.current?.sandboxToggleAi()}
+              >
+                {hud.sandboxAiPaused ? 'IA Pausada' : 'IA Ativa'}
+              </button>
+              <button
+                type="button"
+                className="hud-btn"
+                style={{ fontSize: 10, padding: '3px 6px' }}
+                onClick={() => gameRef.current?.sandboxHealAll()}
+              >
+                Curar
+              </button>
+              <button
+                type="button"
+                className="hud-btn"
+                style={{ fontSize: 10, padding: '3px 6px' }}
+                onClick={() => gameRef.current?.sandboxDestroySelected()}
+              >
+                Destruir Sel.
+              </button>
+            </>
+          )}
         </div>
       )}
 

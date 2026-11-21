@@ -187,6 +187,19 @@ export const BASE_BUILDINGS = [
     sightRadius: 720,
     produces: [],
   },
+  {
+    id: 'drone_factory',
+    key: 'F5',
+    name: 'Fábrica de Drones Táticos',
+    short: 'Fábrica de Drones',
+    subtitle: 'Obrigatória p/ fabricar e lançar Drones UAV e FPV (Limite: 3 em estoque • 2 ativos)',
+    cost: 320,
+    fuelCost: 50,
+    maxHp: 1350,
+    radius: 90,
+    sightRadius: 740,
+    produces: [],
+  },
 ];
 
 export const AIR_DOCTRINES = [

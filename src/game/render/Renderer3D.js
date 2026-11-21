@@ -184,6 +184,16 @@ export class Renderer3D {
       antialias: true,
       powerPreference: 'high-performance',
     });
+    this._contextLost = false;
+    this._onContextLost = (e) => {
+      e.preventDefault();
+      this._contextLost = true;
+    };
+    this._onContextRestored = () => {
+      this._contextLost = false;
+    };
+    canvas.addEventListener('webglcontextlost', this._onContextLost, false);
+    canvas.addEventListener('webglcontextrestored', this._onContextRestored, false);
     this.renderer.setSize(this.width, this.height, false);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
@@ -1782,6 +1792,40 @@ export class Renderer3D {
       gateArm.scale.set(28, 2.2, 2.2);
       gateArm.position.set(0, 10, 56);
       g.add(gateArm);
+    } else if (bld.buildingType === 'drone_factory') {
+      // Fábrica de Drones Táticos: Hangar de Montagem, Pista de Decolagem Circular e Farol de Telemetria
+      const pad = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+      pad.scale.set(136, 4, 114);
+      pad.position.y = 2;
+      pad.receiveShadow = true;
+      g.add(pad);
+
+      const hangar = new THREE.Mesh(this.geometries.box, this.materials.concrete);
+      hangar.scale.set(66, 26, 56);
+      hangar.position.set(-22, 15, -10);
+      hangar.castShadow = true;
+      g.add(hangar);
+
+      const hangarRoof = new THREE.Mesh(
+        this.geometries.box,
+        new THREE.MeshStandardMaterial({ color: roofCol, roughness: 0.78 })
+      );
+      hangarRoof.scale.set(70, 5, 60);
+      hangarRoof.position.set(-22, 30, -10);
+      g.add(hangarRoof);
+
+      const launchPad = new THREE.Mesh(this.geometries.cyl, this.materials.sandbagOlive);
+      launchPad.scale.set(24, 3, 24);
+      launchPad.position.set(32, 4.5, 16);
+      g.add(launchPad);
+
+      const beacon = new THREE.Mesh(
+        this.geometries.sphere,
+        new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 0.9 })
+      );
+      beacon.scale.set(4, 4, 4);
+      beacon.position.set(-22, 36, -10);
+      g.add(beacon);
     } else {
       // Comando Aéreo / Radar: Edifício Técnico + Torre de Controle Envidraçada + Parabólica Rotativa + Geradores + Luzes Piscantes
       const pad = new THREE.Mesh(this.geometries.box, this.materials.concrete);
@@ -4905,7 +4949,7 @@ export class Renderer3D {
         bm.userData.lvl3Group.visible = (bld.level || 1) >= 3;
       }
       bm.visible =
-        bld.team === 'allies' ||
+        bld.team === (game.localPlayerTeam || 'allies') ||
         game.intelRevealed ||
         game.map.isPositionVisibleToAllies(bld.x, bld.y);
     }
@@ -4943,7 +4987,7 @@ export class Renderer3D {
       const garUnit = st.garrisonUnitId ? game.units.find((u) => u.id === st.garrisonUnitId) : null;
       const vis =
         garUnit &&
-        (garUnit.team === 'allies' || game.map.isPositionVisibleToAllies(st.x, st.y));
+        (garUnit.team === (game.localPlayerTeam || 'allies') || game.map.isPositionVisibleToAllies(st.x, st.y));
       sm.userData.muzzle.visible = Boolean(vis && garUnit.alive && garUnit.muzzleFlashTimer > 0);
     }
 
@@ -5089,7 +5133,7 @@ export class Renderer3D {
       }
 
       const visibleToPlayer =
-        u.team === 'allies' ||
+        u.team === (game.localPlayerTeam || 'allies') ||
         game.intelRevealed ||
         game.map.isPositionVisibleToAllies(u.x, u.y);
       mesh.visible = visibleToPlayer;
@@ -5292,10 +5336,11 @@ export class Renderer3D {
     }
 
     // 8. Projéteis Traçantes e Foguetes Explosivos 3D (acompanhando a altura real do terreno)
+    const localTeam = game.localPlayerTeam || 'allies';
     let bIdx = 0;
     for (const b of game.bullets) {
       if (bIdx >= this.bulletPool.length) break;
-      if (b.team === 'enemies' && !game.map.isPositionVisibleToAllies(b.x, b.y)) continue;
+      if (b.team !== localTeam && !game.map.isPositionVisibleToAllies(b.x, b.y)) continue;
       const bm = this.bulletPool[bIdx++];
       bm.visible = true;
       const gy = getTerrainHeight(b.x, b.y, game.map);
@@ -5428,7 +5473,9 @@ export class Renderer3D {
       this.waypointDots[i].visible = false;
     }
 
-    this.renderer.render(this.scene, this.camera);
+    if (!this._contextLost) {
+      this.renderer.render(this.scene, this.camera);
+    }
     this.vfx?.update(dt);
     this._renderTacticalOverlay2D(game);
   }
@@ -5948,7 +5995,7 @@ export class Renderer3D {
     for (const bld of game.baseBuildings || []) {
       if (bld.alive === false) continue;
       const vis =
-        bld.team === 'allies' ||
+        bld.team === (game.localPlayerTeam || 'allies') ||
         game.intelRevealed ||
         game.map.isPositionVisibleToAllies(bld.x, bld.y);
       if (!vis) continue;
@@ -6049,7 +6096,7 @@ export class Renderer3D {
     for (const u of game.units) {
       if (!u.alive || u.captured || u.embarkedInId) continue;
       if (
-        u.team === 'enemies' &&
+        u.team !== (game.localPlayerTeam || 'allies') &&
         !game.intelRevealed &&
         !game.map.isPositionVisibleToAllies(u.x, u.y)
       ) {
@@ -6324,6 +6371,10 @@ export class Renderer3D {
   }
 
   destroy() {
+    if (this.canvas && this._onContextLost) {
+      this.canvas.removeEventListener('webglcontextlost', this._onContextLost, false);
+      this.canvas.removeEventListener('webglcontextrestored', this._onContextRestored, false);
+    }
     this.renderer.dispose();
   }
 }

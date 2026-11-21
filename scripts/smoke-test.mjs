@@ -580,7 +580,21 @@ rtsGame.ammo = 1500;
 rtsGame.fuel = 1000;
 assert.equal(rtsGame.startResearch('uav_recon', 0.75), true, 'Deve iniciar pesquisa Drone UAV no QG Nv. 3 + 450 CP');
 rtsGame._updateResearch(30);
-assert.equal(rtsGame.launchDrone('uav_recon', 4800, 4800), true, 'Deve lançar Drone Quadricóptero UAV 3D após pesquisa');
+assert.equal(rtsGame.launchDrone('uav_recon', 4800, 4800), false, 'Sem Fábrica de Drones não deve lançar Drone');
+rtsGame.baseBuildings.push({
+  id: 'smoke_drone_factory',
+  buildingType: 'drone_factory',
+  team: 'allies',
+  faction: 'player',
+  x: 1100,
+  y: 4400,
+  hp: 1350,
+  maxHp: 1350,
+  alive: true,
+});
+assert.equal(rtsGame.queueDroneProduction('uav_recon'), true, 'Deve fabricar Drone UAV na Fábrica de Drones');
+rtsGame._updateDrones(10);
+assert.equal(rtsGame.launchDrone('uav_recon', 4800, 4800), true, 'Deve lançar Drone Quadricóptero UAV 3D após fabricação');
 assert.equal(rtsGame.activeDrones.length, 1, 'Drone UAV deve estar ativo no campo');
 rtsGame._updateDrones(0.2);
 assert.ok(rtsGame.map.tempVisionZones.length >= 1, 'Drone UAV deve revelar névoa de guerra sem travar');
@@ -590,6 +604,8 @@ rtsGame.ammo = 1500;
 rtsGame.fuel = 1000;
 assert.equal(rtsGame.startResearch('fpv_kamikaze', 0.75), true, 'Deve iniciar pesquisa Drone Kamikaze FPV');
 rtsGame._updateResearch(35);
+assert.equal(rtsGame.queueDroneProduction('fpv_kamikaze'), true, 'Deve fabricar Drone FPV na Fábrica de Drones');
+rtsGame._updateDrones(12);
 assert.equal(rtsGame.launchDrone('fpv_kamikaze', 4800, 4800), true, 'Deve lançar Drone FPV Kamikaze');
 rtsGame._updateDrones(0.2);
 
@@ -772,6 +788,8 @@ rtsGame.ammo = 500;
 rtsGame.fuel = 500;
 rtsGame.constructBaseBuilding('motor_pool');
 const motorPool = rtsGame.baseBuildings.find((b) => b.faction === 'player' && b.buildingType === 'motor_pool');
+assert.equal(rtsGame.queueUnitAtBuilding(motorPool.id, 'mbt_tank'), false, 'Não deve enfileirar Tanque MBT sem QG Nível 3');
+rtsGame.hqLevel = 2;
 const supBeforeQ = rtsGame.supplies;
 assert.equal(rtsGame.queueUnitAtBuilding(motorPool.id, 'apc_stryker'), true, 'Deve enfileirar APC BTR/Stryker na Fábrica');
 assert.equal(motorPool.productionQueue.length, 1, 'Fila deve conter 1 item');

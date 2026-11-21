@@ -24,8 +24,8 @@ export class BattlefieldMap {
       this.mapId === 'el_alamein_ridge'
         ? 'desert'
         : this.mapId === 'bastogne_winter'
-        ? 'winter'
-        : 'rural';
+          ? 'winter'
+          : 'rural';
     this.seed = seed;
     this.size = BATTLEFIELD_SIZE;
     this.fogSize = FOG_GRID_SIZE;
@@ -757,7 +757,7 @@ export class BattlefieldMap {
       try {
         const localRaw = localStorage.getItem(`COF_CUSTOM_MAP_${this.mapId}`);
         if (localRaw) override = JSON.parse(localRaw);
-      } catch {}
+      } catch { }
     }
     if (!override || typeof override !== 'object') return;
     if (Array.isArray(override.structures)) {
@@ -939,26 +939,26 @@ export class BattlefieldMap {
     // 1. Zonas de Floresta Fechada / Oásis (15 a 30 árvores + arbustos para Camuflagem & Emboscada)
     const zoneCandidates = isDesert
       ? [
-          { x: 2350, y: 3650, r: 215, name: 'Oásis Avançado Oeste' },
-          { x: 3500, y: 2900, r: 240, name: 'Oásis Norte' },
-          { x: 6100, y: 6700, r: 245, name: 'Oásis Sul' },
-          { x: 2500, y: 6900, r: 195, name: 'Bosque Árido Oeste' },
-          { x: 7100, y: 2700, r: 195, name: 'Bosque Árido Leste' },
-        ]
+        { x: 2350, y: 3650, r: 215, name: 'Oásis Avançado Oeste' },
+        { x: 3500, y: 2900, r: 240, name: 'Oásis Norte' },
+        { x: 6100, y: 6700, r: 245, name: 'Oásis Sul' },
+        { x: 2500, y: 6900, r: 195, name: 'Bosque Árido Oeste' },
+        { x: 7100, y: 2700, r: 195, name: 'Bosque Árido Leste' },
+      ]
       : [
-          { x: 2180, y: 3650, r: 215, name: 'Bosque da Vanguarda' },
-          { x: 2420, y: 5250, r: 215, name: 'Mata do Flanco Sul' },
-          { x: 2650, y: 2400, r: 230, name: 'Bosque Noroeste' },
-          { x: 4800, y: 2150, r: 245, name: 'Mata Norte' },
-          { x: 6950, y: 2400, r: 230, name: 'Bosque Nordeste' },
-          { x: 3350, y: 4100, r: 215, name: 'Mata Central Oeste' },
-          { x: 6250, y: 5500, r: 215, name: 'Mata Central Leste' },
-          { x: 2650, y: 7200, r: 235, name: 'Bosque Sudoeste' },
-          { x: 4800, y: 7450, r: 245, name: 'Mata Sul' },
-          { x: 6950, y: 7200, r: 235, name: 'Bosque Sudeste' },
-          { x: 3800, y: 5850, r: 210, name: 'Bosque da Emboscada O' },
-          { x: 5800, y: 3750, r: 210, name: 'Bosque da Emboscada L' },
-        ];
+        { x: 2180, y: 3650, r: 215, name: 'Bosque da Vanguarda' },
+        { x: 2420, y: 5250, r: 215, name: 'Mata do Flanco Sul' },
+        { x: 2650, y: 2400, r: 230, name: 'Bosque Noroeste' },
+        { x: 4800, y: 2150, r: 245, name: 'Mata Norte' },
+        { x: 6950, y: 2400, r: 230, name: 'Bosque Nordeste' },
+        { x: 3350, y: 4100, r: 215, name: 'Mata Central Oeste' },
+        { x: 6250, y: 5500, r: 215, name: 'Mata Central Leste' },
+        { x: 2650, y: 7200, r: 235, name: 'Bosque Sudoeste' },
+        { x: 4800, y: 7450, r: 245, name: 'Mata Sul' },
+        { x: 6950, y: 7200, r: 235, name: 'Bosque Sudeste' },
+        { x: 3800, y: 5850, r: 210, name: 'Bosque da Emboscada O' },
+        { x: 5800, y: 3750, r: 210, name: 'Bosque da Emboscada L' },
+      ];
 
     for (let zi = 0; zi < zoneCandidates.length; zi++) {
       const zc = zoneCandidates[zi];
@@ -1092,8 +1092,8 @@ export class BattlefieldMap {
       const typesForTheme = isDesert
         ? ['adobe_house', 'adobe_house', 'oil_refinery', 'column_ruins']
         : isWinter
-        ? ['two_story', 'warehouse', 'brick_ruin', 'bunker']
-        : ['two_story', 'warehouse', 'brick_ruin', 'barn'];
+          ? ['two_story', 'warehouse', 'brick_ruin', 'bunker']
+          : ['two_story', 'warehouse', 'brick_ruin', 'barn'];
 
       for (const side of [-1, 1]) {
         const bx = clamp(sec.x + side * (165 + (sIdx % 3) * 20), 420, this.size - 420);
@@ -1185,10 +1185,10 @@ export class BattlefieldMap {
       const bType = isDesert
         ? 'adobe_house'
         : idx % 3 === 0
-        ? 'two_story'
-        : idx % 3 === 1
-        ? 'warehouse'
-        : 'brick_ruin';
+          ? 'two_story'
+          : idx % 3 === 1
+            ? 'warehouse'
+            : 'brick_ruin';
       const added = addStructureSafe({
         id: `extra_blk_bld_${idx}`,
         name: isDesert ? 'Sobrado de Adobe' : bType === 'warehouse' ? 'Galpão do Quarteirão' : 'Prédio do Quarteirão',
@@ -1245,7 +1245,7 @@ export class BattlefieldMap {
     }
   }
 
-  isLineBlockedByStructures(x1, y1, x2, y2, ignoreStructureId = null) {
+  isLineBlockedByStructures(x1, y1, x2, y2, ignoreStructureId = null, ignoreTargetStructureId = null) {
     const dx = x2 - x1;
     const dy = y2 - y1;
     const lenSq = dx * dx + dy * dy;
@@ -1255,7 +1255,8 @@ export class BattlefieldMap {
     const minY = Math.min(y1, y2) - 120;
     const maxY = Math.max(y1, y2) + 120;
     for (const st of this.structures || []) {
-      if (st.id === ignoreStructureId) continue;
+      if (st.destroyed) continue;
+      if (st.id === ignoreStructureId || st.id === ignoreTargetStructureId) continue;
       if (st.x < minX || st.x > maxX || st.y < minY || st.y > maxY) continue;
       const t = clamp(((st.x - x1) * dx + (st.y - y1) * dy) / lenSq, 0.05, 0.95);
       const px = x1 + t * dx;
@@ -1995,7 +1996,8 @@ export class BattlefieldMap {
     this.tempVisionZones.push({ x, y, radius, timer: duration });
   }
 
-  updateFogOfWar(units, baseBuildings = [], dt = 0.05) {
+  updateFogOfWar(units, baseBuildings = [], dt = 0.05, visionTeam = this.visionTeam || 'allies') {
+    this.visionTeam = visionTeam;
     // 1. Rebaixa células com Visão Ativa (2) para Explorado sem Visão / Shroud (1)
     const len = this.fogGrid.length;
     for (let i = 0; i < len; i++) {
@@ -2009,29 +2011,31 @@ export class BattlefieldMap {
     }
     this.tempVisionZones = this.tempVisionZones.filter((z) => z.timer > 0);
 
-    // 3. Visão do QG Aliado (e QG da IA Aliada no 2v2)
-    this._revealCircle(this.hqs.player.x, this.hqs.player.y, 1250);
-    if (this.hqs.ally_ai) {
-      this._revealCircle(this.hqs.ally_ai.x, this.hqs.ally_ai.y, 980);
+    // 3. Visão dos QGs pertencentes ao time do jogador local ('allies' ou 'enemies')
+    for (const [key, hq] of Object.entries(this.hqs || {})) {
+      if (hq && hq.team === visionTeam) {
+        const hqRadius = key === 'player' || key === 'enemy_1' ? 1250 : 980;
+        this._revealCircle(hq.x, hq.y, hqRadius);
+      }
     }
 
-    // 4. Visão dos Prédios da Base Construídos (ex: Centro de Comando Aéreo/Radar tem grande visão)
+    // 4. Visão dos Prédios da Base Construídos do time local
     for (const b of baseBuildings) {
-      if (b.team === 'allies') {
+      if (b.team === visionTeam) {
         this._revealCircle(b.x, b.y, b.sightRadius || 560);
       }
     }
 
-    // 5. Visão dos Setores Estratégicos Dominados pelos Aliados
+    // 5. Visão dos Setores Estratégicos Dominados pelo time local
     for (const sec of this.sectors) {
-      if (sec.owner === 'allies') {
+      if (sec.owner === visionTeam) {
         this._revealCircle(sec.x, sec.y, 440);
       }
     }
 
-    // 6. Visão de cada Esquadrão, Veículo, Sniper e Oficial Aliado Vivo
+    // 6. Visão de cada Esquadrão, Veículo, Sniper e Oficial Vivo do time local
     for (const u of units) {
-      if (!u.alive || u.captured || u.team !== 'allies') continue;
+      if (!u.alive || u.captured || u.team !== visionTeam) continue;
       let sight = u.spec.sightRadius || 520;
       if (u.garrisonedBuildingId) sight *= 1.32; // Bônus de visão no alto das janelas do prédio
       this._revealCircle(u.x, u.y, sight);

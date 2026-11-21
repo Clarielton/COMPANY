@@ -3,7 +3,7 @@
 // Lógica pura (sem React/DOM obrigatório) para poder ser testada no Node.
 // =============================================================================
 
-export const HUD_LAYOUT_STORAGE_KEY = 'cof_hud_layout_v1';
+export const HUD_LAYOUT_STORAGE_KEY = 'cof_hud_layout_v2';
 
 export const HUD_SCALE_MIN = 0.5;
 export const HUD_SCALE_MAX = 1.8;
@@ -22,7 +22,7 @@ export const HUD_PANEL_BY_ID = Object.fromEntries(HUD_PANELS.map((p) => [p.id, p
 
 export const DEFAULT_PANEL_STATE = Object.freeze({
   scale: 1,
-  pinned: false,
+  pinned: true,
   collapsed: false,
   x: null, // posição livre (px na tela) após arrastar; null = posição padrão ancorada
   y: null,
@@ -38,8 +38,8 @@ export function clampHudScale(value) {
 export function computeAutoHudScale(width, height) {
   const w = Number(width) || 1680;
   const h = Number(height) || 940;
-  const s = Math.min(w / 1680, h / 940);
-  return Math.round(Math.min(1.1, Math.max(0.55, s)) * 100) / 100;
+  const s = Math.min(w / 1680, h / 940) * 1.08;
+  return Math.round(Math.min(1.16, Math.max(0.68, s)) * 100) / 100;
 }
 
 export function sanitizePanelState(raw) {

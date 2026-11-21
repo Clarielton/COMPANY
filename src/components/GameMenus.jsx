@@ -15,6 +15,12 @@ import {
   IconPlay,
   IconGold,
   IconLogout,
+  IconBell,
+  IconInfantry,
+  IconBunker,
+  IconDrone,
+  IconWrench,
+  IconBolt,
 } from './MilIcons.jsx';
 import { loadStoredFirebaseConfig, networkManager } from '../game/net/NetworkManager.js';
 import {
@@ -123,7 +129,21 @@ export default function GameMenus({
     return cfg ? JSON.stringify(cfg, null, 2) : '';
   });
   const [fbError, setFbError] = useState('');
+  const [showUpdatesPopup, setShowUpdatesPopup] = useState(() => {
+    try {
+      return localStorage.getItem('cof_updates_seen_v2026_11') !== '1';
+    } catch {
+      return false;
+    }
+  });
   const fileInputRef = useRef(null);
+
+  const closeUpdatesPopup = () => {
+    try {
+      localStorage.setItem('cof_updates_seen_v2026_11', '1');
+    } catch {}
+    setShowUpdatesPopup(false);
+  };
 
   useEffect(() => {
     const unsub = networkManager.subscribe(setNet);
@@ -616,6 +636,16 @@ export default function GameMenus({
                 </div>
               </div>
 
+              <button
+                type="button"
+                className="mil-pill"
+                style={{ borderColor: '#d4a338', color: '#fde68a' }}
+                onClick={() => setShowUpdatesPopup(true)}
+                title="Ver últimas atualizações do jogo"
+              >
+                <IconBell size={14} /> Novidades
+              </button>
+
               {isAdmin && (
                 <button
                   type="button"
@@ -639,6 +669,119 @@ export default function GameMenus({
             </div>
           )}
         </header>
+
+        {showUpdatesPopup && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 9999,
+              background: 'rgba(6, 10, 14, 0.82)',
+              backdropFilter: 'blur(6px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 16,
+            }}
+            onClick={closeUpdatesPopup}
+          >
+            <div
+              className="mp-card"
+              style={{
+                maxWidth: 620,
+                width: '100%',
+                borderColor: '#c28e38',
+                boxShadow: '0 24px 60px rgba(0,0,0,0.75)',
+                margin: 0,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mp-card-head">
+                <div>
+                  <span className="mp-kicker" style={{ color: '#f59e0b' }}>
+                    BOLETIM OFICIAL DE COMBATE
+                  </span>
+                  <h3 style={{ margin: 0, color: '#fef3c7' }}>
+                    ÚLTIMAS ATUALIZAÇÕES DO JOGO
+                  </h3>
+                </div>
+                <button type="button" className="mil-pill" onClick={closeUpdatesPopup}>
+                  ✕ Fechar
+                </button>
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  marginTop: 12,
+                  maxHeight: '58vh',
+                  overflowY: 'auto',
+                  paddingRight: 4,
+                }}
+              >
+                {[
+                  {
+                    Icon: IconInfantry,
+                    title: 'Movimentação Mais Fluida & Tiro em Movimento',
+                    desc: 'Soldados respondem mais rápido às ordens, giram sem trepidação ao contornar obstáculos e agora atiram continuamente enquanto caminham.',
+                  },
+                  {
+                    Icon: IconBunker,
+                    title: 'Invasão de Construções pela Tropa de Assalto',
+                    desc: 'Clique com o botão direito em casas ocupadas pelo inimigo usando a Tropa de Assalto para invadir, expulsar os defensores e tomar o prédio. Tanques e veículos também concentram fogo pesado em construções ocupadas.',
+                  },
+                  {
+                    Icon: IconDrone,
+                    title: 'Nova Fábrica de Drones Táticos [F5]',
+                    desc: 'Construa a Fábrica de Drones na sua base para fabricar e lançar Drones UAV Recon e FPV Kamikaze diretamente do hangar, com estoque estratégico controlado.',
+                  },
+                  {
+                    Icon: IconWrench,
+                    title: 'Engenheiros Multifunção em Campo',
+                    desc: 'Engenheiros de Combate agora reparam automaticamente veículos danificados, prédios da base e muralhas fortificadas aliadas.',
+                  },
+                  {
+                    Icon: IconBolt,
+                    title: 'Equipe Antitanque com Munição Explosiva HEAT',
+                    desc: 'Foguetes antitanque agora contam com sopro traseiro, rastro de fumaça e detonação explosiva em área contra blindados e fortificações.',
+                  },
+                  {
+                    Icon: IconCrosshair,
+                    title: 'Batalha Online por Equipes & Campo de Visão Dedicado',
+                    desc: 'Cada comandante controla exclusivamente suas próprias tropas e prédios em partidas online, com Névoa de Guerra independente para cada lado.',
+                  },
+                ].map((item) => {
+                  const ItemIcon = item.Icon;
+                  return (
+                  <div
+                    key={item.title}
+                    style={{
+                      background: 'rgba(20, 24, 28, 0.9)',
+                      border: '1px solid rgba(194, 142, 56, 0.28)',
+                      borderRadius: 6,
+                      padding: '10px 12px',
+                    }}
+                  >
+                    <strong style={{ color: '#fde68a', display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
+                      <ItemIcon size={15} /> {item.title}
+                    </strong>
+                    <span style={{ color: '#e5e7eb', fontSize: '0.88rem', lineHeight: 1.4 }}>
+                      {item.desc}
+                    </span>
+                  </div>
+                );})}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+                <button type="button" className="mil-btn-primary" onClick={closeUpdatesPopup}>
+                  ENTENDI — IR PARA O FRONT
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* LAYOUT EM 2 COLUNAS: NAVEGAÇÃO LATERAL TÁTICA + PAINEL CENTRAL DINÂMICO */}
         <div className="mil-hub-columns">
@@ -805,7 +948,17 @@ export default function GameMenus({
                             <IconCompass size={16} /> ABRIR EDITOR DE MAPA (LOCAL)
                           </button>
                         )}
-                        {isAdmin && (
+                        <button
+                type="button"
+                className="mil-pill"
+                style={{ borderColor: '#d4a338', color: '#fde68a' }}
+                onClick={() => setShowUpdatesPopup(true)}
+                title="Ver últimas atualizações do jogo"
+              >
+                <IconBell size={14} /> Novidades
+              </button>
+
+              {isAdmin && (
                           <button
                             type="button"
                             className="mil-btn-secondary"
@@ -1467,7 +1620,17 @@ export default function GameMenus({
                     ▸ CONTINUAR SALVA ({savedBattles[0].gameMode?.toUpperCase()})
                   </button>
                 )}
-                {isAdmin && (
+                <button
+                type="button"
+                className="mil-pill"
+                style={{ borderColor: '#d4a338', color: '#fde68a' }}
+                onClick={() => setShowUpdatesPopup(true)}
+                title="Ver últimas atualizações do jogo"
+              >
+                <IconBell size={14} /> Novidades
+              </button>
+
+              {isAdmin && (
                   <button
                     type="button"
                     className="mil-btn-secondary"

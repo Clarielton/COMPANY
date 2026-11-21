@@ -184,6 +184,10 @@ export class Game {
     this.activeResearch = null;
     this.activeDrones = [];
     this.activeDroneLaunchMode = null; // 'uav_recon' | 'fpv_kamikaze' | null
+    this.droneStock = { uav_recon: 0, fpv_kamikaze: 0 };
+    this.droneQueue = [];
+    this.maxDroneStock = 3;
+    this.maxActiveDrones = 2;
     this.radioInterceptTimer = 0;
 
     // Estatísticas da Batalha & Fim de Jogo
@@ -218,10 +222,21 @@ export class Game {
     this.hudSyncTimer = 0;
     this.rafId = null;
     this.lastTs = 0;
+    this.localPlayerFaction = 'player';
+    this.localPlayerTeam = 'allies';
 
     // Armazenamento em memória de fallback (caso localStorage não esteja disponível em testes Node.js)
     this._memorySaves = [];
     this.saveStorageKey = 'cof_rts_saved_battles_v1';
+    this.autoSaveTimer = 30;
+    if (typeof window !== 'undefined') {
+      this._onAutoSavePageHide = () => {
+        if (!this.menuActive && !this.gameOver && !this.spectatorMode && !this.isMultiplayer) {
+          this.autoSaveBattle();
+        }
+      };
+      window.addEventListener('beforeunload', this._onAutoSavePageHide);
+    }
 
     // Instâncias auxiliares para compatibilidade com smoke-test
     this.cityMap = new CityMap(2077);
@@ -237,6 +252,14 @@ export class Game {
     }
 
     this.setupMatch(this.gameMode, this.startingResourcesPreset);
+  }
+
+  get myFaction() {
+    return this.localPlayerFaction || 'player';
+  }
+
+  get myTeam() {
+    return this.localPlayerTeam || 'allies';
   }
 
   setTouchControlMode(mode) {
@@ -353,10 +376,10 @@ export class Game {
     const tx = clamp(wx, 100, BATTLEFIELD_SIZE - 100);
     const ty = clamp(wy, 100, BATTLEFIELD_SIZE - 100);
 
-    // Se um prédio da base aliada estiver selecionado e nenhum esquadrão móvel selecionado, define Ponto de Encontro (Rally Point)
-    const selectedUnits = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected);
+    // Se um prédio da base local estiver selecionado e nenhum esquadrão móvel selecionado, define Ponto de Encontro (Rally Point)
+    const selectedUnits = this.units.filter((u) => u.alive && u.faction === this.myFaction && u.selected);
     if (selectedUnits.length === 0 && this.selectedBuildingId) {
-      const bld = this.baseBuildings.find((b) => b.id === this.selectedBuildingId && b.team === 'allies' && b.alive !== false);
+      const bld = this.baseBuildings.find((b) => b.id === this.selectedBuildingId && b.team === this.myTeam && b.alive !== false);
       if (bld) {
         bld.rallyX = tx;
         bld.rallyY = ty;
@@ -441,14 +464,14 @@ export class Game {
 
   repairNearestVehicleForSelected() {
     const engineers = this.units.filter(
-      (u) => u.alive && u.faction === 'player' && u.selected && (u.spec.id === 'engineers' || u.spec.canBuild)
+      (u) => u.alive && u.faction === this.myFaction && u.selected && (u.spec.id === 'engineers' || u.spec.canBuild)
     );
     if (engineers.length === 0) return false;
     const ref = engineers[0];
     let bestVeh = null;
     let bestDist = Infinity;
     for (const v of this.units) {
-      if (!v.alive || v.team !== 'allies' || v.spec.type !== 'vehicle' || v.hp >= v.maxHp) continue;
+      if (!v.alive || v.team !== this.myTeam || v.spec.type !== 'vehicle' || v.hp >= v.maxHp) continue;
       const scoreDist = dist(ref.x, ref.y, v.x, v.y) * (v.isBrokenDown ? 0.45 : 1.0);
       if (scoreDist < bestDist) {
         bestDist = scoreDist;
@@ -500,6 +523,16 @@ export class Game {
     this.localSlot = localSlot;
     this.localPlayerFaction = localSlot === 2 ? 'enemy_1' : 'player';
     this.localPlayerTeam = localSlot === 2 ? 'enemies' : 'allies';
+    if (this.map) {
+      this.map.visionTeam = this.localPlayerTeam;
+      this.map.resetFog();
+      this.map.updateFogOfWar(
+        this.units,
+        this.baseBuildings.filter((b) => b.alive !== false),
+        0.05,
+        this.localPlayerTeam
+      );
+    }
     this.mpHeartbeatTimer = 1.5;
 
     const mapId = room?.mapId || 'normandy_fields';
@@ -511,14 +544,31 @@ export class Game {
     this.map = new BattlefieldMap({ seed: mapSeed, mapId });
     this.renderer?.buildWorld(this.map);
 
-    this.setupMatch('1v1', startingRes, mapId, 'medium');
+    this.setupMatch(room?.mode === '2v2' ? '2v2' : '1v1', startingRes, mapId, 'medium');
     this.isMultiplayer = true;
     this.isCampaign = isCampaign;
     this.campaignDay = room?.campaignDay || 1;
     this.networkManager = networkManager;
     this.localSlot = localSlot;
-    this.localPlayerFaction = localSlot === 2 ? 'enemy_1' : 'player';
-    this.localPlayerTeam = localSlot === 2 ? 'enemies' : 'allies';
+    const slotMap = {
+      1: { faction: 'player', team: 'allies' },
+      2: { faction: 'enemy_1', team: 'enemies' },
+      3: { faction: 'ally_ai', team: 'allies' },
+      4: { faction: 'enemy_2', team: 'enemies' },
+    };
+    const slotMeta = slotMap[localSlot] || slotMap[1];
+    this.localPlayerFaction = slotMeta.faction;
+    this.localPlayerTeam = slotMeta.team;
+    if (this.map) {
+      this.map.visionTeam = this.localPlayerTeam;
+      this.map.resetFog();
+      this.map.updateFogOfWar(
+        this.units,
+        this.baseBuildings.filter((b) => b.alive !== false),
+        0.05,
+        this.localPlayerTeam
+      );
+    }
 
     // Aplicação Automática dos Pacotes Pagos Exclusivos de Campanha de 15 Dias
     if (isCampaign && networkManager) {
@@ -593,7 +643,9 @@ export class Game {
 
   _handleRemoteCommand(cmd) {
     if (!cmd || cmd.slot === this.localSlot) return;
-    const remoteFaction = cmd.slot === 2 ? 'enemy_1' : 'player';
+    const slotFactionMap = { 1: 'player', 2: 'enemy_1', 3: 'ally_ai', 4: 'enemy_2' };
+    const remoteFaction = slotFactionMap[cmd.slot] || 'enemy_1';
+    if (remoteFaction === this.myFaction) return;
     const matchingUnits = Array.isArray(cmd.unitIds)
       ? this.units.filter((u) => u.alive && u.faction === remoteFaction && cmd.unitIds.includes(u.id))
       : this.units.filter((u) => u.alive && u.faction === remoteFaction).slice(0, 2);
@@ -778,6 +830,8 @@ export class Game {
     this.activeResearch = null;
     this.activeDrones = [];
     this.activeDroneLaunchMode = null;
+    this.droneStock = { uav_recon: 0, fpv_kamikaze: 0 };
+    this.droneQueue = [];
     this.radioInterceptTimer = 0;
     this.hoverPathPreview = null;
     this.matchStats = {
@@ -1127,7 +1181,7 @@ export class Game {
   }
 
   selectBaseBuilding(buildingId) {
-    const bld = this.baseBuildings.find((b) => b.id === buildingId && b.team === 'allies' && b.alive !== false);
+    const bld = this.baseBuildings.find((b) => b.id === buildingId && b.faction === this.myFaction && b.alive !== false);
     if (!bld) {
       this.selectedBuildingId = null;
     this.selectedStructureId = null;
@@ -1144,10 +1198,10 @@ export class Game {
   // Enfileira produção de unidade diretamente em um Prédio da Base (com barra de progresso e Ponto de Encontro)
   queueUnitAtBuilding(buildingId, unitId) {
     const bld =
-      this.baseBuildings.find((b) => b.id === buildingId && b.team === 'allies' && b.alive !== false) ||
+      this.baseBuildings.find((b) => b.id === buildingId && b.faction === this.myFaction && b.alive !== false) ||
       this.baseBuildings.find(
         (b) =>
-          b.team === 'allies' &&
+          b.faction === this.myFaction &&
           b.alive !== false &&
           b.produces &&
           b.produces.includes(unitId)
@@ -1155,6 +1209,16 @@ export class Game {
     const cmd = COMMAND_BY_ID[unitId];
     if (!bld || !cmd) return false;
     this.audio.resume();
+
+    if ((cmd.requiredHqLevel || 1) > this.hqLevel) {
+      this.notify(
+        `🔒 REQUER QG NÍVEL ${cmd.requiredHqLevel}`,
+        `${cmd.short} exige evoluir o Quartel-General para o Nível ${cmd.requiredHqLevel}.`,
+        '#c94a38'
+      );
+      this.audio.play('empty');
+      return false;
+    }
 
     const supCost = cmd.cost || 0;
     const ammoCost = cmd.ammoCost || 0;
@@ -1197,7 +1261,7 @@ export class Game {
 
   cancelBuildingQueueItem(buildingId, queueIdx) {
     const bld = this.baseBuildings.find(
-      (b) => b.id === buildingId && b.team === 'allies' && b.alive !== false
+      (b) => b.id === buildingId && b.faction === this.myFaction && b.alive !== false
     );
     if (!bld || !Array.isArray(bld.productionQueue) || queueIdx < 0 || queueIdx >= bld.productionQueue.length) {
       return false;
@@ -1425,7 +1489,7 @@ export class Game {
       this.map.fogGrid.fill(2);
     } else {
       this.map.resetFog();
-      this.map.updateFogOfWar(this.units, this.baseBuildings, 0.05);
+      this.map.updateFogOfWar(this.units, this.baseBuildings, 0.05, this.myTeam);
     }
     this.audio.play('switch');
     this.notify(
@@ -1488,11 +1552,11 @@ export class Game {
     this.audio.resume();
 
     const alreadyBuilt = this.baseBuildings.some(
-      (b) => b.team === 'allies' && b.buildingType === buildingId && b.alive !== false
+      (b) => b.faction === this.myFaction && b.buildingType === buildingId && b.alive !== false
     );
     if (alreadyBuilt) {
       const existing = this.baseBuildings.find(
-        (b) => b.team === 'allies' && b.buildingType === buildingId && b.alive !== false
+        (b) => b.faction === this.myFaction && b.buildingType === buildingId && b.alive !== false
       );
       if (existing) this.selectBaseBuilding(existing.id);
       this.notify('INSTALAÇÃO JÁ CONSTRUÍDA', `${spec.name} selecionada para produção.`, '#d4a338');
@@ -1514,20 +1578,22 @@ export class Game {
     this.supplies -= supCost;
     this.fuel -= fuelCost;
 
-    const hq = this.map.hqs.player;
+    const hq = this.map.hqs[this.myFaction] || this.map.hqs.player;
+    const xSign = this.myTeam === 'enemies' ? -1 : 1;
     const offsets = {
-      spec_ops_center: { dx: -160, dy: -410 },
-      motor_pool: { dx: -160, dy: 410 },
-      air_command: { dx: -510, dy: -270 },
-      pow_camp: { dx: -510, dy: 270 },
+      spec_ops_center: { dx: -160 * xSign, dy: -410 },
+      motor_pool: { dx: -160 * xSign, dy: 410 },
+      air_command: { dx: -510 * xSign, dy: -270 },
+      pow_camp: { dx: -510 * xSign, dy: 270 },
+      drone_factory: { dx: 180 * xSign, dy: -410 },
     };
-    const off = offsets[buildingId] || { dx: -480, dy: 310 };
+    const off = offsets[buildingId] || { dx: -480 * xSign, dy: 310 };
     let bx = clamp(hq.x + off.dx, 260, this.map.size - 260);
     let by = clamp(hq.y + off.dy, 260, this.map.size - 260);
 
     // Regra de Posicionamento Anti-Colisão (>= 14m = 140u entre bordas) e fora das estradas principais
     const myRad = spec.radius || 90;
-    const others = this.baseBuildings.filter((b) => b.alive !== false && b.team === 'allies');
+    const others = this.baseBuildings.filter((b) => b.alive !== false && b.team === this.myTeam);
     for (let attempt = 0; attempt < 24; attempt++) {
       const onRoad = this.map.isOnRoad?.(bx, by, myRad + 28);
       const overlaps = others.some(
@@ -1537,25 +1603,25 @@ export class Game {
       const stepDir = off.dy >= 0 ? 1 : -1;
       by = clamp(by + stepDir * 85, 260, this.map.size - 260);
       if (attempt % 4 === 3) {
-        bx = clamp(bx - 90, 260, this.map.size - 260);
+        bx = clamp(bx - 90 * xSign, 260, this.map.size - 260);
       }
     }
 
     const newBld = {
-      id: `ally_base_${buildingId}_${Date.now()}`,
+      id: `${this.myFaction}_base_${buildingId}_${Date.now()}`,
       buildingType: buildingId,
       name: spec.name,
       short: spec.short,
       subtitle: spec.subtitle,
-      team: 'allies',
-      faction: 'player',
+      team: this.myTeam,
+      faction: this.myFaction,
       x: bx,
       y: by,
       sightRadius: spec.sightRadius || 620,
       hp: spec.maxHp || 1500,
       maxHp: spec.maxHp || 1500,
       radius: spec.radius || 84,
-      rallyX: bx + 560,
+      rallyX: bx + 560 * xSign,
       rallyY: by,
       produces: [...(spec.produces || [])],
       productionQueue: [],
@@ -1580,7 +1646,7 @@ export class Game {
       'Clique no prédio 3D (ou use o painel da instalação) para produzir unidades e definir Ponto de Encontro.',
       '#a3be8c'
     );
-    this.map.updateFogOfWar(this.units, this.baseBuildings, 0.05);
+    this.map.updateFogOfWar(this.units, this.baseBuildings, 0.05, this.myTeam);
     this._emitHud();
     return true;
   }
@@ -2420,7 +2486,7 @@ export class Game {
     this.ammo -= spec.ammoCost || 0;
     this.hqLevel = nextLevel;
 
-    const hqBld = this.baseBuildings.find((b) => b.faction === 'player' && b.isMainHQ && b.alive !== false);
+    const hqBld = this.baseBuildings.find((b) => b.faction === this.myFaction && b.isMainHQ && b.alive !== false);
     if (hqBld) {
       hqBld.level = nextLevel;
       hqBld.maxHp = (hqBld.maxHp || 2600) + 650;
@@ -2456,7 +2522,7 @@ export class Game {
 
     if (cmd.requiresBuilding) {
       const hasBld = this.baseBuildings.some(
-        (b) => b.team === 'allies' && b.buildingType === cmd.requiresBuilding && b.alive !== false
+        (b) => b.faction === this.myFaction && b.buildingType === cmd.requiresBuilding && b.alive !== false
       );
       if (!hasBld) {
         const reqSpec = BASE_BUILDING_BY_ID[cmd.requiresBuilding];
@@ -2491,14 +2557,19 @@ export class Game {
     const producerBld =
       this.baseBuildings.find(
         (b) =>
-          b.team === 'allies' &&
+          b.faction === this.myFaction &&
           b.alive !== false &&
           b.buildingType === (cmd.requiresBuilding || 'hq_command')
-      ) || this.map.hqs.player;
+      ) || this.map.hqs[this.myFaction] || this.map.hqs.player;
 
     const jitterX = randInt(-45, 45);
     const jitterY = randInt(-95, 95);
-    const u = this.spawnUnit('player', cmd.id, producerBld.x + 145 + jitterX, producerBld.y + jitterY, 0);
+    const spawnOffset = this.myTeam === 'enemies' ? -145 : 145;
+    const spawnAngle = this.myTeam === 'enemies' ? Math.PI : 0;
+    const u = this.spawnUnit(this.myFaction, cmd.id, producerBld.x + spawnOffset + jitterX, producerBld.y + jitterY, spawnAngle);
+    if (this.isMultiplayer && this.networkManager) {
+      this.networkManager.sendCommand({ type: 'produce', unitType: cmd.id });
+    }
 
     const destX = producerBld.rallyX
       ? clamp(producerBld.rallyX + jitterX, 160, BATTLEFIELD_SIZE - 160)
@@ -2535,7 +2606,7 @@ export class Game {
     }
 
     const hasAirCommand = this.baseBuildings.some(
-      (b) => b.team === 'allies' && b.buildingType === 'air_command' && b.alive !== false
+      (b) => b.team === this.myTeam && b.buildingType === 'air_command' && b.alive !== false
     );
     if (!hasAirCommand) {
       this.notify(
@@ -2712,7 +2783,7 @@ export class Game {
   setSelectedFormation(formationId) {
     const fSpec = SQUAD_FORMATION_BY_ID[formationId];
     if (!fSpec) return;
-    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected);
+    const selected = this.units.filter((u) => u.alive && u.faction === this.myFaction && u.selected);
     if (selected.length === 0) return;
 
     for (const u of selected) {
@@ -2727,7 +2798,7 @@ export class Game {
   // Controle de Distanciamento / Espaçamento entre Soldados (1.0m a 8.0m) no COMANDO DE ESQUADRÃO
   setSelectedSpacing(meters) {
     const clamped = clamp(Number(meters) || 3.0, 1.0, 8.0);
-    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected);
+    const selected = this.units.filter((u) => u.alive && u.faction === this.myFaction && u.selected);
     if (selected.length === 0) return false;
 
     for (const u of selected) {
@@ -2756,7 +2827,7 @@ export class Game {
   }
 
   throwSelectedGrenade() {
-    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry');
+    const selected = this.units.filter((u) => u.alive && u.faction === this.myFaction && u.selected && u.spec.type === 'infantry');
     if (selected.length === 0) return false;
     const lead = selected[0];
     if ((lead.grenadeAbilityCooldown || 0) > 0) {
@@ -2769,7 +2840,8 @@ export class Game {
       this.notify('MUNIÇÃO INSUFICIENTE', 'Granada tática requer 15 MUN.', '#c94a38');
       return false;
     }
-    const target = this._findUnitNearWorld(lead.x, lead.y, 260, (e) => e.team === 'enemies' && !e.surrendered);
+    const enemyTeam = this.myTeam === 'enemies' ? 'allies' : 'enemies';
+    const target = this._findUnitNearWorld(lead.x, lead.y, 260, (e) => e.team === enemyTeam && !e.surrendered);
     const gx = target ? target.x : lead.x + Math.cos(lead.angle) * 160;
     const gy = target ? target.y : lead.y + Math.sin(lead.angle) * 160;
     this.ammo -= 15;
@@ -2780,7 +2852,7 @@ export class Game {
       const ty = getTerrainHeight(gx, gy, this.map) + 4;
       this.renderer.vfx.spawnGrenadeArc(lead.x, sy, lead.y, gx, ty, gy, 0.55);
     }
-    this.pendingGrenades.push({ x: gx, y: gy, team: 'allies', timer: 0.55 });
+    this.pendingGrenades.push({ x: gx, y: gy, team: this.myTeam, timer: 0.55 });
     this.audio.play('switch');
     this.spawnText(lead.x, lead.y - 16, '💣 GRANADA ARREMESSADA!', '#f97316');
     this._emitHud();
@@ -2788,7 +2860,7 @@ export class Game {
   }
 
   toggleSelectedSuppression() {
-    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected);
+    const selected = this.units.filter((u) => u.alive && u.faction === this.myFaction && u.selected);
     if (selected.length === 0) return false;
     const lead = selected[0];
     if ((lead.suppressionCooldown || 0) > 0) {
@@ -2814,7 +2886,7 @@ export class Game {
   }
 
   useSelectedMedkit() {
-    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry');
+    const selected = this.units.filter((u) => u.alive && u.faction === this.myFaction && u.selected && u.spec.type === 'infantry');
     if (selected.length === 0) return false;
     const lead = selected[0];
     if ((lead.medkitCooldown || 0) > 0) {
@@ -2840,7 +2912,7 @@ export class Game {
 
   setSelectedStance(stance) {
     const valid = stance === 'crouch' || stance === 'prone' ? stance : 'stand';
-    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry');
+    const selected = this.units.filter((u) => u.alive && u.faction === this.myFaction && u.selected && u.spec.type === 'infantry');
     if (selected.length === 0) return false;
     for (const u of selected) {
       u.stance = valid;
@@ -3007,9 +3079,9 @@ export class Game {
   // [Transferir ➡️]: Transfere soldados selecionados (ou 1 soldado) de um esquadrão para outro esquadrão aliado
   transferSoldiersToSquad(sourceUnitId = null, targetUnitId = null, soldierIds = null) {
     const sourceUnit =
-      (sourceUnitId && this.units.find((u) => u.id === sourceUnitId && u.alive && u.faction === 'player')) ||
+      (sourceUnitId && this.units.find((u) => u.id === sourceUnitId && u.alive && u.faction === this.myFaction)) ||
       this.units.find(
-        (u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry'
+        (u) => u.alive && u.faction === this.myFaction && u.selected && u.spec.type === 'infantry'
       );
 
     if (!sourceUnit || sourceUnit.spec.type !== 'infantry') {
@@ -3018,13 +3090,13 @@ export class Game {
     }
 
     let targetUnit = targetUnitId
-      ? this.units.find((u) => u.id === targetUnitId && u.alive && u.faction === 'player' && u.spec.type === 'infantry')
+      ? this.units.find((u) => u.id === targetUnitId && u.alive && u.faction === this.myFaction && u.spec.type === 'infantry')
       : null;
 
     if (!targetUnit) {
       // Se 2 esquadrões estiverem selecionados, transfere do 2º para o 1º (ou do 1º para o 2º)
       const selectedInf = this.units.filter(
-        (u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry'
+        (u) => u.alive && u.faction === this.myFaction && u.selected && u.spec.type === 'infantry'
       );
       if (selectedInf.length >= 2) {
         targetUnit = selectedInf.find((u) => u.id !== sourceUnit.id) || selectedInf[0];
@@ -3035,7 +3107,7 @@ export class Game {
           if (
             !other.alive ||
             other.id === sourceUnit.id ||
-            other.faction !== 'player' ||
+            other.faction !== this.myFaction ||
             other.spec.type !== 'infantry'
           ) {
             continue;
@@ -3100,7 +3172,7 @@ export class Game {
   // Mescla dois ou mais esquadrões de infantaria selecionados em um único esquadrão reforçado
   mergeSelectedSquads() {
     const selectedInf = this.units.filter(
-      (u) => u.alive && u.faction === 'player' && u.selected && u.spec.type === 'infantry'
+      (u) => u.alive && u.faction === this.myFaction && u.selected && u.spec.type === 'infantry'
     );
     if (selectedInf.length < 2) {
       return this.transferSoldiersToSquad();
@@ -3132,7 +3204,7 @@ export class Game {
 
   // Tecla [H] ou botão na HUD: Trava/Destrava Posição (Hold Position)
   toggleSelectedHoldPosition() {
-    const selected = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected);
+    const selected = this.units.filter((u) => u.alive && u.faction === this.myFaction && u.selected);
     if (selected.length === 0) return;
 
     const targetState = !selected[0].holdPosition;
@@ -3504,15 +3576,106 @@ export class Game {
     }
   }
 
+  hasDroneFactory() {
+    return this.baseBuildings.some(
+      (b) => b.faction === this.myFaction && b.buildingType === 'drone_factory' && b.alive !== false
+    );
+  }
+
+  getTotalDroneStockCount() {
+    return (this.droneStock?.uav_recon || 0) + (this.droneStock?.fpv_kamikaze || 0);
+  }
+
+  queueDroneProduction(droneType) {
+    if (this.hqLevel < 3) {
+      this.audio.play('empty');
+      this.notify('🔒 REQUER QG NÍVEL 3', 'Drones de Guerra exigem QG Nível 3.', '#c94a38');
+      return false;
+    }
+    if (!this.hasDroneFactory()) {
+      this.audio.play('empty');
+      this.notify('🔒 REQUER FÁBRICA DE DRONES', 'Construa a Fábrica de Drones Táticos no QG primeiro.', '#c94a38');
+      return false;
+    }
+    if (!this.completedTechs.has(droneType)) {
+      this.audio.play('empty');
+      this.notify('TECNOLOGIA BLOQUEADA', 'Pesquise este Drone na Árvore de Pesquisa [T].', '#c94a38');
+      return false;
+    }
+    const usedSlots = this.getTotalDroneStockCount() + this.droneQueue.length;
+    if (usedSlots >= this.maxDroneStock) {
+      this.audio.play('empty');
+      this.notify('HANGAR DE DRONES LOTADO', `Capacidade máxima de ${this.maxDroneStock} drones em estoque/fila.`, '#d4a338');
+      return false;
+    }
+    const isKamikaze = droneType === 'fpv_kamikaze';
+    const supCost = isKamikaze ? 500 : 350;
+    const ammoCost = isKamikaze ? 200 : 120;
+    if (this.supplies < supCost || this.ammo < ammoCost) {
+      this.audio.play('empty');
+      this.notify('RECURSOS INSUFICIENTES', `Necessário ${supCost} SUP e ${ammoCost} MUN.`, '#c94a38');
+      return false;
+    }
+    this.supplies -= supCost;
+    this.ammo -= ammoCost;
+    this.droneQueue.push({
+      type: droneType,
+      duration: this.sandboxMode ? 0.2 : isKamikaze ? 9.0 : 7.0,
+      elapsed: 0,
+    });
+    this.audio.play('cash');
+    this.notify(
+      isKamikaze ? '💥 FABRICANDO DRONE FPV' : '🛸 FABRICANDO DRONE UAV',
+      `Em produção na Fábrica de Drones (${usedSlots + 1}/${this.maxDroneStock}).`,
+      '#38bdf8'
+    );
+    this._emitHud();
+    return true;
+  }
+
+  _updateDroneFactory(dt) {
+    if (!this.droneQueue || this.droneQueue.length === 0) return;
+    if (!this.hasDroneFactory()) return;
+    const current = this.droneQueue[0];
+    current.elapsed += dt;
+    if (current.elapsed >= current.duration) {
+      this.droneQueue.shift();
+      this.droneStock[current.type] = (this.droneStock[current.type] || 0) + 1;
+      this.audio.play('research_done');
+      this.notify(
+        current.type === 'fpv_kamikaze' ? '💥 DRONE FPV PRONTO' : '🛸 DRONE UAV PRONTO',
+        'Drone armazenado no hangar e pronto para lançamento!',
+        '#4ade80'
+      );
+      this._emitHud();
+    }
+  }
+
   triggerDroneLaunchMode(droneType) {
     if (this.hqLevel < 3) {
       this.audio.play('empty');
       this.notify('🔒 REQUER QG NÍVEL 3', 'Drones de Guerra exigem QG Nível 3.', '#c94a38');
       return false;
     }
+    if (!this.hasDroneFactory()) {
+      this.audio.play('empty');
+      this.notify('🔒 REQUER FÁBRICA DE DRONES', 'Construa a Fábrica de Drones Táticos no QG primeiro.', '#c94a38');
+      return false;
+    }
     if (!this.completedTechs.has(droneType)) {
       this.audio.play('empty');
       this.notify('TECNOLOGIA BLOQUEADA', 'Pesquise este Drone na Árvore de Pesquisa [T].', '#c94a38');
+      return false;
+    }
+    if ((this.droneStock?.[droneType] || 0) <= 0) {
+      this.audio.play('empty');
+      this.notify('SEM DRONES NO HANGAR', 'Fabrique um drone na Fábrica de Drones antes de lançar.', '#d4a338');
+      return false;
+    }
+    const activeMyDrones = this.activeDrones.filter((d) => d.alive && (d.team || this.myTeam) === this.myTeam).length;
+    if (activeMyDrones >= this.maxActiveDrones) {
+      this.audio.play('empty');
+      this.notify('LIMITE DE VOO ATINGIDO', `Máximo de ${this.maxActiveDrones} drones ativos simultaneamente.`, '#d4a338');
       return false;
     }
     this.activeDroneLaunchMode = this.activeDroneLaunchMode === droneType ? null : droneType;
@@ -3524,25 +3687,32 @@ export class Game {
   }
 
   launchDrone(droneType, wx, wy) {
-    if (this.hqLevel < 3 || !this.completedTechs.has(droneType)) return false;
-    const isKamikaze = droneType === 'fpv_kamikaze';
-    const supCost = isKamikaze ? 500 : 350;
-    const ammoCost = isKamikaze ? 200 : 120;
-    if (this.supplies < supCost || this.ammo < ammoCost) {
+    if (this.hqLevel < 3 || !this.completedTechs.has(droneType) || !this.hasDroneFactory()) return false;
+    if ((this.droneStock?.[droneType] || 0) <= 0) {
       this.audio.play('empty');
-      this.notify('RECURSOS INSUFICIENTES', `Necessário ${supCost} SUP e ${ammoCost} MUN.`, '#c94a38');
+      this.notify('SEM DRONES NO HANGAR', 'Fabrique um drone na Fábrica de Drones antes de lançar.', '#d4a338');
       return false;
     }
-    this.supplies -= supCost;
-    this.ammo -= ammoCost;
+    const activeMyDrones = this.activeDrones.filter((d) => d.alive && (d.team || this.myTeam) === this.myTeam).length;
+    if (activeMyDrones >= this.maxActiveDrones) {
+      this.audio.play('empty');
+      this.notify('LIMITE DE VOO ATINGIDO', `Máximo de ${this.maxActiveDrones} drones ativos simultaneamente.`, '#d4a338');
+      return false;
+    }
+    const isKamikaze = droneType === 'fpv_kamikaze';
+    this.droneStock[droneType] -= 1;
 
-    const hq = this.map.hqs.player || { x: 850, y: 4800 };
-    const ang = Math.atan2(wy - hq.y, wx - hq.x);
+    const factoryBld = this.baseBuildings.find(
+      (b) => b.faction === this.myFaction && b.buildingType === 'drone_factory' && b.alive !== false
+    );
+    const origin = factoryBld || this.map.hqs[this.myFaction] || this.map.hqs.player || { x: 850, y: 4800 };
+    const ang = Math.atan2(wy - origin.y, wx - origin.x);
     this.activeDrones.push({
       id: `drn_${Date.now()}_${Math.floor(Math.random() * 9999)}`,
       type: droneType,
-      x: hq.x,
-      y: hq.y,
+      team: this.myTeam,
+      x: origin.x,
+      y: origin.y,
       z: isKamikaze ? 55 : 115,
       targetX: clamp(wx, 100, BATTLEFIELD_SIZE - 100),
       targetY: clamp(wy, 100, BATTLEFIELD_SIZE - 100),
@@ -3564,6 +3734,7 @@ export class Game {
   }
 
   _updateDrones(dt) {
+    this._updateDroneFactory(dt);
     for (const dr of this.activeDrones) {
       if (!dr.alive) continue;
       dr.life -= dt;
@@ -4074,6 +4245,20 @@ export class Game {
     return snap;
   }
 
+  autoSaveBattle() {
+    if (this.menuActive || this.gameOver || this.spectatorMode || this.mapEditorOpen || this.isMultiplayer) {
+      return null;
+    }
+    const snap = this.serializeBattleState('Salvamento Automático');
+    snap.id = 'autosave_latest';
+    snap.isAutoSave = true;
+    const withoutPrev = this.getSavedBattles().filter((s) => s.id !== 'autosave_latest');
+    const list = [snap, ...withoutPrev];
+    if (list.length > 9) list.length = 9;
+    this._persistSavedBattles(list);
+    return snap;
+  }
+
   loadSavedBattle(saveId = null) {
     const list = this.getSavedBattles();
     if (list.length === 0) {
@@ -4400,7 +4585,7 @@ export class Game {
           this.map.addTemporaryVision(c.x, c.y, 700, 60);
         }
       }
-      this.map.updateFogOfWar(this.units, this.baseBuildings, 0.05);
+      this.map.updateFogOfWar(this.units, this.baseBuildings, 0.05, this.myTeam);
       this.victoryPoints += 120;
       this.audio.play('win');
       this.spawnText(this.camera.x, this.camera.y, '🗺️ MAPAS DE DEFESA EXTRAÍDOS (60s)!', '#d4a338');
@@ -5434,7 +5619,7 @@ export class Game {
 
         let anySelected = false;
         for (const u of this.units) {
-          if (!u.alive || u.faction !== 'player' || u.embarkedInId) continue;
+          if (!u.alive || u.faction !== this.myFaction || u.embarkedInId) continue;
           const sc = this.renderer.worldToScreen(u.x, u.y, 12);
           const inside = sc.x >= minX && sc.x <= maxX && sc.y >= minY && sc.y <= maxY;
           u.selected = inside;
@@ -5473,16 +5658,16 @@ export class Game {
           this.worldMouse.x,
           this.worldMouse.y,
           54,
-          (u) => u.faction === 'player'
+          (u) => u.faction === this.myFaction
         );
 
-        // Verifica se clicou em um Prédio da Base Aliada no mundo 3D
+        // Verifica se clicou em um Prédio da Base do jogador local no mundo 3D
         const clickedAlliedBuilding = !clickedUnit
           ? this._findBaseBuildingNearWorld(
               this.worldMouse.x,
               this.worldMouse.y,
               135,
-              (b) => b.team === 'allies' && b.faction === 'player'
+              (b) => b.team === this.myTeam && b.faction === this.myFaction
             )
           : null;
 
@@ -5495,14 +5680,14 @@ export class Game {
           !clickedUnit && !clickedAlliedBuilding && !clickedStructure
             ? (this.fortifiedWalls || []).find(
                 (w) =>
-                  w.team === 'allies' &&
+                  w.team === this.myTeam &&
                   (w.hp ?? 2500) > 0 &&
                   w.containsPoint(this.worldMouse.x, this.worldMouse.y, 24)
               )
             : null;
 
         const currentlySelected = this.units.filter(
-          (u) => u.alive && u.faction === 'player' && u.selected && !u.embarkedInId
+          (u) => u.alive && u.faction === this.myFaction && u.selected && !u.embarkedInId
         );
 
         // SUPORTE TOUCH SCREEN (CELULAR / TABLET):
@@ -5568,7 +5753,7 @@ export class Game {
 
     // 10. Se um Prédio da Base estiver selecionado (sem tropas selecionadas), Botão Direito define o Ponto de Encontro (Rally Point)
     const selectedUnits = this.units.filter(
-      (u) => u.alive && u.faction === 'player' && u.selected && !u.embarkedInId
+      (u) => u.alive && u.faction === this.myFaction && u.selected && !u.embarkedInId
     );
     if (selectedUnits.length === 0) {
       this.orientationPreview = null;
@@ -5577,7 +5762,7 @@ export class Game {
       this.rightOrderStartWorld = null;
       if (this.selectedBuildingId && input.mouse.rightClicked) {
         const bld = this.baseBuildings.find(
-          (b) => b.id === this.selectedBuildingId && b.team === 'allies' && b.alive !== false
+          (b) => b.id === this.selectedBuildingId && b.team === this.myTeam && b.alive !== false
         );
         if (bld) {
           bld.rallyX = clamp(this.worldMouse.x, 120, BATTLEFIELD_SIZE - 120);
@@ -5745,26 +5930,67 @@ export class Game {
       return;
     }
 
-    // 3. Verifica se clicou/tocou sobre uma Construção Intacta -> Ordem de Guarnição (Garrison)
+    // 3. Verifica se clicou/tocou sobre uma Construção Intacta -> Guarnição (aliada/livre) ou Invasão/Ataque (ocupada por inimigo)
     const targetBuilding = this.map.findStructureAt(cx, cy, 76);
     if (
       draggedAngle === null &&
       targetBuilding &&
       targetBuilding.garrisonable &&
-      (!targetBuilding.garrisonUnitId || targetBuilding.garrisonTeam === 'allies')
+      !targetBuilding.destroyed
     ) {
-      const infSquad = selectedUnits.find((u) => u.spec.type === 'infantry');
-      if (infSquad) {
-        infSquad.holdPosition = false;
-        infSquad.setGarrisonOrder(targetBuilding);
-        this.audio.play('pickup');
-        this.spawnText(
-          targetBuilding.x,
-          targetBuilding.y,
-          `🏠 OCUPAR ${targetBuilding.name.toUpperCase()}`,
-          '#d4a338'
+      if (!targetBuilding.garrisonUnitId || targetBuilding.garrisonTeam === this.myTeam) {
+        const infSquad = selectedUnits.find((u) => u.spec.type === 'infantry');
+        if (infSquad) {
+          infSquad.holdPosition = false;
+          infSquad.setGarrisonOrder(targetBuilding);
+          this.audio.play('pickup');
+          this.spawnText(
+            targetBuilding.x,
+            targetBuilding.y,
+            `🏠 OCUPAR ${targetBuilding.name.toUpperCase()}`,
+            '#d4a338'
+          );
+          return;
+        }
+      } else {
+        // Construção ocupada pelo inimigo: Tropa de Assalto invade para expulsar; Tanques/Veículos/outras tropas atacam o local!
+        const enemyInside = this.units.find(
+          (un) => un.id === targetBuilding.garrisonUnitId && un.alive
         );
-        return;
+        const assaultUnits = selectedUnits.filter((u) => u.unitType === 'assault_squad');
+        const otherUnits = selectedUnits.filter((u) => u.unitType !== 'assault_squad');
+        if (assaultUnits.length > 0) {
+          assaultUnits.forEach((au) => {
+            au.holdPosition = false;
+            au.setGarrisonOrder(targetBuilding);
+            au.order.type = 'storm_building';
+          });
+          this.audio.play('pickup');
+          this.spawnText(
+            targetBuilding.x,
+            targetBuilding.y - 18,
+            `⚔️ INVADIR ${targetBuilding.name.toUpperCase()}!`,
+            '#ef4444'
+          );
+        }
+        if (otherUnits.length > 0 && enemyInside) {
+          otherUnits.forEach((ou) => {
+            ou.holdPosition = false;
+            ou.setAttackOrder(enemyInside);
+          });
+          if (assaultUnits.length === 0) {
+            this.audio.play('pickup');
+            this.spawnText(
+              targetBuilding.x,
+              targetBuilding.y - 18,
+              `🎯 FOGO NA CONSTRUÇÃO!`,
+              '#f97316'
+            );
+          }
+        }
+        if (assaultUnits.length > 0 || (otherUnits.length > 0 && enemyInside)) {
+          return;
+        }
       }
     }
 
@@ -5775,7 +6001,7 @@ export class Game {
         cx,
         cy,
         62,
-        (u) => u.team === 'allies' && u.spec.isTransport && u.alive
+        (u) => u.team === this.myTeam && u.spec.isTransport && u.alive
       );
       if (targetTransport) {
         let queued = 0;
@@ -6190,7 +6416,7 @@ export class Game {
     let bestD = maxDist;
 
     for (const u of this.units) {
-      if (!u.alive || u.captured || u.faction !== 'player' || u.spec.type !== 'infantry' || !u.soldiers) {
+      if (!u.alive || u.captured || u.faction !== this.myFaction || u.spec.type !== 'infantry' || !u.soldiers) {
         continue;
       }
       u.updateSoldierWorldPositions();
@@ -6348,6 +6574,15 @@ export class Game {
       );
       this.map.updateFrontline(this.units, simDt);
       this._updateParticlesAndTexts(simDt);
+
+      // Salvamento Automático a cada 30 segundos em partidas locais
+      if (!this.isMultiplayer && !this.spectatorMode && !this.mapEditorOpen && !this.gameOver) {
+        this.autoSaveTimer = (this.autoSaveTimer ?? 30) - realDt;
+        if (this.autoSaveTimer <= 0) {
+          this.autoSaveTimer = 30;
+          this.autoSaveBattle();
+        }
+      }
 
       // Heartbeat de Estado Multiplayer (a cada 1.5s pelo Host)
       if (this.isMultiplayer && this.localSlot === 1 && this.networkManager) {
@@ -7126,13 +7361,36 @@ export class Game {
         }
       }
 
-      // Verifica entrada em Construção (Guarnição / Garrison)
-      if (u.order.type === 'garrison_building' && u.order.targetBuildingId) {
+      // Verifica entrada ou invasão em Construção (Guarnição / Storm Building)
+      if (
+        (u.order.type === 'garrison_building' || u.order.type === 'storm_building') &&
+        u.order.targetBuildingId
+      ) {
         const bld = this.map.structures.find((s) => s.id === u.order.targetBuildingId);
         const enterDist = bld
-          ? Math.max(85, Math.max(bld.w || 80, bld.d || 80) * 0.55 + 42)
-          : 85;
-        if (bld && dist(u.x, u.y, bld.x, bld.y) <= enterDist) {
+          ? Math.max(88, Math.max(bld.w || 80, bld.d || 80) * 0.55 + 44)
+          : 88;
+        if (bld && !bld.destroyed && dist(u.x, u.y, bld.x, bld.y) <= enterDist) {
+          if (bld.garrisonUnitId && bld.garrisonTeam !== u.team && u.unitType === 'assault_squad') {
+            const enemyInside = this.units.find(
+              (un) => un.id === bld.garrisonUnitId && un.alive
+            );
+            if (enemyInside) {
+              this._ungarrisonUnit(enemyInside);
+              const outAngle = Math.atan2(enemyInside.y - bld.y, enemyInside.x - bld.x) || 0;
+              enemyInside.x = bld.x + Math.cos(outAngle) * (Math.max(bld.w || 70, bld.d || 70) * 0.72 + 28);
+              enemyInside.y = bld.y + Math.sin(outAngle) * (Math.max(bld.w || 70, bld.d || 70) * 0.72 + 28);
+              enemyInside.suppressedTimer = Math.max(enemyInside.suppressedTimer || 0, 4.5);
+              enemyInside.takeDamage(95, u.team, this, true, true, bld.x, bld.y);
+              this.spawnExplosionParticles?.(bld.x, bld.y, 18);
+              this.playSoundAt?.('explosion', bld.x, bld.y, 0.75);
+              this.spawnText(bld.x, bld.y - 26, '⚔️ INVADIDO! INIMIGO EXPULSO!', '#ef4444');
+            } else {
+              bld.garrisonUnitId = null;
+              bld.garrisonTeam = null;
+            }
+          }
+
           if (!bld.garrisonUnitId || bld.garrisonUnitId === u.id) {
             bld.garrisonUnitId = u.id;
             bld.garrisonTeam = u.team;
@@ -7188,7 +7446,7 @@ export class Game {
 
       const effectiveRange = u.garrisonedBuildingId ? u.spec.range * 1.25 : u.spec.range;
       u.aimSwitchCooldown = Math.max(0, (u.aimSwitchCooldown || 0) - dt);
-      if (!targetEnemy && !targetEnemyBuilding && u.tacticalOrderMode !== 'MARCH') {
+      if (!targetEnemy && !targetEnemyBuilding) {
         if (u.lastTargetId && u.aimSwitchCooldown > 0) {
           const locked = this.units.find(
             (e) =>
@@ -7211,7 +7469,7 @@ export class Game {
               !e.surrendered &&
               (!e.camouflagedInForest || dist(u.x, u.y, e.x, e.y) <= 80) &&
               (!e.camouflagedInBush || dist(u.x, u.y, e.x, e.y) <= effectiveRange * 0.55) &&
-              (u.team !== 'allies' ||
+              (u.team !== this.myTeam ||
                 this.intelRevealed ||
                 this.map.isPositionVisibleToAllies(e.x, e.y))
           );
@@ -7300,7 +7558,7 @@ export class Game {
         }
       }
 
-      // 2d. Reparo em Campo pelos Engenheiros (<= 6m / 90u de veículo danificado -> +40 HP/s grátis)
+      // 2d. Reparo em Campo pelos Engenheiros (Veículos, Prédios da Base e Muralhas Fortificadas)
       if (u.spec.type === 'infantry' && (u.spec.id === 'engineers' || u.spec.canBuild)) {
         const injuredVeh = this.units.find(
           (v) =>
@@ -7309,11 +7567,11 @@ export class Game {
             v.spec.type === 'vehicle' &&
             v.hp > 0 &&
             v.hp < v.maxHp &&
-            dist(u.x, u.y, v.x, v.y) <= 92
+            dist(u.x, u.y, v.x, v.y) <= 115
         );
         if (injuredVeh) {
           injuredVeh.beingRepaired = true;
-          injuredVeh.hp = Math.min(injuredVeh.maxHp, injuredVeh.hp + 40 * dt);
+          injuredVeh.hp = Math.min(injuredVeh.maxHp, injuredVeh.hp + 45 * dt);
           injuredVeh.repairProgress = injuredVeh.hp / Math.max(1, injuredVeh.maxHp);
           u.angle = Math.atan2(injuredVeh.y - u.y, injuredVeh.x - u.x);
           if (Math.random() < dt * 10) {
@@ -7334,6 +7592,45 @@ export class Game {
             injuredVeh.isBrokenDown = false;
             this.spawnText(injuredVeh.x, injuredVeh.y - 24, '🔧 MOTOR CONSERTADO!', '#4ade80');
             this.audio.play('reload');
+          }
+        } else {
+          const injuredBld = this.baseBuildings.find(
+            (b) =>
+              b.alive !== false &&
+              b.team === u.team &&
+              b.hp > 0 &&
+              b.hp < b.maxHp &&
+              dist(u.x, u.y, b.x, b.y) <= (b.radius || 90) + 75
+          );
+          if (injuredBld) {
+            injuredBld.hp = Math.min(injuredBld.maxHp, injuredBld.hp + 50 * dt);
+            u.angle = Math.atan2(injuredBld.y - u.y, injuredBld.x - u.x);
+            if (Math.random() < dt * 8) {
+              this.particles.push({
+                x: injuredBld.x + (Math.random() - 0.5) * 28,
+                y: injuredBld.y + (Math.random() - 0.5) * 28,
+                z: 12 + Math.random() * 6,
+                vx: (Math.random() - 0.5) * 32,
+                vy: (Math.random() - 0.5) * 32,
+                vz: 18 + Math.random() * 12,
+                radius: 2.4,
+                color: '#38bdf8',
+                life: 0.28,
+                maxLife: 0.28,
+              });
+            }
+          } else {
+            const injuredWall = (this.fortifiedWalls || []).find((w) => {
+              if (w.team !== u.team) return false;
+              const maxHp = w.maxHp || 2500;
+              if ((w.hp ?? maxHp) <= 0 || (w.hp ?? maxHp) >= maxHp) return false;
+              const wc = w.getCenter ? w.getCenter() : { x: (w.x1 + w.x2) * 0.5, y: (w.y1 + w.y2) * 0.5 };
+              return dist(u.x, u.y, wc.x, wc.y) <= 105;
+            });
+            if (injuredWall) {
+              const maxHp = injuredWall.maxHp || 2500;
+              injuredWall.hp = Math.min(maxHp, (injuredWall.hp ?? maxHp) + 55 * dt);
+            }
           }
         }
       }
@@ -7376,7 +7673,7 @@ export class Game {
           if (u.tacticalOrderMode === 'MARCH') spd *= 1.18;
           if (u.suppressedTimer > 0) spd *= 0.4; // Suprimido: mantém no mínimo 40% da velocidade para recuar/mover
           if (u.spec.type === 'vehicle' && forestZone) spd *= 0.7; // Veículos pesados 30% mais lentos em floresta densa
-          if (u.faction === 'player') {
+          if (u.faction === this.myFaction) {
             if (u.spec.type === 'infantry' && this.completedTechs.has('forced_march')) spd *= 1.2;
             if (u.spec.type === 'vehicle' && this.completedTechs.has('turbo_diesel')) spd *= 1.25;
           }
@@ -7406,7 +7703,9 @@ export class Game {
           }
 
           const ignoreBldId =
-            u.order.type === 'garrison_building' ? u.order.targetBuildingId : u.garrisonedBuildingId;
+            u.order.type === 'garrison_building' || u.order.type === 'storm_building'
+              ? u.order.targetBuildingId
+              : u.garrisonedBuildingId;
 
           const prevStepX = u.x;
           const prevStepY = u.y;
@@ -7467,15 +7766,12 @@ export class Game {
             }
           }
 
-          // Giro suave do chassi para veículos blindados
-          if (u.spec.type === 'vehicle') {
-            let diff = steered.angle - u.angle;
-            while (diff > Math.PI) diff -= Math.PI * 2;
-            while (diff < -Math.PI) diff += Math.PI * 2;
-            u.angle += diff * Math.min(1, dt * 5.2);
-          } else {
-            u.angle = steered.angle;
-          }
+          // Giro suave para veículos e infantaria (evita trepidação dos soldados em formação ao desviar)
+          let angDiff = steered.angle - u.angle;
+          while (angDiff > Math.PI) angDiff -= Math.PI * 2;
+          while (angDiff < -Math.PI) angDiff += Math.PI * 2;
+          const turnRate = u.spec.type === 'vehicle' ? 5.2 : 8.5;
+          u.angle += angDiff * Math.min(1, dt * turnRate);
           u.walkPhase += dt * 7.8;
           if (u.spec.type === 'infantry') u.stepAutonomousSoldiers?.(dt);
 
@@ -7599,14 +7895,15 @@ export class Game {
             u.angle += diff * Math.min(1, dt * 6);
           }
 
-          // Bloqueio de Linha de Visão por Prédios/Casas (soldados não atiram varando paredes, exceto se guarnecidos dentro dela)
+          // Bloqueio de Linha de Visão por Prédios/Casas (ignora o prédio do atirador e o prédio onde o alvo está guarnecido)
           const losBlocked =
             this.map.isLineBlockedByStructures?.(
               u.x,
               u.y,
               activeTarget.x,
               activeTarget.y,
-              u.garrisonedBuildingId || null
+              u.garrisonedBuildingId || null,
+              targetEnemy?.garrisonedBuildingId || null
             ) || false;
 
           const isSabotagedTower =
@@ -8030,6 +8327,17 @@ export class Game {
           } else {
             const dmgMult = u.team === 'enemies' && this.enemySabotageTimer > 0 ? 1.25 : 1.0;
             u.takeDamage(b.damage * dmgMult, b.team, this, Boolean(b.explosive), Boolean(b.explosive), b.x, b.y);
+            if (b.explosive && u.garrisonedBuildingId) {
+              const st = this.map?.structures?.find((s) => s.id === u.garrisonedBuildingId && !s.destroyed);
+              if (st) {
+                st.hp = Math.max(0, (st.hp ?? 650) - Math.round((b.damage || 30) * 0.65));
+                if (st.hp <= 0) {
+                  st.destroyed = true;
+                  this._ungarrisonUnit(u);
+                  this.spawnText(st.x, st.y - 24, '💥 CONSTRUÇÃO DESTRUÍDA!', '#f97316');
+                }
+              }
+            }
             if (b.explosive) {
               this.spawnExplosionParticles(b.x, b.y, 14);
             } else {
@@ -8198,7 +8506,7 @@ export class Game {
         return `🏭 ${bld.name} Selecionado: Clique nas unidades para produzir • Clique Direito no mapa define o Ponto de Encontro`;
       }
     }
-    const selCount = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected).length;
+    const selCount = this.units.filter((u) => u.alive && u.faction === this.myFaction && u.selected).length;
     if (selCount > 0) {
       return `${selCount} esquadrão(ões) selecionado(s) • Clique Direito p/ Mover, Ocupar Casa/Trincheira ou Demolir Base Inimiga • [TAB] Mapa Tático`;
     }
@@ -8206,12 +8514,13 @@ export class Game {
   }
 
   getHudSnapshot() {
-    const selectedUnits = this.units.filter((u) => u.alive && u.faction === 'player' && u.selected);
-    const allyUnitsCount = this.units.filter((u) => u.alive && u.team === 'allies').length;
+    const selectedUnits = this.units.filter((u) => u.alive && u.faction === this.myFaction && u.selected);
+    const allyUnitsCount = this.units.filter((u) => u.alive && u.team === this.myTeam).length;
+    const enemyTeam = this.myTeam === 'enemies' ? 'allies' : 'enemies';
     const visibleEnemiesCount = this.units.filter(
       (u) =>
         u.alive &&
-        u.team === 'enemies' &&
+        u.team === enemyTeam &&
         !u.surrendered &&
         (this.intelRevealed || this.map.isPositionVisibleToAllies(u.x, u.y))
     ).length;
@@ -8221,20 +8530,20 @@ export class Game {
     let ammoIncome = 8;
     let fuelIncome = 6;
     for (const sec of this.map.sectors) {
-      if (sec.owner === 'allies') {
+      if (sec.owner === this.myTeam) {
         allyIncome += sec.supplyBonus || sec.incomeBonus || 12;
         ammoIncome += sec.ammoBonus || 0;
         fuelIncome += sec.fuelBonus || 0;
       }
     }
     for (const u of this.units) {
-      if (u.alive && u.team === 'allies' && u.spec.supplyBonus) {
+      if (u.alive && u.team === this.myTeam && u.spec.supplyBonus) {
         allyIncome += u.spec.supplyBonus;
       }
     }
 
     const builtAlliedBuildings = this.baseBuildings
-      .filter((b) => b.team === 'allies' && b.alive !== false)
+      .filter((b) => b.team === this.myTeam && b.alive !== false)
       .map((b) => b.buildingType);
 
     const selectedBldObj = this.selectedBuildingId
@@ -8278,6 +8587,14 @@ export class Game {
       activeResearch: this.activeResearch ? { ...this.activeResearch } : null,
       activeDroneLaunchMode: this.activeDroneLaunchMode,
       activeDronesCount: this.activeDrones.length,
+      hasDroneFactory: this.hasDroneFactory(),
+      droneStock: { ...this.droneStock },
+      droneQueue: this.droneQueue.map((q) => ({
+        type: q.type,
+        remaining: Math.max(0, Math.ceil(q.duration - q.elapsed)),
+      })),
+      maxDroneStock: this.maxDroneStock,
+      maxActiveDrones: this.maxActiveDrones,
       supplyIncome: allyIncome,
       ammoIncome,
       fuelIncome,
