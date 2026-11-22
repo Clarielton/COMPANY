@@ -15,6 +15,7 @@ import {
   AIR_DOCTRINE_BY_ID,
   SQUAD_FORMATIONS,
   SQUAD_FORMATION_BY_ID,
+  saveUserCustomMapEntry,
 } from './data/rtsData.js';
 import {
   TECH_NODES,
@@ -22,7 +23,7 @@ import {
   computeTechResearchCost,
 } from './data/techTreeData.js';
 import { BattlefieldMap, BATTLEFIELD_SIZE } from './world/BattlefieldMap.js';
-import { getTerrainHeight } from './world/terrainHeight.js';
+import { getTerrainHeight, getTerrainHeightAt, getTerrainSlopeAt } from './world/terrainHeight.js';
 import {
   SquadUnit,
   TrenchSegment,
@@ -286,6 +287,13 @@ export class Game {
   }
 
   setGameSpeed(mult) {
+    if (this.isMultiplayer) {
+      this.paused = false;
+      this.timeScale = 1.0;
+      this.lastNonZeroSpeed = 1.0;
+      this._emitHud();
+      return;
+    }
     if (mult === 0) {
       if (this.timeScale > 0) this.lastNonZeroSpeed = this.timeScale;
       this.timeScale = 0;
@@ -300,6 +308,13 @@ export class Game {
   }
 
   toggleTacticalPause() {
+    if (this.isMultiplayer) {
+      this.paused = false;
+      this.timeScale = 1.0;
+      this.notify('VELOCIDADE TRAVADA EM 1.0x', 'Partidas online mantêm sincronização fixa em 1x.', '#c87d28');
+      this._emitHud();
+      return;
+    }
     if (this.timeScale === 0) {
       this.setGameSpeed(this.lastNonZeroSpeed || 1.0);
     } else {
@@ -525,6 +540,10 @@ export class Game {
     this.isMultiplayer = true;
     this.spectatorMode = false;
     this.intelRevealed = false;
+    this.timeScale = 1.0;
+    this.lastNonZeroSpeed = 1.0;
+    this.campaignTerritory = room?.campaignTerritory || null;
+    this.battlefieldScale = room?.battlefieldScale || (room?.isCampaign ? 1.8 : 1.0);
     this.networkManager = networkManager;
     this.localSlot = localSlot;
     const slotMap = {
@@ -542,22 +561,41 @@ export class Game {
     const mapSeed = room?.mapSeed || 1944;
     const startingRes = room?.startingResources || 600;
     const isCampaign = Boolean(room?.isCampaign);
-    const mode = room?.mode === '2v2' ? '2v2' : '1v1';
+    const rawMode = room?.mode || '1v1';
+    const mode = ['1v1', '2v2', '3p', '4p'].includes(rawMode) ? rawMode : '1v1';
 
     this.mapId = mapId;
     this.map = new BattlefieldMap({ seed: mapSeed, mapId });
     this.map.applyCornerRandomSpawns(mode, mapSeed);
     this.renderer?.buildWorld(this.map);
 
-    this.setupMatch(mode, startingRes, mapId, 'medium', {
+    this.setupMatch(mode === '2v2' || mode === '3p' || mode === '4p' ? '2v2' : '1v1', startingRes, mapId, 'medium', {
       isOnline: true,
       mapSeed,
     });
+    if (mode === '3p') {
+      this.baseBuildings = this.baseBuildings.filter((b) => b.faction !== 'enemy_2');
+    }
     this.isMultiplayer = true;
     this.spectatorMode = false;
     this.intelRevealed = false;
+    this.timeScale = 1.0;
+    this.lastNonZeroSpeed = 1.0;
+    this.campaignTerritory = room?.campaignTerritory || null;
+    this.campaignOwnedTerritoriesCount = Number(room?.campaignOwnedCount ?? 1);
+    this.battlefieldScale = room?.battlefieldScale || (room?.isCampaign ? 1.8 : 1.0);
     this.isCampaign = isCampaign;
     this.campaignDay = room?.campaignDay || 1;
+    // Em batalhas da Guerra de 15 Dias, reduz para 4 pontos estratégicos (1 central + 3 recursos) para combates ágeis
+    if (isCampaign && Array.isArray(this.map?.sectors) && this.map.sectors.length > 4) {
+      const centerSec =
+        this.map.sectors.find((s) => s.id?.includes('center')) || this.map.sectors[0];
+      const supSec = this.map.sectors.find((s) => s !== centerSec && s.type === 'supplies');
+      const ammoSec = this.map.sectors.find((s) => s !== centerSec && s.type === 'ammo');
+      const fuelSec = this.map.sectors.find((s) => s !== centerSec && s.type === 'fuel');
+      const compact = [centerSec, supSec, ammoSec, fuelSec].filter(Boolean);
+      this.map.sectors = compact.length >= 3 ? compact : this.map.sectors.slice(0, 4);
+    }
     this.networkManager = networkManager;
     this.localSlot = localSlot;
     this.localPlayerFaction = slotMeta.faction;
@@ -585,44 +623,57 @@ export class Game {
       );
     }
 
-    // Aplicação Automática dos Pacotes Pagos Exclusivos de Campanha de 15 Dias
-    if (isCampaign && networkManager) {
+    // Aplicação Automática dos Pacotes & Loadout Multiplayer (1v1, 2v2, 3P, 4P e Campanha)
+    if (networkManager) {
       const packs = networkManager.getActiveCampaignPacks?.() || [];
-      const hq = this.map?.hqs?.player || { x: 1150, y: 4280 };
-      const hqBld = this.baseBuildings.find((b) => b.faction === 'player' && b.isMainHQ);
+      const hq = this.map?.hqs?.[this.localPlayerFaction] || this.map?.hqs?.player || { x: 1150, y: 4280 };
+      const hqBld = this.baseBuildings.find((b) => b.faction === this.localPlayerFaction && b.isMainHQ);
 
-      if (packs.includes('hq_defense') || packs.includes('vip_combo')) {
-        const isVip = packs.includes('vip_combo');
-        // Anel Perimetral Fechado com Muros Altos de Concreto + 2 Portões Blindados Automáticos nas saídas
+      if (
+        packs.includes('hq_fortification_kit') ||
+        packs.includes('hq_defense') ||
+        packs.includes('supreme_commander_combo') ||
+        packs.includes('vip_combo')
+      ) {
+        const isSupreme = packs.includes('supreme_commander_combo') || packs.includes('vip_combo');
         const wx1 = hq.x - 165;
         const wx2 = hq.x + 215;
         const wy1 = hq.y - 195;
         const wy2 = hq.y + 195;
         this.fortifiedWalls.push(
-          new FortifiedWallLine({ x1: wx2, y1: wy1, x2: wx2, y2: wy2, team: 'allies', isGate: true, isElite: isVip }),
-          new FortifiedWallLine({ x1: wx1, y1: wy2, x2: wx2, y2: wy2, team: 'allies', isGate: true, isElite: isVip }),
-          new FortifiedWallLine({ x1: wx1, y1: wy1, x2: wx2, y2: wy1, team: 'allies', isGate: false, isElite: isVip }),
-          new FortifiedWallLine({ x1: wx1, y1: wy1, x2: wx1, y2: wy2, team: 'allies', isGate: false, isElite: isVip })
+          new FortifiedWallLine({ x1: wx2, y1: wy1, x2: wx2, y2: wy2, team: this.localPlayerTeam, isGate: true, isElite: isSupreme }),
+          new FortifiedWallLine({ x1: wx1, y1: wy2, x2: wx2, y2: wy2, team: this.localPlayerTeam, isGate: true, isElite: isSupreme }),
+          new FortifiedWallLine({ x1: wx1, y1: wy1, x2: wx2, y2: wy1, team: this.localPlayerTeam, isGate: false, isElite: isSupreme }),
+          new FortifiedWallLine({ x1: wx1, y1: wy1, x2: wx1, y2: wy2, team: this.localPlayerTeam, isGate: false, isElite: isSupreme })
         );
-        // 2 Bunkers de Concreto com Metralhadoras Pesadas nos flancos + Ouriços Checos externos
-        this.spawnUnit('player', 'concrete_bunker', wx2 + 28, hq.y - 125, 0);
-        this.spawnUnit('player', 'concrete_bunker', wx2 + 28, hq.y + 125, 0);
+        this.spawnUnit(this.localPlayerFaction, 'concrete_bunker', wx2 + 28, hq.y - 120, 0);
         this.barricades.push(
-          new BarricadeLine({ x1: wx2 + 58, y1: hq.y - 110, x2: wx2 + 58, y2: hq.y + 110, team: 'allies' })
+          new BarricadeLine({ x1: wx2 + 58, y1: hq.y - 110, x2: wx2 + 58, y2: hq.y + 110, team: this.localPlayerTeam })
         );
-        // +1000 HP Estrutural a todas as construções da base aliada + acabamento Elite
-        for (const b of this.baseBuildings) {
-          if (b.team === 'allies') {
-            b.maxHp += 1000;
-            b.hp += 1000;
-            if (isVip) b.isEliteFortress = true;
-          }
+        if (hqBld) {
+          hqBld.maxHp += 400;
+          hqBld.hp += 400;
         }
-        // +1 Esquadrão de Engenheiros de Guarda inicial
-        this.spawnUnit('player', 'engineers', hq.x + 115, hq.y + 40, 0);
       }
-
-      if (packs.includes('vip_combo')) {
+      if (
+        packs.includes('xp_boost_mp') ||
+        packs.includes('xp_boost') ||
+        packs.includes('supreme_commander_combo') ||
+        packs.includes('vip_combo')
+      ) {
+        this.xpMultiplier = 2.0;
+      }
+      if (packs.includes('paratroopers_elite') || packs.includes('supreme_commander_combo')) {
+        this.unlockedParatroopers = true;
+      }
+      if (
+        packs.includes('visual_arsenal') ||
+        packs.includes('supreme_commander_combo') ||
+        packs.includes('vip_combo')
+      ) {
+        this.hasGoldCommanderFlag = true;
+      }
+      if (isCampaign && (packs.includes('supreme_commander_combo') || packs.includes('vip_combo'))) {
         this.supplies += 250;
         this.ammo += 100;
         this.fuel += 100;
@@ -926,8 +977,8 @@ export class Game {
     this.map.resetFog();
 
     for (const sec of this.map.sectors) {
-      sec.owner = 'neutral';
-      sec.captureProgress = 0;
+      sec.owner = sec.initialOwner || 'neutral';
+      sec.captureProgress = sec.owner === 'allies' ? 100 : sec.owner === 'enemies' ? -100 : 0;
     }
     for (const st of this.map.structures) {
       st.garrisonUnitId = null;
@@ -1904,6 +1955,154 @@ export class Game {
     this._emitHud();
   }
 
+  setEditorTerrainBrush({ radiusMeters, intensity } = {}) {
+    if (typeof radiusMeters === 'number') {
+      this.editorBrushRadiusMeters = clamp(radiusMeters, 8, 40);
+    }
+    if (intensity === 'low' || intensity === 'medium' || intensity === 'high') {
+      this.editorBrushIntensity = intensity;
+    }
+    this._emitHud();
+  }
+
+  sculptTerrainAt(wx, wy, mode = this.mapEditorTool) {
+    if (!this.map?.terrainSculptGrid) return false;
+    const gN = this.map.terrainSculptSize || 129;
+    const grid = this.map.terrainSculptGrid;
+    const rockGrid = this.map.terrainRockGrid;
+    const radiusM = this.editorBrushRadiusMeters || 18;
+    const radiusW = radiusM * 10;
+    const intMult =
+      this.editorBrushIntensity === 'high' ? 1.75 : this.editorBrushIntensity === 'low' ? 0.55 : 1.0;
+    const cellSpan = this.map.size / (gN - 1);
+    const minI = Math.max(0, Math.floor((wx - radiusW) / cellSpan));
+    const maxI = Math.min(gN - 1, Math.ceil((wx + radiusW) / cellSpan));
+    const minJ = Math.max(0, Math.floor((wy - radiusW) / cellSpan));
+    const maxJ = Math.min(gN - 1, Math.ceil((wy + radiusW) / cellSpan));
+
+    for (let j = minJ; j <= maxJ; j++) {
+      const vz = j * cellSpan;
+      for (let i = minI; i <= maxI; i++) {
+        const vx = i * cellSpan;
+        const d = Math.hypot(vx - wx, vz - wy);
+        if (d > radiusW) continue;
+        const normD = d / radiusW;
+        const idx = j * gN + i;
+        if (mode === 'sculpt_hill') {
+          const bell = Math.exp(-normD * normD * 3.0);
+          grid[idx] = clamp((grid[idx] || 0) + 18 * intMult * bell, -140, 260);
+        } else if (mode === 'sculpt_mountain') {
+          const peak = Math.pow(Math.max(0, 1 - normD), 1.35);
+          grid[idx] = clamp((grid[idx] || 0) + 32 * intMult * peak, -140, 320);
+          if (rockGrid && normD < 0.78) {
+            rockGrid[idx] = Math.min(255, Math.round(140 + (1 - normD) * 115));
+          }
+        } else if (mode === 'sculpt_valley') {
+          const bell = Math.exp(-normD * normD * 3.0);
+          grid[idx] = clamp((grid[idx] || 0) - 16 * intMult * bell, -140, 260);
+        } else if (mode === 'sculpt_flatten') {
+          const blend = (1 - normD) * 0.55 * intMult;
+          grid[idx] = (grid[idx] || 0) * Math.max(0, 1 - Math.min(1, blend));
+          if (rockGrid && normD < 0.7) rockGrid[idx] = 0;
+        }
+      }
+    }
+    this.renderer?.syncTerrainSculptGeometry?.(this.map, wx, wy, radiusW + 120);
+    return true;
+  }
+
+  createEditorSector(wx, wy) {
+    if (!this.map) return null;
+    if ((this.map.sectors || []).length >= 24) {
+      this.notify('LIMITE ATINGIDO', 'Máximo de 24 pontos de conquista por mapa.', '#ef4444');
+      return null;
+    }
+    const idx = (this.map.sectors || []).length + 1;
+    const sec = {
+      id: `sec_custom_${Date.now().toString(36)}_${idx}`,
+      name: `Setor Tático S${idx}`,
+      shortName: `S${idx}`,
+      type: 'supplies',
+      resourceType: 'supplies',
+      shortLabel: '+15 SUP',
+      x: clamp(Math.round(wx), 220, BATTLEFIELD_SIZE - 220),
+      y: clamp(Math.round(wy), 220, BATTLEFIELD_SIZE - 220),
+      radius: 175,
+      owner: 'neutral',
+      initialOwner: 'neutral',
+      captureProgress: 0,
+      supplyBonus: 15,
+      incomeBonus: 15,
+      ammoBonus: 0,
+      fuelBonus: 0,
+    };
+    this.map.sectors.push(sec);
+    this.selectedEditorSectorId = sec.id;
+    this.audio?.play?.('pickup');
+    this.spawnText(sec.x, sec.y - 24, `🚩 ${sec.name} CRIADO!`, '#4ade80');
+    this._emitHud();
+    return sec;
+  }
+
+  updateEditorSector(sectorId, patch = {}) {
+    const sec = (this.map?.sectors || []).find((s) => s.id === sectorId);
+    if (!sec) return false;
+    if (typeof patch.name === 'string' && patch.name.trim()) {
+      sec.name = patch.name.trim();
+      sec.shortName = patch.name.trim().slice(0, 18);
+    }
+    if (patch.type) {
+      sec.type = patch.type;
+      sec.resourceType = patch.type;
+      if (patch.type === 'supplies') {
+        sec.supplyBonus = 15;
+        sec.incomeBonus = 15;
+        sec.ammoBonus = 0;
+        sec.fuelBonus = 0;
+        sec.shortLabel = '+15 SUP';
+      } else if (patch.type === 'ammo') {
+        sec.supplyBonus = 6;
+        sec.incomeBonus = 6;
+        sec.ammoBonus = 12;
+        sec.fuelBonus = 0;
+        sec.shortLabel = '+12 MUN';
+      } else if (patch.type === 'fuel') {
+        sec.supplyBonus = 6;
+        sec.incomeBonus = 6;
+        sec.ammoBonus = 0;
+        sec.fuelBonus = 12;
+        sec.shortLabel = '+12 COMB';
+      } else if (patch.type === 'strategic') {
+        sec.supplyBonus = 10;
+        sec.incomeBonus = 10;
+        sec.ammoBonus = 5;
+        sec.fuelBonus = 5;
+        sec.shortLabel = '⭐ +10S/+5M/+5C';
+      }
+    }
+    if (patch.initialOwner) {
+      sec.initialOwner = patch.initialOwner;
+      sec.owner = patch.initialOwner;
+      sec.captureProgress = patch.initialOwner === 'allies' ? 100 : patch.initialOwner === 'enemies' ? -100 : 0;
+    }
+    this._emitHud();
+    return true;
+  }
+
+  deleteEditorSector(sectorId) {
+    if (!this.map?.sectors) return false;
+    const idx = this.map.sectors.findIndex((s) => s.id === sectorId);
+    if (idx < 0) return false;
+    const removed = this.map.sectors.splice(idx, 1)[0];
+    if (this.selectedEditorSectorId === sectorId) {
+      this.selectedEditorSectorId = this.map.sectors[0]?.id || null;
+    }
+    this.audio?.play?.('door');
+    this.notify('PONTO REMOVIDO', `${removed.name} foi excluído do mapa.`, '#ef4444');
+    this._emitHud();
+    return true;
+  }
+
   _placeEditorWallSegment(x1, y1, x2, y2, tool) {
     if (tool === 'trench_line') {
       const rawPts = [
@@ -2201,6 +2400,19 @@ export class Game {
     const x = clamp(Math.round(wx), 160, BATTLEFIELD_SIZE - 160);
     const y = clamp(Math.round(wy), 160, BATTLEFIELD_SIZE - 160);
     const tool = this.mapEditorTool;
+    if (
+      tool === 'sculpt_hill' ||
+      tool === 'sculpt_mountain' ||
+      tool === 'sculpt_valley' ||
+      tool === 'sculpt_flatten'
+    ) {
+      this.sculptTerrainAt(x, y, tool);
+      return;
+    }
+    if (tool === 'create_sector') {
+      this.createEditorSector(x, y);
+      return;
+    }
     const ang = this.mapEditorAngle || 0;
     const sc = this.mapEditorScale || 1.0;
 
@@ -2423,9 +2635,28 @@ export class Game {
     }
   }
 
-  async saveCustomMapForDeploy() {
+  async saveCustomMapForDeploy(customName = null) {
     if (!this.map) return { ok: false };
     const payload = this.map.exportCustomMapPayload();
+    let finalName = customName;
+    if (!finalName && typeof window !== 'undefined' && typeof window.prompt === 'function') {
+      finalName = window.prompt('Nome do Mapa Customizado:', 'Batalha das Montanhas') || '';
+    }
+    if (finalName && finalName.trim()) {
+      const slug = finalName
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_|_$/g, '');
+      const customId = `custom_${slug || Date.now().toString(36)}`;
+      saveUserCustomMapEntry({
+        id: customId,
+        name: finalName.trim(),
+        theme: this.map.theme || 'rural',
+        sectorsCount: (this.map.sectors || []).length,
+        data: { ...payload, mapId: customId },
+      });
+    }
     try {
       localStorage.setItem(`COF_CUSTOM_MAP_${this.map.mapId}`, JSON.stringify(payload));
     } catch {}
@@ -2535,6 +2766,15 @@ export class Game {
       return false;
     }
     const nextLevel = this.hqLevel + 1;
+    if (this.isCampaign && nextLevel >= 3 && (this.campaignOwnedTerritoriesCount || 1) < 3) {
+      this.audio.play('empty');
+      this.notify(
+        'QG NÍVEL 3 BLOQUEADO',
+        `🔒 Requer 3 Territórios Dominados (Atual: ${this.campaignOwnedTerritoriesCount || 1}/3) — Expanda no Mapa Continental!`,
+        '#c94a38'
+      );
+      return false;
+    }
     const spec = HQ_UPGRADES[nextLevel];
     if (!spec) return false;
 
@@ -6623,7 +6863,10 @@ export class Game {
     }
 
     const safeDt = Math.min(realDt, 0.1);
-    const ts = Number.isFinite(this.timeScale) ? this.timeScale : 1.0;
+    if (this.isMultiplayer && this.timeScale !== 1.0) {
+      this.timeScale = 1.0;
+    }
+    const ts = this.isMultiplayer ? 1.0 : (Number.isFinite(this.timeScale) ? this.timeScale : 1.0);
     const simDt = safeDt * ts;
     if (simDt > 0) {
       this.matchStats.elapsedSeconds = (this.matchStats.elapsedSeconds || 0) + simDt;
@@ -7586,7 +7829,10 @@ export class Game {
         }
       }
 
-      const effectiveRange = u.garrisonedBuildingId ? u.spec.range * 1.25 : u.spec.range;
+      const unitGroundH = getTerrainHeightAt(u.x, u.y, this.map);
+      u.highGroundBonus = unitGroundH >= 25;
+      const rangeMult = (u.garrisonedBuildingId ? 1.25 : 1.0) * (u.highGroundBonus ? 1.25 : 1.0);
+      const effectiveRange = u.spec.range * rangeMult;
       u.aimSwitchCooldown = Math.max(0, (u.aimSwitchCooldown || 0) - dt);
       if (!targetEnemy && !targetEnemyBuilding) {
         if (u.lastTargetId && u.aimSwitchCooldown > 0) {
@@ -7880,6 +8126,13 @@ export class Game {
 
           const nextX = clamp(u.x + u.vx * dt, 70, BATTLEFIELD_SIZE - 70);
           const nextY = clamp(u.y + u.vy * dt, 70, BATTLEFIELD_SIZE - 70);
+
+          // Montanhas Rochosas muito íngremes bloqueiam veículos pesados, mas permitem infantaria/snipers
+          if (u.spec.type === 'vehicle' && getTerrainSlopeAt(nextX, nextY, this.map) > 0.68) {
+            u.vx = 0;
+            u.vy = 0;
+            continue;
+          }
 
           const resolved = this.map.resolveObstacleCollision(
             nextX,
@@ -8836,6 +9089,9 @@ export class Game {
         : 0,
       enemyProductionDebuffTimer: Math.ceil(this.enemyProductionDebuffTimer || 0),
       enemySabotageTimer: Math.ceil(this.enemySabotageTimer || 0),
+      isMultiplayer: Boolean(this.isMultiplayer),
+      isCampaign: Boolean(this.isCampaign),
+      campaignOwnedTerritoriesCount: this.campaignOwnedTerritoriesCount || 1,
       tacticalMapOpen: this.tacticalMapOpen,
       tacticalArrowsCount: this.tacticalArrows.length,
       tacticalPingsCount: this.tacticalPings.length,

@@ -177,19 +177,21 @@ export default function HUD({
             <span>Director Cam: {hud.directorCamActive ? 'ON' : 'OFF'}</span>
           </button>
 
-          <div className="spec-speed-group">
-            <IconFastForward size={13} />
-            {[1, 2, 3].map((spd) => (
-              <button
-                key={spd}
-                type="button"
-                className={`spec-speed-btn ${Math.abs((hud.timeScale || 1) - spd) < 0.1 ? 'active' : ''}`}
-                onClick={() => gameRef.current?.setGameSpeed(spd)}
-              >
-                {spd}x
-              </button>
-            ))}
-          </div>
+          {!hud.isMultiplayer && (
+            <div className="spec-speed-group">
+              <IconFastForward size={13} />
+              {[1, 2, 3].map((spd) => (
+                <button
+                  key={spd}
+                  type="button"
+                  className={`spec-speed-btn ${Math.abs((hud.timeScale || 1) - spd) < 0.1 ? 'active' : ''}`}
+                  onClick={() => gameRef.current?.setGameSpeed(spd)}
+                >
+                  {spd}x
+                </button>
+              ))}
+            </div>
+          )}
 
           <button
             type="button"
@@ -663,8 +665,14 @@ export default function HUD({
               const lvl = hud.hqLevel || 1;
               const cp = hud.commandPoints || 0;
               const nextSpec = lvl < 3 ? HQ_UPGRADES[lvl + 1] : null;
+              const campaignLockedLv3 = Boolean(
+                hud.isCampaign &&
+                  lvl + 1 >= 3 &&
+                  (hud.campaignOwnedTerritoriesCount || 1) < 3
+              );
               const canUpgradeHq =
                 nextSpec &&
+                !campaignLockedLv3 &&
                 cp >= (nextSpec.requiredCp || 0) &&
                 hud.supplies >= (nextSpec.supplyCost || 0) &&
                 hud.fuel >= (nextSpec.fuelCost || 0) &&
@@ -680,11 +688,18 @@ export default function HUD({
                   {nextSpec ? (
                     <button
                       type="button"
+                      disabled={campaignLockedLv3}
                       className={`hud-btn hq-upgrade-btn ${canUpgradeHq ? 'ready' : 'locked'}`}
                       onClick={() => gameRef.current?.upgradeHq()}
-                      title={`${nextSpec.name}: ${nextSpec.unlocks}`}
+                      title={
+                        campaignLockedLv3
+                          ? `🔒 Requer 3 Territórios Dominados (Atual: ${hud.campaignOwnedTerritoriesCount || 1}/3) — Expanda no Mapa Continental!`
+                          : `${nextSpec.name}: ${nextSpec.unlocks}`
+                      }
                     >
-                      +QG NV.{lvl + 1} ({nextSpec.supplyCost}S/{nextSpec.fuelCost}C • {nextSpec.requiredCp}CP)
+                      {campaignLockedLv3
+                        ? `🔒 Req. 3 Territórios (${hud.campaignOwnedTerritoriesCount || 1}/3)`
+                        : `+QG NV.${lvl + 1} (${nextSpec.supplyCost}S/${nextSpec.fuelCost}C • ${nextSpec.requiredCp}CP)`}
                     </button>
                   ) : (
                     <span className="hq-max-badge">
@@ -865,14 +880,22 @@ export default function HUD({
               { id: 'bush', icon: '🌿', title: 'Arbustos / Cerca Viva' },
               { id: 'crater_rock', icon: '🪨', title: 'Rochas / Crateras' },
             ],
+            terrain: [
+              { id: 'sculpt_hill', icon: '⛰️', title: 'Elevar Morro / Colina' },
+              { id: 'sculpt_mountain', icon: '🏔️', title: 'Montanha Rochosa' },
+              { id: 'sculpt_valley', icon: '🕳️', title: 'Rebaixar / Vale / Cratera' },
+              { id: 'sculpt_flatten', icon: '📏', title: 'Aplainar Terreno' },
+            ],
           };
 
           const allItems = [
             ...EDITOR_CATALOG.buildings,
             ...EDITOR_CATALOG.walls,
             ...EDITOR_CATALOG.nature,
+            ...EDITOR_CATALOG.terrain,
             { id: 'select_move', icon: '✋', title: 'Mover / Girar Objeto' },
             { id: 'move_sector', icon: '🚩', title: 'Mover Bandeira (Setor)' },
+            { id: 'create_sector', icon: '➕', title: 'Criar Ponto de Conquista' },
             { id: 'eraser', icon: '🗑️', title: 'Borracha (Apagar Objeto)' },
             { id: 'eraser_area', icon: '🧹', title: 'Limpar Área (15m)' },
           ];
@@ -1047,12 +1070,13 @@ export default function HUD({
                     </div>
                   </div>
 
-                  {/* 3. NAVEGAÇÃO POR 4 ABAS LIMPAS (SEM LISTA INFINITA) */}
+                  {/* 3. NAVEGAÇÃO POR 5 ABAS LIMPAS */}
                   <div className="mil-editor-tabs">
                     {[
                       { id: 'buildings', label: '🏠 PRÉDIOS' },
-                      { id: 'walls', label: '🧱 MUROS & DEFESAS' },
+                      { id: 'walls', label: '🧱 MUROS' },
                       { id: 'nature', label: '🌲 NATUREZA' },
+                      { id: 'terrain', label: '⛰️ RELEVO' },
                       { id: 'sectors', label: '🚩 SETORES' },
                     ].map((t) => (
                       <button
@@ -1063,6 +1087,8 @@ export default function HUD({
                           setEditorTab(t.id);
                           if (t.id === 'sectors') {
                             selectTool('move_sector');
+                          } else if (t.id === 'terrain') {
+                            selectTool('sculpt_hill');
                           }
                         }}
                       >
@@ -1071,9 +1097,64 @@ export default function HUD({
                     ))}
                   </div>
 
-                  {/* CONTEÚDO DA ABA ATIVA (GRADE COMPACTA DE 2 COLUNAS COM SCROLLBAR GRAFITE 4PX) */}
+                  {/* CONTEÚDO DA ABA ATIVA */}
                   <div className="mil-editor-body">
-                    {editorTab !== 'sectors' ? (
+                    {editorTab === 'terrain' ? (
+                      <div className="mil-editor-sectors-pane">
+                        <div className="mil-editor-grid-2col">
+                          {EDITOR_CATALOG.terrain.map((item) => {
+                            const isSelected = activeToolId === item.id;
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                className={`mil-ed-card ${isSelected ? 'active' : ''}`}
+                                onClick={() => selectTool(item.id)}
+                              >
+                                <span className="mil-ed-card-icon">{item.icon}</span>
+                                <span className="mil-ed-card-title">{item.title}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div style={{ marginTop: 8, padding: '8px', background: 'rgba(15,20,15,0.8)', borderRadius: 6 }}>
+                          <div style={{ fontSize: '0.74rem', marginBottom: 4 }}>
+                            Raio do Pincel: <strong>{gameRef.current?.editorBrushRadiusMeters || 18}m</strong>
+                          </div>
+                          <input
+                            type="range"
+                            min={8}
+                            max={40}
+                            defaultValue={gameRef.current?.editorBrushRadiusMeters || 18}
+                            onChange={(e) =>
+                              gameRef.current?.setEditorTerrainBrush({
+                                radiusMeters: Number(e.target.value),
+                              })
+                            }
+                            style={{ width: '100%' }}
+                          />
+                          <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
+                            {[
+                              { id: 'low', label: 'Baixa' },
+                              { id: 'medium', label: 'Média' },
+                              { id: 'high', label: 'Alta' },
+                            ].map((lv) => (
+                              <button
+                                key={lv.id}
+                                type="button"
+                                className={`mil-pill ${(gameRef.current?.editorBrushIntensity || 'medium') === lv.id ? 'active' : ''}`}
+                                style={{ flex: 1, fontSize: '0.72rem' }}
+                                onClick={() =>
+                                  gameRef.current?.setEditorTerrainBrush({ intensity: lv.id })
+                                }
+                              >
+                                {lv.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ) : editorTab !== 'sectors' ? (
                       <div className="mil-editor-grid-2col">
                         {(EDITOR_CATALOG[editorTab] || []).map((item) => {
                           const isSelected = activeToolId === item.id;
@@ -1092,21 +1173,28 @@ export default function HUD({
                       </div>
                     ) : (
                       <div className="mil-editor-sectors-pane">
-                        <button
-                          type="button"
-                          className={`mil-ed-move-flag-btn ${
-                            activeToolId === 'move_sector' ? 'active' : ''
-                          }`}
-                          onClick={() => selectTool('move_sector')}
-                        >
-                          🚩 Mover Bandeira Selecionada (Clique ou Arraste no Mapa 3D)
-                        </button>
+                        <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                          <button
+                            type="button"
+                            className={`mil-ed-move-flag-btn ${activeToolId === 'create_sector' ? 'active' : ''}`}
+                            style={{ flex: 1 }}
+                            onClick={() => selectTool('create_sector')}
+                          >
+                            ➕ CRIAR NOVO PONTO DE CONQUISTA
+                          </button>
+                          <button
+                            type="button"
+                            className={`mil-ed-move-flag-btn ${activeToolId === 'move_sector' ? 'active' : ''}`}
+                            style={{ flex: 1 }}
+                            onClick={() => selectTool('move_sector')}
+                          >
+                            🚩 Mover Bandeira
+                          </button>
+                        </div>
 
                         <div className="mil-editor-grid-2col">
                           {(hud.sectors || []).map((sec, idx) => {
-                            const isSel =
-                              activeToolId === 'move_sector' &&
-                              hud.selectedEditorSectorId === sec.id;
+                            const isSel = hud.selectedEditorSectorId === sec.id;
                             return (
                               <button
                                 key={sec.id}
@@ -1116,7 +1204,7 @@ export default function HUD({
                                   setEditorTool('move_sector');
                                   gameRef.current?.selectEditorSector(sec.id);
                                 }}
-                                title={`Centralizar em ${sec.name} e selecionar para mover`}
+                                title={`Centralizar em ${sec.name} e editar`}
                               >
                                 <span className="mil-ed-card-icon">🚩</span>
                                 <span className="mil-ed-card-title">
@@ -1126,6 +1214,85 @@ export default function HUD({
                             );
                           })}
                         </div>
+
+                        {(() => {
+                          const selSec = (hud.sectors || []).find(
+                            (s) => s.id === hud.selectedEditorSectorId
+                          );
+                          if (!selSec) return null;
+                          return (
+                            <div
+                              style={{
+                                marginTop: 8,
+                                padding: 8,
+                                borderRadius: 6,
+                                background: 'rgba(15, 20, 15, 0.9)',
+                                border: '1px solid rgba(250, 204, 21, 0.35)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 6,
+                              }}
+                            >
+                              <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#fde047' }}>
+                                CONFIGURAR SETOR SELECIONADO
+                              </div>
+                              <input
+                                type="text"
+                                className="mil-input"
+                                value={selSec.name || ''}
+                                onChange={(e) =>
+                                  gameRef.current?.updateEditorSector(selSec.id, {
+                                    name: e.target.value,
+                                  })
+                                }
+                                placeholder="Nome do Setor"
+                              />
+                              <select
+                                className="mil-input"
+                                value={selSec.type || 'supplies'}
+                                onChange={(e) =>
+                                  gameRef.current?.updateEditorSector(selSec.id, {
+                                    type: e.target.value,
+                                  })
+                                }
+                              >
+                                <option value="supplies">📦 Suprimentos (+15 SUP/min)</option>
+                                <option value="ammo">💣 Munição (+12 MUN/min)</option>
+                                <option value="fuel">⛽ Combustível (+12 COMB/min)</option>
+                                <option value="strategic">⭐ Ponto Estratégico (+10S/+5M/+5C)</option>
+                              </select>
+                              <div style={{ display: 'flex', gap: 4 }}>
+                                {[
+                                  { id: 'neutral', label: 'Neutro' },
+                                  { id: 'allies', label: 'Time 1 (Azul)' },
+                                  { id: 'enemies', label: 'Time 2 (Verm.)' },
+                                ].map((ow) => (
+                                  <button
+                                    key={ow.id}
+                                    type="button"
+                                    className={`mil-pill ${(selSec.owner || 'neutral') === ow.id ? 'active' : ''}`}
+                                    style={{ flex: 1, fontSize: '0.7rem' }}
+                                    onClick={() =>
+                                      gameRef.current?.updateEditorSector(selSec.id, {
+                                        initialOwner: ow.id,
+                                      })
+                                    }
+                                  >
+                                    {ow.label}
+                                  </button>
+                                ))}
+                              </div>
+                              <button
+                                type="button"
+                                className="mil-pill"
+                                style={{ borderColor: '#ef4444', color: '#fca5a5' }}
+                                onClick={() => gameRef.current?.deleteEditorSector(selSec.id)}
+                              >
+                                🗑️ Excluir Este Ponto de Conquista
+                              </button>
+                            </div>
+                          );
+                        })()}
 
                         <button
                           type="button"
@@ -1237,21 +1404,33 @@ export default function HUD({
                       Nv. 3: Tanque MBT 120mm, Artilharia e Ataques Aéreos
                     </div>
                   </div>
-                  {(hud.hqLevel || 1) < 3 && HQ_UPGRADES[(hud.hqLevel || 1) + 1] && (
-                    <button
-                      type="button"
-                      className="base-item-btn hq-up-btn"
-                      onClick={() => gameRef.current?.upgradeHq()}
-                    >
-                      <div className="base-item-top">
-                        <strong>⬆ Evoluir para QG Nível {(hud.hqLevel || 1) + 1}</strong>
-                        <span>
-                          {HQ_UPGRADES[(hud.hqLevel || 1) + 1].supplyCost} SUP •{' '}
-                          {HQ_UPGRADES[(hud.hqLevel || 1) + 1].fuelCost} COMB
-                        </span>
-                      </div>
-                    </button>
-                  )}
+                  {(hud.hqLevel || 1) < 3 && HQ_UPGRADES[(hud.hqLevel || 1) + 1] && (() => {
+                    const nextLv = (hud.hqLevel || 1) + 1;
+                    const lockedLv3 = Boolean(
+                      hud.isCampaign &&
+                        nextLv >= 3 &&
+                        (hud.campaignOwnedTerritoriesCount || 1) < 3
+                    );
+                    return (
+                      <button
+                        type="button"
+                        disabled={lockedLv3}
+                        className={`base-item-btn hq-up-btn ${lockedLv3 ? 'locked' : ''}`}
+                        onClick={() => gameRef.current?.upgradeHq()}
+                      >
+                        <div className="base-item-top">
+                          <strong>
+                            {lockedLv3
+                              ? `🔒 Requer 3 Territórios Dominados (Atual: ${hud.campaignOwnedTerritoriesCount || 1}/3) — Expanda no Mapa Continental!`
+                              : `⬆ Evoluir para QG Nível ${nextLv}`}
+                          </strong>
+                          <span>
+                            {HQ_UPGRADES[nextLv].supplyCost} SUP • {HQ_UPGRADES[nextLv].fuelCost} COMB
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })()}
                 </div>
 
                 {BASE_BUILDINGS.map((b) => {
@@ -2354,29 +2533,46 @@ export default function HUD({
 
             <div className="sys-modal-section">
               <div className="sys-sec-title">⏱ RITMO TÁTICO & MODO TOUCH</div>
-              <div className="sys-btn-row" style={{ marginBottom: 8 }}>
-                <button
-                  type="button"
-                  className={`hud-btn ${hud.timeScale === 0 ? 'active' : ''}`}
-                  onClick={() => gameRef.current?.toggleTacticalPause()}
+              {hud.isMultiplayer ? (
+                <div
+                  style={{
+                    marginBottom: 8,
+                    padding: '6px 10px',
+                    borderRadius: 5,
+                    background: 'rgba(194, 142, 56, 0.14)',
+                    border: '1px solid rgba(250, 204, 21, 0.35)',
+                    color: '#fde047',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                  }}
                 >
-                  ⏸ PAUSAR [ESPAÇO]
-                </button>
-                {[
-                  { mult: 0.5, label: '0.5x LENTO' },
-                  { mult: 1.0, label: '1.0x NORMAL' },
-                  { mult: 1.5, label: '1.5x RÁPIDO' },
-                ].map((sp) => (
+                  🔒 VELOCIDADE ONLINE TRAVADA EM 1.0x (SINCRONIA MULTIPLAYER)
+                </div>
+              ) : (
+                <div className="sys-btn-row" style={{ marginBottom: 8 }}>
                   <button
-                    key={sp.label}
                     type="button"
-                    className={`hud-btn ${hud.timeScale === sp.mult ? 'active' : ''}`}
-                    onClick={() => setSpeed(sp.mult)}
+                    className={`hud-btn ${hud.timeScale === 0 ? 'active' : ''}`}
+                    onClick={() => gameRef.current?.toggleTacticalPause()}
                   >
-                    {sp.label}
+                    ⏸ PAUSAR [ESPAÇO]
                   </button>
-                ))}
-              </div>
+                  {[
+                    { mult: 0.5, label: '0.5x LENTO' },
+                    { mult: 1.0, label: '1.0x NORMAL' },
+                    { mult: 1.5, label: '1.5x RÁPIDO' },
+                  ].map((sp) => (
+                    <button
+                      key={sp.label}
+                      type="button"
+                      className={`hud-btn ${hud.timeScale === sp.mult ? 'active' : ''}`}
+                      onClick={() => setSpeed(sp.mult)}
+                    >
+                      {sp.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="sys-btn-row">
                 <button
                   type="button"

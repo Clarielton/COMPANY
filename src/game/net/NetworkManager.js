@@ -4,11 +4,15 @@ import {
   CAMPAIGN_PACKS,
   computeLevelFromXp,
 } from '../data/accountData.js';
+import {
+  buildInitialCampaignState,
+  calculateMarchDurationMs,
+  resolveCompletedMarches,
+} from '../data/campaign15Data.js';
 
 const CONFIG_STORAGE_KEY = 'frontline_firebase_config';
 const USER_STORAGE_KEY = 'COF_AUTH_USER';
 const ACTIVE_ROOMS_KEY = 'COF_ACTIVE_ROOMS';
-const CAMPAIGNS_KEY = 'COF_CAMPAIGNS_V1';
 const LOCAL_CAMPAIGN_SAVES_KEY = 'COF_LOCAL_CAMPAIGN_SAVES';
 const BROADCAST_CHANNEL_NAME = 'cof_multiplayer_v2';
 const MASTER_ADMIN_KEYS = ['FRONT-ADMIN-1944', 'ADMIN1944', 'clarielton'];
@@ -108,7 +112,9 @@ export class NetworkManager {
     this.localSlot = 1;
     this.pingMs = 14;
     this.openRooms = [];
-    this.campaigns = this._readLocalCampaigns();
+    this.activeCampaignId = null;
+    this.activeCampaign = null;
+    this.campaigns = [];
 
     this._listeners = new Set();
     this._cmdListeners = new Set();
@@ -125,6 +131,7 @@ export class NetworkManager {
       this._ensureValidToken().finally(() => {
         this._refreshOpenRooms();
         this._pullCloudProfile();
+        this.loadActiveCloudCampaign();
       });
     } else {
       this._refreshOpenRooms();
@@ -183,6 +190,8 @@ export class NetworkManager {
       localSlot: this.localSlot,
       pingMs: this.pingMs,
       openRooms: [...this.openRooms],
+      activeCampaignId: this.activeCampaignId,
+      activeCampaign: this.activeCampaign ? { ...this.activeCampaign } : null,
       campaigns: [...this.campaigns],
     };
   }
@@ -954,6 +963,25 @@ export class NetworkManager {
     }
   }
 
+  getPlayerLoadoutBadges(user = this.currentUser) {
+    if (!user) return [];
+    const owned = new Set(user.ownedCampaignPacks || []);
+    const badges = [];
+    if (owned.has('paratroopers_elite') || owned.has('supreme_commander_combo')) {
+      badges.push('🪂 Paraquedistas');
+    }
+    if (owned.has('xp_boost_mp') || owned.has('supreme_commander_combo') || owned.has('xp_boost')) {
+      badges.push('⚡ 2x XP');
+    }
+    if (owned.has('visual_arsenal') || owned.has('supreme_commander_combo')) {
+      badges.push('🎨 Camuflagem Elite');
+    }
+    if (owned.has('hq_fortification_kit') || owned.has('supreme_commander_combo') || owned.has('hq_defense')) {
+      badges.push('🏰 Kit QG');
+    }
+    return badges;
+  }
+
   purchaseCampaignPack(packId) {
     if (!this.currentUser) return { ok: false, error: 'Faça login primeiro.' };
     const pack = CAMPAIGN_PACKS.find((p) => p.id === packId);
@@ -965,16 +993,27 @@ export class NetworkManager {
       return { ok: false, error: `Ouro Militar insuficiente (${pack.priceGold} necessários).` };
     }
     owned.add(packId);
-    if (packId === 'vip_combo') {
-      owned.add('xp_boost');
-      owned.add('hq_defense');
+    let bonusGold = 0;
+    if (packId === 'supreme_commander_combo' || packId === 'vip_combo') {
+      owned.add('hq_fortification_kit');
+      owned.add('xp_boost_mp');
+      owned.add('paratroopers_elite');
+      owned.add('visual_arsenal');
+      if (packId === 'supreme_commander_combo') bonusGold = 1000;
     }
     const ownedArr = Array.from(owned);
+    const nextCharges =
+      (this.currentUser.hqKitCharges || 0) +
+      (packId === 'hq_fortification_kit' || packId === 'supreme_commander_combo' ? 10 : 0);
     this.currentUser = {
       ...this.currentUser,
-      militaryGold: gold - pack.priceGold,
+      militaryGold: gold - pack.priceGold + bonusGold,
       ownedCampaignPacks: ownedArr,
-      hasGoldInsignia: ownedArr.includes('vip_combo'),
+      hqKitCharges: nextCharges,
+      hasGoldInsignia:
+        ownedArr.includes('visual_arsenal') ||
+        ownedArr.includes('supreme_commander_combo') ||
+        ownedArr.includes('vip_combo'),
     };
     this._syncUserToCloud(this.currentUser);
     this._emit();
@@ -1290,7 +1329,7 @@ export class NetworkManager {
   } = {}) {
     const roomId = generateRoomCode();
     const mapSeed = Math.floor(1000 + Math.random() * 900000);
-    const maxPlayers = mode === '2v2' ? 4 : 2;
+    const maxPlayers = mode === '2v2' || mode === '4p' ? 4 : mode === '3p' ? 3 : 2;
     const room = {
       roomId,
       codeFormatted: formatRoomCode(roomId),
@@ -1309,6 +1348,8 @@ export class NetworkManager {
       host: { uid: this.uid, name: this.commanderName, ready: true },
       guest: null,
       slots: { 1: this.uid },
+      slotNames: { 1: this.commanderName },
+      slotLoadouts: { 1: this.getPlayerLoadoutBadges() },
       bots: {},
     };
 
@@ -1398,7 +1439,15 @@ export class NetworkManager {
     }
     const bots = { ...(targetRoom.bots || {}) };
     if (assignedSlot && bots[assignedSlot]) delete bots[assignedSlot];
+    const slotNames = { ...(targetRoom.slotNames || {}) };
+    const slotLoadouts = { ...(targetRoom.slotLoadouts || {}) };
+    if (assignedSlot) {
+      slotNames[assignedSlot] = this.commanderName;
+      slotLoadouts[assignedSlot] = this.getPlayerLoadoutBadges();
+    }
     targetRoom.slots = slots;
+    targetRoom.slotNames = slotNames;
+    targetRoom.slotLoadouts = slotLoadouts;
     targetRoom.bots = bots;
     targetRoom.playersCount = Math.min(maxPlayers, Object.keys(slots).length + Object.keys(bots).length);
 
@@ -1422,42 +1471,47 @@ export class NetworkManager {
     return { ok: true, room: targetRoom };
   }
 
-  async autoMatchmake({ mapId = 'normandy_fields', startingResources = 600 } = {}) {
+  async autoMatchmake({ mode = '1v1', mapId = 'normandy_fields', startingResources = 600 } = {}) {
     await this._refreshOpenRooms();
+    const targetModes = mode === '3p_4p' ? ['3p', '4p'] : [mode];
     const candidate = this.openRooms.find(
       (r) =>
         r.status === 'WAITING' &&
         !r.isPrivate &&
+        targetModes.includes(r.mode || '1v1') &&
         (r.playersCount || 1) < (r.maxPlayers || 2) &&
         r.host?.uid !== this.uid
     );
     if (candidate) {
       return this.joinRoom(candidate.roomId);
     }
+    const createMode = mode === '3p_4p' ? '4p' : mode;
     const created = await this.createRoom({
-      roomName: `Matchmaking ${this.commanderName}`,
-      mapId,
-      mode: '1v1',
+      roomName: `Matchmaking ${createMode.toUpperCase()} (${this.commanderName})`,
+      mapId: createMode === '3p' || createMode === '4p' ? 'rhine_valley' : mapId,
+      mode: createMode,
       isPrivate: false,
       startingResources,
     });
     return { ok: true, room: created, createdNew: true };
   }
 
-  async setRoomBot(slot, enabled, difficulty = 'medium') {
+  async setRoomBot(slot, enabled) {
     if (!this.room || this.localSlot !== 1) return false;
-    const maxPlayers = this.room.mode === '2v2' ? 4 : 2;
+    const maxPlayers = this.room.maxPlayers || (this.room.mode === '2v2' || this.room.mode === '4p' ? 4 : this.room.mode === '3p' ? 3 : 2);
     if (slot < 2 || slot > maxPlayers) return false;
     const slots = { ...(this.room.slots || {}) };
     const bots = { ...(this.room.bots || {}) };
     if (enabled) {
       if (slots[slot]) return false;
-      const isAlly = slot === 3;
+      const is2v2Ally = this.room.mode === '2v2' && slot === 3;
       bots[slot] = {
         slot,
-        name: isAlly ? 'Bot IA (Aliado)' : `Bot IA (Eixo ${slot === 4 ? '2' : '1'})`,
-        team: isAlly ? 'allies' : 'enemies',
-        difficulty,
+        name: is2v2Ally
+          ? 'Bot IA (Aliado • Difícil)'
+          : `Bot IA #${slot} (Difícil)`,
+        team: is2v2Ally ? 'allies' : 'enemies',
+        difficulty: 'hard',
       };
     } else {
       delete bots[slot];
@@ -1512,57 +1566,155 @@ export class NetworkManager {
   }
 
   // =========================================================================
-  // CAMPANHA PERSISTENTE DE 15 DIAS
+  // CAMPANHA PERSISTENTE DE 15 DIAS (100% NUVEM FIREBASE RTDB)
   // =========================================================================
-  _readLocalCampaigns() {
-    try {
-      const list = JSON.parse(localStorage.getItem(CAMPAIGNS_KEY) || '[]');
-      if (Array.isArray(list) && list.length > 0) return list;
-    } catch {
-      // noop
-    }
-    return [
-      {
-        id: 'camp_normandy_15d',
-        name: 'Operação Overlord — 15 Dias',
-        mapId: 'normandy_fields',
-        day: 1,
-        totalDays: 15,
-        alliesSectors: 4,
-        axisSectors: 4,
-        playerSupplies: 1200,
-        mapSeed: 194406,
-      },
-    ];
+  isCampaignLockedForUser(camp = this.activeCampaign) {
+    if (!camp || !camp.id) return false;
+    const now = Date.now();
+    if (now >= (camp.endsAt || 0) || camp.status === 'FINISHED') return false;
+    const pState = camp.players?.[this.uid];
+    if (pState?.eliminated) return false;
+    const ownedCount = Object.values(camp.territories || {}).filter((t) => t?.ownerUid === this.uid).length;
+    if (ownedCount <= 0 && camp.territories) return false;
+    return true;
   }
 
-  _saveLocalCampaigns(list) {
+  async loadActiveCloudCampaign() {
+    if (!this.uid || !this.isOnline || !this.hasFirebaseConfig()) return null;
     try {
-      localStorage.setItem(CAMPAIGNS_KEY, JSON.stringify(list));
+      const userCampId =
+        (await this._rtdbGet(`users/${this.uid}/activeCampaignId`)) ||
+        (await this._rtdbGet(`players/${this.uid}/activeCampaignId`));
+      if (!userCampId) {
+        this.activeCampaignId = null;
+        this.activeCampaign = null;
+        this.campaigns = [];
+        this._emit();
+        return null;
+      }
+      const remoteCamp = await this._rtdbGet(`campaigns/${userCampId}`);
+      if (!remoteCamp || !remoteCamp.id) {
+        this.activeCampaignId = null;
+        this.activeCampaign = null;
+        this.campaigns = [];
+        this._emit();
+        return null;
+      }
+      const resolved = resolveCompletedMarches(remoteCamp, Date.now());
+      const camp = resolved.campaign;
+      if (resolved.changed) {
+        await this._rtdbPut(`campaigns/${camp.id}`, camp).catch(() => {});
+      }
+      this.activeCampaignId = camp.id;
+      this.activeCampaign = camp;
+      this.campaigns = [camp];
+      this._emit();
+      return camp;
     } catch {
-      // noop
+      return null;
     }
   }
 
   async createCampaign({ name, mapId = 'normandy_fields' } = {}) {
-    const camp = {
-      id: `camp_${Date.now().toString(36)}`,
-      name: (name || `Campanha 15 Dias (${this.commanderName})`).trim(),
+    if (this.isCampaignLockedForUser(this.activeCampaign)) {
+      return { ok: false, reason: 'ACTIVE_CAMPAIGN_LOCK', campaign: this.activeCampaign };
+    }
+    const campId = `camp_${Date.now().toString(36)}`;
+    const camp = buildInitialCampaignState({
+      campaignId: campId,
+      name,
+      hostUid: this.uid,
+      hostName: this.commanderName,
       mapId,
-      day: 1,
-      totalDays: 15,
-      alliesSectors: 3,
-      axisSectors: 3,
-      playerSupplies: 1000,
-      mapSeed: Math.floor(10000 + Math.random() * 899999),
-    };
-    this.campaigns = [camp, ...this.campaigns];
-    this._saveLocalCampaigns(this.campaigns);
+    });
+    this.activeCampaignId = camp.id;
+    this.activeCampaign = camp;
+    this.campaigns = [camp];
     if (this.isOnline && this.hasFirebaseConfig()) {
-      this._rtdbPut(`campaigns/${camp.id}`, camp).catch(() => {});
+      await Promise.all([
+        this._rtdbPut(`campaigns/${camp.id}`, camp),
+        this._rtdbPut(`users/${this.uid}/activeCampaignId`, camp.id),
+        this._rtdbPut(`players/${this.uid}/activeCampaignId`, camp.id),
+      ]).catch(() => {});
     }
     this._emit();
-    return camp;
+    return { ok: true, campaign: camp };
+  }
+
+  async dispatchStrategicMarch({ fromId, toId, unitCategory = 'mechanized', count = 1 } = {}) {
+    if (!this.activeCampaign || !fromId || !toId) {
+      return { ok: false, error: 'Campanha ou território inválido.' };
+    }
+    const territories = { ...(this.activeCampaign.territories || {}) };
+    const orig = { ...(territories[fromId] || {}) };
+    if (orig.ownerUid !== this.uid || (orig.garrison || 0) < count) {
+      return { ok: false, error: 'Guarnição insuficiente no território de origem.' };
+    }
+    const now = Date.now();
+    const durationMs = calculateMarchDurationMs(fromId, toId, unitCategory);
+    orig.garrison = Math.max(0, (orig.garrison || 0) - count);
+    territories[fromId] = orig;
+
+    const march = {
+      id: `march_${now}_${Math.random().toString(36).slice(2, 6)}`,
+      ownerUid: this.uid,
+      ownerName: this.commanderName,
+      team: 'allies',
+      unitCategory,
+      count,
+      fromId,
+      toId,
+      startTimestamp: now,
+      arrivalTimestamp: now + durationMs,
+    };
+
+    const updated = {
+      ...this.activeCampaign,
+      territories,
+      marches: [...(this.activeCampaign.marches || []), march],
+    };
+    this.activeCampaign = updated;
+    this.campaigns = [updated];
+    if (this.isOnline && this.hasFirebaseConfig()) {
+      await this._rtdbPut(`campaigns/${updated.id}`, updated).catch(() => {});
+    }
+    this._emit();
+    return { ok: true, march };
+  }
+
+  tickCloudCampaignMarches(now = Date.now()) {
+    if (!this.activeCampaign) return;
+    const resolved = resolveCompletedMarches(this.activeCampaign, now);
+    if (!resolved.changed) return;
+    this.activeCampaign = resolved.campaign;
+    this.campaigns = [resolved.campaign];
+    if (this.isOnline && this.hasFirebaseConfig()) {
+      this._rtdbPut(`campaigns/${resolved.campaign.id}`, resolved.campaign).catch(() => {});
+    }
+    this._emit();
+  }
+
+  async syncCampaignTerritoryFortifications(territoryId, patch) {
+    if (!this.activeCampaign || !territoryId) return false;
+    const cur = this.activeCampaign.territories?.[territoryId];
+    if (!cur) return false;
+    const updatedTerr = { ...cur, ...patch };
+    this.activeCampaign = {
+      ...this.activeCampaign,
+      territories: {
+        ...this.activeCampaign.territories,
+        [territoryId]: updatedTerr,
+      },
+    };
+    this.campaigns = [this.activeCampaign];
+    if (this.isOnline && this.hasFirebaseConfig()) {
+      await this._rtdbPut(
+        `campaigns/${this.activeCampaign.id}/territories/${territoryId}`,
+        updatedTerr
+      ).catch(() => {});
+    }
+    this._emit();
+    return true;
   }
 
   async sendCommand(cmdPayload) {

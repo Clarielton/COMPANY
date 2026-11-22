@@ -28,6 +28,7 @@ import {
   BOTTOM_BAR_CATEGORIES,
   ARMY_FACTIONS,
   BATTLEFIELD_MAPS,
+  getAvailableBattlefieldMaps,
   AI_DIFFICULTIES,
   ARMY_SKINS,
 } from '../game/data/rtsData.js';
@@ -111,10 +112,9 @@ export default function GameMenus({
   onInstallPwa,
   onResolveInterrogation,
 }) {
-  const [subTab, setSubTab] = useState(initialTab || 'skirmish');
+  const [subTab, setSubTab] = useState(initialTab || 'rooms');
   const [hoveredNav, setHoveredNav] = useState(null);
   const [net, setNet] = useState(() => networkManager.getStatusSnapshot());
-  const [newCampName, setNewCampName] = useState('');
   const [storeMsg, setStoreMsg] = useState('');
   const [selectedMode, setSelectedMode] = useState(hud?.gameMode || '1v1');
   const [selectedMapId, setSelectedMapId] = useState(hud?.mapId || 'normandy_fields');
@@ -429,14 +429,18 @@ export default function GameMenus({
   const isPaused = gameState === 'PAUSED';
   const s = hud.settings || { camSpeed: 1.0, volume: 0.35, highQuality: true };
   const isAdmin = Boolean(net.isAdmin || networkManager.isAdmin());
+  const isLocalHost =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname.startsWith('192.168.'));
+  const allowOfflineModes = isLocalHost || isAdmin;
 
   const activeTab =
     subTab === 'admin'
       ? 'admin'
       : subTab === 'rooms'
       ? 'rooms'
-      : subTab === 'campaign'
-      ? 'campaign'
       : subTab === 'spectator'
       ? 'spectator'
       : subTab === 'editor_hub'
@@ -447,19 +451,15 @@ export default function GameMenus({
       ? 'arsenal_hub'
       : subTab === 'saves'
       ? 'skirmish'
-      : 'skirmish';
+      : allowOfflineModes
+      ? 'skirmish'
+      : 'rooms';
 
   const hubSubTab = ['skins', 'tutorial', 'saves', 'settings', 'controls'].includes(subTab)
     ? subTab
     : 'tutorial';
   const systemSubTab =
     subTab === 'settings' ? 'settings' : subTab === 'controls' ? 'controls' : 'saves';
-
-  const isLocalHost =
-    typeof window !== 'undefined' &&
-    (window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1' ||
-      window.location.hostname.startsWith('192.168.'));
 
   const mapSubtitles = {
     normandy_fields: 'Frente Rural Europeia • Campos, Sebes & Vilarejos',
@@ -473,128 +473,107 @@ export default function GameMenus({
       ? Math.min(100, Math.round(((xp - prog.currentMinXp) / span) * 100))
       : 100;
 
-  const HUB_NAV_ITEMS = [
-    {
-      id: 'rooms',
-      label: 'BATALHA ONLINE (1v1 & 2v2)',
-      sub: 'Salas abertas e Matchmaking rápido',
-      Icon: IconCrosshair,
-      kicker: 'OPERAÇÃO MULTIPLAYER EM TEMPO REAL',
-      title: 'BATALHA ONLINE (1v1 & 2v2)',
-      desc: 'Enfrente outros comandantes em tempo real com sincronização via Firebase RTDB, salas privadas ou matchmaking rápido.',
-      rules: ['Sem itens pagos (Fair Play)', '12 Setores Estratégicos', 'QG Evolução Nv. 1 a 3'],
-      ctaLabel: 'ENTRAR NO LOBBY ONLINE',
-      onLaunch: () => setSubTab('rooms'),
-    },
-    {
-      id: 'campaign',
-      label: 'GUERRA DE 15 DIAS REAIS',
-      sub: 'Campanha persistente na nuvem',
-      badge: '15 JOGADORES • 40 TERRITÓRIOS',
-      Icon: IconGlobe,
-      kicker: 'TEATRO ESTRATÉGICO PERSISTENTE',
-      title: 'GUERRA DE 15 DIAS REAIS',
-      desc: 'Dispute o domínio de 40 territórios ao longo de 15 dias reais com suprimentos acumulados, defesa de QG e pacotes táticos.',
-      rules: ['15 Jogadores por Frente', '40 Territórios Persistentes', 'Pacotes Táticos Ativos'],
-      ctaLabel: 'INICIAR CAMPANHA DE 15 DIAS',
-      onLaunch: () => {
-        const firstCamp = (net.campaigns || [])[0];
-        if (firstCamp) {
-          onStartOnlineMatch?.({
-            networkManager,
-            room: {
-              roomId: firstCamp.id,
-              mapId: firstCamp.mapId || 'normandy_fields',
-              mapSeed: firstCamp.mapSeed || 194406,
-              startingResources: firstCamp.playerSupplies || 1000,
-              isCampaign: true,
-              campaignDay: firstCamp.day || 1,
-            },
-            localSlot: 1,
-          });
-        } else {
-          setSubTab('campaign');
-        }
-      },
-    },
-    {
-      id: 'skirmish',
-      label: 'CAMPANHA CLÁSSICA & SAVES',
-      sub: 'Escaramuças vs IA, Missões e Saves Locais',
-      Icon: IconMedal,
-      kicker: 'COMBATE TÁTICO CONTRA IA',
-      title: 'CAMPANHA CLÁSSICA & SAVES',
-      desc: 'Comande infantaria com vida individual por soldado, blindados MBT, artilharia MLRS e suporte aéreo contra a IA tática.',
-      rules: ['Modos 1v1 e 2v2', '3 Níveis de IA', 'Save Rápido [F9] / JSON'],
-      ctaLabel: 'INICIAR OPERAÇÃO',
-      onLaunch: () =>
-        onPlayMode(selectedMode, startingResources, selectedMapId, selectedDifficulty),
-    },
-    ...(isAdmin
-      ? [
-          {
-            id: 'spectator',
-            label: 'MODO ESPECTADOR (IA vs IA)',
-            sub: 'Assistir batalhas e gravar conteúdo',
-            Icon: IconCamera,
-            kicker: 'ESTÚDIO CINEMATOGRÁFICO & GRAVAÇÃO (ADMIN)',
-            title: 'MODO ESPECTADOR: IA vs IA',
-            desc: 'Dois Comandantes de IA completos (Aliados vs Eixo) batalham pelo mapa sem intervenção humana e sem Névoa de Guerra.',
-            rules: ['Visão 100% Sem Névoa', 'Director Cam Automática', 'Ocultar HUD [H] + Vel. 1x–3x'],
-            ctaLabel: 'INICIAR BATALHA ESPECTADOR',
-            onLaunch: () => onPlaySpectator?.(selectedMapId),
-          },
-        ]
-      : []),
-    ...(isLocalHost
-      ? [
-          {
-            id: 'editor_hub',
-            label: isAdmin ? 'EDITOR DE MAPAS & SANDBOX' : 'EDITOR DE MAPAS (LOCAL)',
-            sub: 'Modificar mapa 3D no modo local',
-            Icon: IconCompass,
-            kicker: 'FERRAMENTAS DE CONSTRUÇÃO DE CENÁRIO (LOCAL)',
-            title: isAdmin ? 'EDITOR DE MAPAS 3D & SANDBOX' : 'EDITOR DE MAPAS 3D (LOCAL)',
-            desc: 'Posicione casas, muros, trincheiras, áreas inteiras de floresta e mova pontos de conquista diretamente no terreno 3D.',
-            rules: ['Salva em customMaps.json', 'Pausa & Zoom Amplo', 'Mover/Girar Pós-Colocação'],
-            ctaLabel: 'ABRIR EDITOR DE MAPA 3D',
-            onLaunch: () => onOpenMapEditor?.(selectedMapId),
-          },
-        ]
-      : []),
-    {
-      id: 'store_ranks',
-      label: 'SUPRIMENTOS, PATENTE & ARSENAL',
-      sub: 'Ouro Militar, Batalhões e Camuflagens',
-      Icon: IconSupply,
-      kicker: 'PROGRESSÃO & ARSENAL DO COMANDANTE',
-      title: 'SUPRIMENTOS, PATENTE & ARSENAL',
-      desc: 'Desbloqueie batalhões de elite com sua patente e Ouro Militar, equipe pacotes de campanha e personalize uniformes.',
-      rules: [`Nível ${prog.level} (${prog.rank})`, `${net.currentUser?.militaryGold ?? 0} Ouro Militar`, '5 Esquemas de Camuflagem'],
-      ctaLabel: 'GERENCIAR ARSENAL',
-      onLaunch: () => setSubTab('store'),
-    },
-    {
-      id: 'arsenal_hub',
-      label: 'GUIA TÁTICO & MANUAL DE ASSALTO',
-      sub: 'Doutrina, Controles e Áudio/Vídeo',
-      Icon: IconBook,
-      kicker: 'ACADEMIA MILITAR & CONFIGURAÇÕES',
-      title: 'GUIA TÁTICO & MANUAL DE ASSALTO',
-      desc: 'Aprenda táticas de flanqueamento, encaixe em muros (Cover Snap), captura de prisioneiros e ajuste gráficos/controles.',
-      rules: ['Treinamento Guiado', 'Atalhos F1–F5 & TAB', 'Configurações de Câmera'],
-      ctaLabel: 'INICIAR TREINAMENTO GUIADO',
-      onLaunch: () => {
-        try {
-          localStorage.setItem('frontline_start_guided', '1');
-        } catch {}
-        onPlayMode(selectedMode, 1000, selectedMapId, 'easy');
-      },
-    },
-  ];
+  const HUB_NAV_ITEMS = allowOfflineModes
+    ? [
+        {
+          id: 'rooms',
+          label: '⚔️ BATALHA ONLINE (1v1, 2v2, 3P & 4P)',
+          sub: 'Criar sala 1v1, 2v2, 3P ou 4P FFA e lista de salas abertas',
+          Icon: IconCrosshair,
+          kicker: 'OPERAÇÃO MULTIPLAYER EM TEMPO REAL (1v1, 2v2, 3P & 4P)',
+          title: '⚔️ BATALHA ONLINE (1v1, 2v2, 3P & 4P)',
+          desc: 'Crie uma sala 1v1, 2v2, 3P ou 4P FFA (com jogadores reais ou Bot IA Difícil) em mapas padrão ou grandes de 16–20 setores.',
+          rules: ['Velocidade Travada 1x', 'Bot IA Exclusivo Difícil', 'Início Limpo Apenas QG'],
+          ctaLabel: 'ENTRAR NO LOBBY ONLINE',
+          onLaunch: () => setSubTab('rooms'),
+        },
+        {
+          id: 'skirmish',
+          label: 'CAMPANHA CLÁSSICA & SAVES (LOCAL)',
+          sub: 'Escaramuças vs IA, Missões e Saves Locais',
+          Icon: IconMedal,
+          kicker: 'COMBATE TÁTICO CONTRA IA (LOCAL)',
+          title: 'CAMPANHA CLÁSSICA & SAVES',
+          desc: 'Comande infantaria com vida individual por soldado, blindados MBT, artilharia MLRS e suporte aéreo contra a IA tática.',
+          rules: ['Modos 1v1 e 2v2', '3 Níveis de IA', 'Save Rápido [F9] / JSON'],
+          ctaLabel: 'INICIAR OPERAÇÃO LOCAL',
+          onLaunch: () =>
+            onPlayMode(selectedMode, startingResources, selectedMapId, selectedDifficulty),
+        },
+        ...(isAdmin
+          ? [
+              {
+                id: 'spectator',
+                label: 'MODO ESPECTADOR (IA vs IA)',
+                sub: 'Assistir batalhas e gravar conteúdo',
+                Icon: IconCamera,
+                kicker: 'ESTÚDIO CINEMATOGRÁFICO & GRAVAÇÃO (ADMIN)',
+                title: 'MODO ESPECTADOR: IA vs IA',
+                desc: 'Dois Comandantes de IA completos (Aliados vs Eixo) batalham pelo mapa sem intervenção humana e sem Névoa de Guerra.',
+                rules: ['Visão 100% Sem Névoa', 'Director Cam Automática', 'Ocultar HUD [H] + Vel. 1x–3x'],
+                ctaLabel: 'INICIAR BATALHA ESPECTADOR',
+                onLaunch: () => onPlaySpectator?.(selectedMapId),
+              },
+            ]
+          : []),
+        ...(isLocalHost
+          ? [
+              {
+                id: 'editor_hub',
+                label: isAdmin ? 'EDITOR DE MAPAS & SANDBOX' : 'EDITOR DE MAPAS (LOCAL)',
+                sub: 'Modificar mapa 3D no modo local',
+                Icon: IconCompass,
+                kicker: 'FERRAMENTAS DE CONSTRUÇÃO DE CENÁRIO (LOCAL)',
+                title: isAdmin ? 'EDITOR DE MAPAS 3D & SANDBOX' : 'EDITOR DE MAPAS 3D (LOCAL)',
+                desc: 'Posicione casas, muros, trincheiras, áreas inteiras de floresta e mova pontos de conquista diretamente no terreno 3D.',
+                rules: ['Salva em customMaps.json', 'Pausa & Zoom Amplo', 'Mover/Girar Pós-Colocação'],
+                ctaLabel: 'ABRIR EDITOR DE MAPA 3D',
+                onLaunch: () => onOpenMapEditor?.(selectedMapId),
+              },
+            ]
+          : []),
+        {
+          id: 'store_ranks',
+          label: 'SUPRIMENTOS, PATENTE & ARSENAL',
+          sub: 'Ouro Militar, Batalhões e Camuflagens',
+          Icon: IconSupply,
+          kicker: 'PROGRESSÃO & ARSENAL DO COMANDANTE',
+          title: 'SUPRIMENTOS, PATENTE & ARSENAL',
+          desc: 'Desbloqueie pacotes multiplayer, batalhões de elite com Ouro Militar e personalize camuflagens.',
+          rules: [`Nível ${prog.level} (${prog.rank})`, `${net.currentUser?.militaryGold ?? 0} Ouro Militar`, '5 Esquemas de Camuflagem'],
+          ctaLabel: 'GERENCIAR ARSENAL',
+          onLaunch: () => setSubTab('store'),
+        },
+      ]
+    : [
+        {
+          id: 'rooms',
+          label: '⚔️ BATALHA ONLINE (1v1, 2v2, 3P & 4P)',
+          sub: 'Criar sala e lista de salas abertas',
+          Icon: IconCrosshair,
+          kicker: 'OPERAÇÃO MULTIPLAYER EM TEMPO REAL (1v1, 2v2, 3P & 4P)',
+          title: '⚔️ BATALHA ONLINE (1v1, 2v2, 3P & 4P)',
+          desc: 'Crie uma sala 1v1, 2v2, 3P ou 4P FFA (com jogadores reais ou Bot IA Difícil) em mapas padrão ou grandes de 16–20 setores.',
+          rules: ['Velocidade Travada 1x', 'IA Exclusiva: Difícil', 'Início Limpo Apenas QG'],
+          ctaLabel: 'ENTRAR NO LOBBY ONLINE',
+          onLaunch: () => setSubTab('rooms'),
+        },
+        {
+          id: 'store_ranks',
+          label: '🛒 SUPRIMENTOS, PATENTE & ARSENAL',
+          sub: 'Pacotes Multiplayer, Ouro Militar e Camuflagens',
+          Icon: IconSupply,
+          kicker: 'PROGRESSÃO & LOJA MULTIPLAYER',
+          title: '🛒 SUPRIMENTOS, PATENTE & ARSENAL',
+          desc: 'Adquira pacotes para partidas 1v1, 2v2, 3P e 4P com ativação automática no Lobby e na Batalha 3D.',
+          rules: [`Nível ${prog.level} (${prog.rank})`, `${net.currentUser?.militaryGold ?? 0} Ouro Militar`, '5 Pacotes Multiplayer'],
+          ctaLabel: 'ABRIR LOJA & ARSENAL',
+          onLaunch: () => setSubTab('store'),
+        },
+      ];
 
   const previewId = hoveredNav || activeTab;
-  const heroMeta = HUB_NAV_ITEMS.find((it) => it.id === previewId) || HUB_NAV_ITEMS[2];
+  const heroMeta = HUB_NAV_ITEMS.find((it) => it.id === previewId) || HUB_NAV_ITEMS[0];
 
   return (
     <div className="mil-menu-overlay commercial-hub-overlay">
@@ -862,7 +841,7 @@ export default function GameMenus({
                   <div className="mil-hero-map-mini">
                     <span>TEATRO ATIVO</span>
                     <strong>
-                      {BATTLEFIELD_MAPS.find((m) => m.id === selectedMapId)?.name ||
+                      {getAvailableBattlefieldMaps().find((m) => m.id === selectedMapId)?.name ||
                         'Campos da Normandia'}
                     </strong>
                   </div>
@@ -1005,182 +984,9 @@ export default function GameMenus({
                 </div>
               )}
 
-              {activeTab === 'rooms' && (
+              {(activeTab === 'rooms' || activeTab === 'rooms_2v2') && (
             <div className="mil-subpane">
               <MultiplayerLobby onStartOnlineMatch={onStartOnlineMatch} />
-            </div>
-          )}
-
-          {activeTab === 'campaign' && (
-            <div className="mil-subpane">
-              <div className="mp-card">
-                <div className="mp-card-head">
-                  <div>
-                    <span className="mp-kicker">OPERAÇÕES PERSISTENTES DE 15 DIAS</span>
-                    <h3>CAMPANHAS ATIVAS</h3>
-                  </div>
-                  <div className="mp-join-inline">
-                    <input
-                      type="text"
-                      className="mil-input"
-                      value={newCampName}
-                      onChange={(e) => setNewCampName(e.target.value)}
-                      placeholder="Nome da nova campanha..."
-                    />
-                    <button
-                      type="button"
-                      className="mil-btn-primary"
-                      onClick={() => {
-                        networkManager.createCampaign({ name: newCampName, mapId: selectedMapId });
-                        setNewCampName('');
-                      }}
-                    >
-                      ➕ Criar Campanha de 15 Dias
-                    </button>
-                  </div>
-                </div>
-
-                {/* Pacotes Táticos Ativos na Conta para Campanhas */}
-                <div className="mp-active-packs-strip">
-                  <span className="mp-kicker">PACOTES ATIVOS NA CAMPANHA:</span>
-                  {(net.currentUser?.ownedCampaignPacks || []).length === 0 ? (
-                    <small style={{ color: '#8c948c' }}>
-                      Nenhum pacote ativo (visite 🛒 SUPRIMENTOS para equipar Defesa de QG / 2× XP).
-                    </small>
-                  ) : (
-                    (net.currentUser?.ownedCampaignPacks || []).map((pid) => {
-                      const pk = CAMPAIGN_PACKS.find((x) => x.id === pid);
-                      return (
-                        <span key={pid} className="mp-ping-badge">
-                          {pk?.icon || '✓'} {pk?.badge || pid}
-                        </span>
-                      );
-                    })
-                  )}
-                </div>
-
-                <div className="mp-campaigns-grid">
-                  {(net.campaigns || []).map((c) => (
-                    <div key={c.id} className="mp-campaign-card">
-                      <div className="mp-card-head">
-                        <strong>{c.name}</strong>
-                        <span className="mp-ping-badge">
-                          Dia {c.day} / {c.totalDays || 15}
-                        </span>
-                      </div>
-                      <div className="mp-campaign-stats">
-                        <span>Aliados: {c.alliesSectors} Setores</span>
-                        <span>Eixo: {c.axisSectors} Setores</span>
-                        <span>Recursos: {c.playerSupplies} SUP</span>
-                      </div>
-                      <button
-                        type="button"
-                        className="mil-btn-primary"
-                        onClick={() =>
-                          onStartOnlineMatch?.({
-                            networkManager,
-                            room: {
-                              roomId: c.id,
-                              mapId: c.mapId || 'normandy_fields',
-                              mapSeed: c.mapSeed || 194406,
-                              startingResources: c.playerSupplies || 1000,
-                              isCampaign: true,
-                              campaignDay: c.day || 1,
-                            },
-                            localSlot: 1,
-                          })
-                        }
-                      >
-                        ⚔️ Entrar no Front da Campanha
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Salvamento 100% Local das Campanhas (COF_LOCAL_CAMPAIGN_SAVES — 3 Slots) */}
-              <div className="mp-card">
-                <div className="mp-card-head">
-                  <div>
-                    <span className="mp-kicker">COF_LOCAL_CAMPAIGN_SAVES • ARMAZENAMENTO NO NAVEGADOR</span>
-                    <h3>SAVES LOCAIS DE CAMPANHA (3 SLOTS)</h3>
-                  </div>
-                  <div className="mp-join-inline">
-                    <button
-                      type="button"
-                      className="mil-btn-secondary"
-                      onClick={() => onExportBattle?.(null)}
-                    >
-                      📥 Exportar Save (.json)
-                    </button>
-                    <button
-                      type="button"
-                      className="mil-btn-secondary"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      📤 Importar Save
-                    </button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".json,application/json"
-                      style={{ display: 'none' }}
-                      onChange={handleFileImport}
-                    />
-                  </div>
-                </div>
-                <div className="mp-campaigns-grid">
-                  {networkManager.getLocalCampaignSaves().map((slotData, idx) => (
-                    <div key={idx} className="mp-campaign-card">
-                      <div className="mp-card-head">
-                        <strong>SLOT #{idx + 1}</strong>
-                        <span className="mp-ping-badge">
-                          {slotData ? `Dia ${slotData.campaignDay || 1}/15` : 'VAZIO'}
-                        </span>
-                      </div>
-                      <small style={{ color: '#8c948c' }}>
-                        {slotData
-                          ? `${slotData.title || 'Campanha'} • ${Math.round(slotData.supplies || 0)} SUP`
-                          : 'Salve uma partida de Campanha em andamento para retomar deste dispositivo.'}
-                      </small>
-                      <div className="mp-join-inline" style={{ marginLeft: 0 }}>
-                        {slotData && (
-                          <button
-                            type="button"
-                            className="mil-pill active"
-                            onClick={() => onImportBattle?.(slotData)}
-                          >
-                            ▸ Carregar
-                          </button>
-                        )}
-                        {isPaused && (
-                          <button
-                            type="button"
-                            className="mil-pill"
-                            onClick={() => {
-                              const snap = window.__frontlineGame?.serializeBattleState?.(
-                                `Campanha Slot ${idx + 1}`
-                              );
-                              if (snap) networkManager.saveLocalCampaignSlot(idx, snap);
-                            }}
-                          >
-                            💾 Salvar Aqui
-                          </button>
-                        )}
-                        {slotData && (
-                          <button
-                            type="button"
-                            className="mil-pill"
-                            onClick={() => networkManager.deleteLocalCampaignSlot(idx)}
-                          >
-                            ✕
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
             </div>
           )}
 
@@ -1276,8 +1082,8 @@ export default function GameMenus({
               <div className="mp-card">
                 <div className="mp-card-head">
                   <div>
-                    <span className="mp-kicker">LOJA CONECTADA À CONTA • VINCULADA AO UID</span>
-                    <h3>🛒 SUPRIMENTOS DE CAMPANHA (ITENS PAGOS)</h3>
+                    <span className="mp-kicker">LOJA MULTIPLAYER CONECTADA À CONTA • VINCULADA AO UID</span>
+                    <h3>🛒 SUPRIMENTOS MULTIPLAYER (1v1, 2v2, 3P & 4P)</h3>
                   </div>
                   <div className="mp-room-meta">
                     <span className="mp-ping-badge">
@@ -1286,8 +1092,8 @@ export default function GameMenus({
                   </div>
                 </div>
 
-                <div className="store-fairplay-banner">
-                  ⚠️ <strong>Válido Exclusivamente em Operações de Campanha de 15 Dias</strong> — Desativado automaticamente em Partidas 1v1 / 2v2 Competitivas.
+                <div className="store-fairplay-banner" style={{ borderColor: 'rgba(56, 189, 248, 0.4)', color: '#bae6fd' }}>
+                  ⚡ <strong>Ativação Automática em Partidas Online (1v1, 2v2, 3P e 4P):</strong> Seus selos e benefícios são sincronizados automaticamente no Lobby e na Batalha 3D!
                 </div>
 
                 {storeMsg && <div className="mp-status-note">{storeMsg}</div>}
@@ -1520,7 +1326,7 @@ export default function GameMenus({
             <div className="mil-combat-pane">
               <div className="mil-section-label">▸ TEATRO DE OPERAÇÕES</div>
               <div className="mil-map-list">
-                {BATTLEFIELD_MAPS.map((m) => (
+                {getAvailableBattlefieldMaps().map((m) => (
                   <button
                     key={m.id}
                     type="button"

@@ -4,16 +4,81 @@ export const BATTLEFIELD_MAPS = [
   {
     id: 'normandy_fields',
     name: 'Campos da Normandia',
-    subtitle: 'Frente Rural • Sebes, Lavouras & Encruzilhada',
+    subtitle: 'Padrão • 12 Setores • 9.6 × 9.6 km',
     theme: 'rural',
     climate: 'Temperado',
     sectorsCount: 12,
     sizeLabel: '9.6 × 9.6 km',
+    group: 'standard',
     description:
       'Campinas europeias com sebes densas, fazendas fortificadas e estradas de terra ideais para emboscadas e cobertura.',
     accent: '#65a30d',
   },
+  {
+    id: 'rhine_valley',
+    name: 'Vale do Reno (18 Setores)',
+    subtitle: 'Mapa Grande • 18 Setores • 14.4 × 14.4 km',
+    theme: 'rural',
+    climate: 'Temperado',
+    sectorsCount: 18,
+    sizeLabel: '14.4 × 14.4 km',
+    group: 'large',
+    description:
+      'Teatro continental amplo com 18 territórios estratégicos, pontes fluviais e corredores para 2 a 4 jogadores.',
+    accent: '#38bdf8',
+  },
+  {
+    id: 'kursk_steppe',
+    name: 'Kursk (20 Setores)',
+    subtitle: 'Mapa Grande • 20 Setores • 16.0 × 16.0 km',
+    theme: 'rural',
+    climate: 'Estepe',
+    sectorsCount: 20,
+    sizeLabel: '16.0 × 16.0 km',
+    group: 'large',
+    description:
+      'A maior planície blindada do jogo com 20 setores disputáveis para grandes manobras de MBT e paraquedistas.',
+    accent: '#f59e0b',
+  },
 ];
+
+export const USER_CUSTOM_MAPS_KEY = 'COF_USER_CUSTOM_MAPS_V1';
+
+export function getUserCustomMaps() {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = JSON.parse(localStorage.getItem(USER_CUSTOM_MAPS_KEY) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveUserCustomMapEntry(entry) {
+  if (typeof localStorage === 'undefined' || !entry?.id) return [];
+  const list = getUserCustomMaps().filter((m) => m.id !== entry.id);
+  const next = [entry, ...list];
+  try {
+    localStorage.setItem(USER_CUSTOM_MAPS_KEY, JSON.stringify(next));
+  } catch {}
+  return next;
+}
+
+export function getAvailableBattlefieldMaps() {
+  const custom = getUserCustomMaps().map((c) => ({
+    id: c.id,
+    name: c.name,
+    subtitle: `Mapa Customizado • ${c.sectorsCount || 12} Setores`,
+    theme: c.theme || 'rural',
+    climate: 'Customizado',
+    sectorsCount: c.sectorsCount || 12,
+    sizeLabel: '9.6 × 9.6 km',
+    group: 'custom',
+    isCustom: true,
+    accent: '#a3be8c',
+  }));
+  return [...BATTLEFIELD_MAPS, ...custom];
+}
 
 export const ARMY_SKINS = [
   {

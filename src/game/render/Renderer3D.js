@@ -677,11 +677,16 @@ export class Renderer3D {
     groundGeo.rotateX(-Math.PI / 2);
     const gPos = groundGeo.attributes.position;
     const halfMap = map.size * 0.5;
+    const gColors = new Float32Array(gPos.count * 3);
     for (let i = 0; i < gPos.count; i++) {
       const wx = gPos.getX(i) + halfMap;
       const wz = gPos.getZ(i) + halfMap;
       gPos.setY(i, getTerrainHeight(wx, wz, map));
+      gColors[i * 3] = 1.0;
+      gColors[i * 3 + 1] = 1.0;
+      gColors[i * 3 + 2] = 1.0;
     }
+    groundGeo.setAttribute('color', new THREE.BufferAttribute(gColors, 3));
     groundGeo.computeVertexNormals();
 
     const groundMat = new THREE.MeshStandardMaterial({
@@ -690,6 +695,7 @@ export class Renderer3D {
       bumpScale: 2.8,
       roughness: 0.9,
       metalness: 0.02,
+      vertexColors: true,
     });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.position.set(halfMap, 0, halfMap);
@@ -698,6 +704,7 @@ export class Renderer3D {
     this.terrainHalfMap = halfMap;
     this.carvedTrenchIds = new Set();
     this.worldGroup.add(ground);
+    this.syncTerrainSculptGeometry(map);
 
     // 1b. Camada de Micro-Detalhe (RepeatWrapping 84x84) para nitidez total ao aproximar a câmera
     const detailTex = createGroundDetailTexture(map.theme || 'rural');
@@ -1035,6 +1042,37 @@ export class Renderer3D {
       this.snowSystem = new THREE.Points(snowGeo, snowMat);
       this.worldGroup.add(this.snowSystem);
     }
+  }
+
+  syncTerrainSculptGeometry(map, wx = null, wz = null, radiusWorld = 9600) {
+    if (!this.terrainGeo || !map) return;
+    const gPos = this.terrainGeo.attributes.position;
+    const gCol = this.terrainGeo.attributes.color;
+    const halfMap = this.terrainHalfMap || map.size * 0.5;
+    const rockGrid = map.terrainRockGrid;
+    const gN = map.terrainSculptSize || 129;
+
+    for (let i = 0; i < gPos.count; i++) {
+      const vx = gPos.getX(i) + halfMap;
+      const vz = gPos.getZ(i) + halfMap;
+      if (wx !== null && wz !== null) {
+        if (Math.abs(vx - wx) > radiusWorld || Math.abs(vz - wz) > radiusWorld) continue;
+      }
+      gPos.setY(i, getTerrainHeight(vx, vz, map));
+      if (gCol && rockGrid) {
+        const u = Math.max(0, Math.min(gN - 1, Math.round((vx / map.size) * (gN - 1))));
+        const v = Math.max(0, Math.min(gN - 1, Math.round((vz / map.size) * (gN - 1))));
+        const rk = (rockGrid[v * gN + u] || 0) / 255;
+        if (rk > 0.05) {
+          gCol.setXYZ(i, 1 - rk * 0.52, 1 - rk * 0.52, 1 - rk * 0.48);
+        } else {
+          gCol.setXYZ(i, 1.0, 1.0, 1.0);
+        }
+      }
+    }
+    gPos.needsUpdate = true;
+    if (gCol) gCol.needsUpdate = true;
+    this.terrainGeo.computeVertexNormals();
   }
 
   _updateFogTexture3D(map, dt = 0.05) {

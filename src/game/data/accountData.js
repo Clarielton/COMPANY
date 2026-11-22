@@ -70,47 +70,80 @@ export const BATTALION_UNLOCKS = [
   },
 ];
 
-export const CAMPAIGN_PACKS = [
+export const MULTIPLAYER_PACKS = [
   {
-    id: 'xp_boost',
-    icon: '⚡',
-    name: 'Impulso de XP de Campanha (+100% XP Dobrado)',
-    priceGold: 350,
-    priceBrl: 'R$ 14,90',
-    badge: '+100% XP',
-    desc: 'Dobra todo o XP ganho pela conta nas Campanhas de 15 Dias, liberando Paraquedistas, Comandos e Blindados Pesados na metade do tempo.',
-    perks: ['2× XP em todos os dias e vitórias de Campanha', 'Sobe de patente 2× mais rápido'],
-  },
-  {
-    id: 'hq_defense',
+    id: 'hq_fortification_kit',
     icon: '🏰',
-    name: 'Pacote Inicial de Defesa de Quartel-General',
-    priceGold: 500,
-    priceBrl: 'R$ 24,90',
-    badge: 'DEFESA DE QG',
-    desc: 'Seu QG já começa fortificado no Dia 1 da Campanha de 15 Dias com defesas pesadas.',
+    name: 'Kit Fortificação Inicial de QG',
+    priceGold: 350,
+    durationLabel: '10 Partidas / Passe',
+    badge: '🏰 Kit QG',
+    desc: 'Nas partidas online (1v1, 2v2, 3P, 4P), seu QG já nasce com perímetro de sacos de areia, 1 Bunker leve de vigia e +400 HP.',
     perks: [
-      '2 Bunkers de Concreto com Metralhadoras Fixas nas entradas da base',
-      'Perímetro de Sacos de Areia Reforçados + Arame Farpado + Ouriços Checos Antitanque',
-      '+500 HP Estrutural Extra no QG + 1 Esquadrão de Engenheiros de Guarda',
+      'Perímetro inicial de Sacos de Areia ao redor do QG',
+      '1 Bunker Leve de Vigia pronto desde o segundo 0',
+      '+400 HP Estrutural no Quartel-General contra rush inicial',
     ],
   },
   {
-    id: 'vip_combo',
-    icon: '📦',
-    name: 'Combo Logístico de Operação (15 Dias VIP)',
-    priceGold: 750,
-    priceBrl: 'R$ 34,90',
-    badge: 'VIP 15 DIAS',
-    desc: 'O pacote definitivo para dominar a Campanha de 15 Dias desde o primeiro minuto.',
+    id: 'xp_boost_mp',
+    icon: '⚡',
+    name: 'Impulso Tático de Patente & XP (+100%)',
+    priceGold: 250,
+    durationLabel: '7 Dias Reais',
+    badge: '⚡ 2x XP',
+    desc: 'Dobra todo o XP ganho ao capturar territórios nos mapas de 16–20 setores, destruir blindados e vencer partidas 1v1, 2v2, 3P e 4P.',
     perks: [
-      'Inclui Impulso de XP (+100% Dobrado)',
-      'Inclui Pacote Inicial de Defesa de QG completo',
-      'Caixa Aérea Dia 1: +250 SUP, +100 MUN, +100 COMB',
-      'Insígnia Dourada de Comandante no Lobby',
+      '2× XP em capturas de setor e destruição de blindados',
+      'Acelera a subida de patente em partidas 1v1, 2v2, 3P e 4P',
+    ],
+  },
+  {
+    id: 'paratroopers_elite',
+    icon: '🪂',
+    name: 'Batalhão de Elite: Paraquedistas & Comando',
+    priceGold: 500,
+    durationLabel: 'Desbloqueio Permanente',
+    badge: '🪂 Paraquedistas',
+    desc: 'Libera imediatamente na aba de Operações Especiais (a partir do QG Nível 2) o Esquadrão de Paraquedistas Táticos.',
+    perks: [
+      'Desbloqueio permanente na conta',
+      'Lançamento de infantaria de elite atrás das linhas inimigas',
+      'Ideal para flanqueamentos em mapas grandes de 3P e 4P',
+    ],
+  },
+  {
+    id: 'visual_arsenal',
+    icon: '🎨',
+    name: 'Arsenal Visual: Camuflagens & Bandeira de Comandante',
+    priceGold: 300,
+    durationLabel: 'Desbloqueio Permanente',
+    badge: '🎨 Camuflagem Elite',
+    desc: 'Libera pinturas exclusivas para Tanques MBT, APC Stryker e QG + Bandeira Dourada de Comandante visível para todos nas salas.',
+    perks: [
+      'Camuflagens Tigre Urbano, Deserto Dourado e Florestal Elite',
+      'Bandeira Dourada de Comandante visível no Lobby e em jogo',
+    ],
+  },
+  {
+    id: 'supreme_commander_combo',
+    icon: '📦',
+    name: 'Combo Comandante Supremo (Tudo + 1.000 Ouro Bônus)',
+    priceGold: 990,
+    durationLabel: 'Pacote Completo',
+    featured: true,
+    badge: '👑 COMBO SUPREMO',
+    desc: 'Pacote completo em destaque reunindo Paraquedistas, Camuflagens Exclusivas, Impulso +100% XP, 10 cargas de Kit QG e +1.000 Ouro Bônus.',
+    perks: [
+      'Inclui Batalhão de Paraquedistas & Comando (Permanente)',
+      'Inclui Arsenal Visual & Bandeira Dourada (Permanente)',
+      'Inclui Impulso +100% XP (7 Dias) + 10 Cargas Kit Fortificação QG',
+      'Bônus Imediato: +1.000 Ouro Militar creditados na conta',
     ],
   },
 ];
+
+export const CAMPAIGN_PACKS = MULTIPLAYER_PACKS;
 
 export function computeLevelFromXp(xp = 0) {
   let current = ACCOUNT_RANKS[0];

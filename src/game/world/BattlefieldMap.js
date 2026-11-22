@@ -21,7 +21,7 @@ export class BattlefieldMap {
     const seed = typeof options === 'object' && options !== null ? (options.seed ?? 1944) : options;
     this.mapId = typeof options === 'object' && options !== null ? (options.mapId || 'normandy_fields') : 'normandy_fields';
     this.theme =
-      this.mapId === 'el_alamein_ridge'
+      this.mapId === 'el_alamein_ridge' || this.mapId === 'tobruk_desert'
         ? 'desert'
         : this.mapId === 'bastogne_winter'
           ? 'winter'
@@ -37,9 +37,13 @@ export class BattlefieldMap {
     this.fogGrid = new Uint8Array(this.fogSize * this.fogSize); // 0 por padrão (Escuridão Total / Névoa Densa)
     this.tempVisionZones = []; // Zonas temporárias reveladas por Avião/Drone Recon ou Interrogatório Militar
     this.bushes = [];
+    this.terrainSculptSize = 129;
+    this.terrainSculptGrid = new Float32Array(this.terrainSculptSize * this.terrainSculptSize);
+    this.terrainRockGrid = new Uint8Array(this.terrainSculptSize * this.terrainSculptSize);
 
-    if (this.mapId === 'el_alamein_ridge') {
+    if (this.mapId === 'el_alamein_ridge' || this.mapId === 'tobruk_desert') {
       this._buildDesertMap(rng);
+      if (this.mapId === 'tobruk_desert') this._expandSectorsToCount(16, rng);
       this._generateBushes(rng);
       this.frontlineSamples = 40;
       this.frontlineX = new Float32Array(this.frontlineSamples).fill(this.size * 0.5);
@@ -746,6 +750,9 @@ export class BattlefieldMap {
     this._addPineGroves(rng);
     this._generateBushes(rng);
 
+    if (this.mapId === 'rhine_valley') this._expandSectorsToCount(18, rng);
+    else if (this.mapId === 'kursk_steppe') this._expandSectorsToCount(20, rng);
+
     this.frontlineSamples = 40;
     this.frontlineX = new Float32Array(this.frontlineSamples).fill(this.size * 0.5);
     this._applyCustomMapOverrides();
@@ -755,11 +762,24 @@ export class BattlefieldMap {
     let override = (customMapsData && customMapsData[this.mapId]) || null;
     if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
       try {
+        const userList = JSON.parse(localStorage.getItem('COF_USER_CUSTOM_MAPS_V1') || '[]');
+        const userEntry = Array.isArray(userList) ? userList.find((m) => m.id === this.mapId) : null;
+        if (userEntry?.data) override = userEntry.data;
         const localRaw = localStorage.getItem(`COF_CUSTOM_MAP_${this.mapId}`);
         if (localRaw) override = JSON.parse(localRaw);
       } catch { }
     }
     if (!override || typeof override !== 'object') return;
+    if (Array.isArray(override.terrainHeightmap) && override.terrainHeightmap.length === this.terrainSculptGrid.length) {
+      for (let i = 0; i < this.terrainSculptGrid.length; i++) {
+        this.terrainSculptGrid[i] = Number(override.terrainHeightmap[i]) || 0;
+      }
+    }
+    if (Array.isArray(override.terrainRockmap) && override.terrainRockmap.length === this.terrainRockGrid.length) {
+      for (let i = 0; i < this.terrainRockGrid.length; i++) {
+        this.terrainRockGrid[i] = Number(override.terrainRockmap[i]) || 0;
+      }
+    }
     if (Array.isArray(override.structures)) {
       this.structures = override.structures.map((s) => ({
         ...s,
@@ -779,18 +799,24 @@ export class BattlefieldMap {
       this.customTrenches = override.customTrenches.map((t) => ({ ...t }));
     }
     if (Array.isArray(override.sectors) && override.sectors.length > 0) {
-      this.sectors = (this.sectors || []).map((origSec, idx) => {
-        const saved = override.sectors.find((s) => s.id === origSec.id) || override.sectors[idx];
-        if (!saved) return origSec;
-        return {
-          ...origSec,
-          ...saved,
-          x: Math.round(saved.x ?? origSec.x),
-          y: Math.round(saved.y ?? origSec.y),
-          owner: 'neutral',
-          captureProgress: 0,
-        };
-      });
+      this.sectors = override.sectors.map((saved, idx) => ({
+        id: saved.id || `sec_custom_${idx + 1}`,
+        name: saved.name || `Setor #${idx + 1}`,
+        shortName: saved.shortName || saved.name || `S${idx + 1}`,
+        shortLabel: saved.shortLabel || '+15 SUP',
+        type: saved.type || 'supplies',
+        resourceType: saved.type || 'supplies',
+        x: Math.round(saved.x ?? 4800),
+        y: Math.round(saved.y ?? 4800),
+        radius: saved.radius || 175,
+        owner: saved.initialOwner || 'neutral',
+        initialOwner: saved.initialOwner || 'neutral',
+        captureProgress: saved.initialOwner === 'allies' ? 100 : saved.initialOwner === 'enemies' ? -100 : 0,
+        incomeBonus: saved.incomeBonus ?? saved.supplyBonus ?? 15,
+        supplyBonus: saved.supplyBonus ?? 15,
+        ammoBonus: saved.ammoBonus ?? 0,
+        fuelBonus: saved.fuelBonus ?? 0,
+      }));
     }
   }
 
@@ -798,12 +824,15 @@ export class BattlefieldMap {
     return {
       mapId: this.mapId,
       updatedAt: new Date().toISOString(),
+      terrainHeightmap: Array.from(this.terrainSculptGrid || [], (v) => Number((v || 0).toFixed(2))),
+      terrainRockmap: Array.from(this.terrainRockGrid || []),
       sectors: (this.sectors || []).map((sec) => ({
         id: sec.id,
         name: sec.name,
         shortName: sec.shortName,
         shortLabel: sec.shortLabel,
         type: sec.type,
+        initialOwner: sec.initialOwner || sec.owner || 'neutral',
         x: Math.round(sec.x),
         y: Math.round(sec.y),
         radius: sec.radius || 175,
@@ -2104,6 +2133,43 @@ export class BattlefieldMap {
     return { x: clamp(bx, 260, this.size - 260), y: clamp(by, 260, this.size - 260) };
   }
 
+  _expandSectorsToCount(targetCount, rng) {
+    if (!Array.isArray(this.sectors) || this.sectors.length >= targetCount) return;
+    const types = [
+      { type: 'supplies', shortLabel: '+18 SUP', supplyBonus: 18, ammoBonus: 0, fuelBonus: 0 },
+      { type: 'ammo', shortLabel: '+12 MUN', supplyBonus: 12, ammoBonus: 12, fuelBonus: 0 },
+      { type: 'fuel', shortLabel: '+12 COMB', supplyBonus: 12, ammoBonus: 0, fuelBonus: 12 },
+    ];
+    let idx = 1;
+    while (this.sectors.length < targetCount && idx < 40) {
+      const x = Math.round(1400 + rng() * (this.size - 2800));
+      const y = Math.round(1400 + rng() * (this.size - 2800));
+      if (this.sectors.some((s) => dist(s.x, s.y, x, y) < 880)) {
+        idx++;
+        continue;
+      }
+      const tm = types[this.sectors.length % types.length];
+      this.sectors.push({
+        id: `sec_ext_${this.sectors.length + 1}`,
+        name: `Setor Tático #${this.sectors.length + 1}`,
+        shortName: `Setor #${this.sectors.length + 1}`,
+        type: tm.type,
+        resourceType: tm.type,
+        shortLabel: tm.shortLabel,
+        x,
+        y,
+        radius: 155,
+        owner: 'neutral',
+        captureProgress: 0,
+        supplyBonus: tm.supplyBonus,
+        incomeBonus: tm.supplyBonus,
+        ammoBonus: tm.ammoBonus,
+        fuelBonus: tm.fuelBonus,
+      });
+      idx++;
+    }
+  }
+
   applyCornerRandomSpawns(mode = '1v1', seed = this.seed) {
     const rng = mulberry32((Number(seed) || 1944) + 7919);
     const corners = {
@@ -2115,7 +2181,15 @@ export class BattlefieldMap {
     const opposite = { NW: 'SE', SE: 'NW', NE: 'SW', SW: 'NE' };
     const keys = ['NW', 'NE', 'SW', 'SE'];
 
-    if (mode === '2v2') {
+    if (mode === '3p' || mode === '4p') {
+      const shuffled = [...keys].sort(() => rng() - 0.5);
+      this.hqs = {
+        player: { ...corners[shuffled[0]], team: 'allies', faction: 'player', name: 'QG Comandante 1' },
+        enemy_1: { ...corners[shuffled[1]], team: 'enemies', faction: 'enemy_1', name: 'QG Comandante 2' },
+        ally_ai: { ...corners[shuffled[2]], team: 'ffa_3', faction: 'ally_ai', name: 'QG Comandante 3' },
+        enemy_2: { ...corners[shuffled[3]], team: 'ffa_4', faction: 'enemy_2', name: 'QG Comandante 4' },
+      };
+    } else if (mode === '2v2') {
       const pairings = [
         { allies: ['NW', 'SW'], enemies: ['NE', 'SE'] },
         { allies: ['NE', 'SE'], enemies: ['NW', 'SW'] },

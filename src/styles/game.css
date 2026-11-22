@@ -6374,3 +6374,56 @@ body,
     width: 286px;
   }
 }
+
+.mil-map-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(235px, 1fr));
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.mil-map-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 11px 13px;
+  border-radius: 8px;
+  background: rgba(18, 24, 18, 0.92);
+  border: 1.5px solid rgba(148, 163, 184, 0.25);
+  color: #f1f5f9;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mil-map-card:hover {
+  border-color: rgba(250, 204, 21, 0.55);
+  background: rgba(28, 36, 26, 0.95);
+}
+
+.mil-map-card.active {
+  border-color: #facc15;
+  background: rgba(194, 142, 56, 0.18);
+  box-shadow: 0 0 14px rgba(250, 204, 21, 0.22);
+}
+
+.mil-map-card-head {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.mil-map-card strong {
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.mil-map-card small {
+  font-size: 0.78rem;
+  color: #94a3b8;
+  line-height: 1.35;
+}

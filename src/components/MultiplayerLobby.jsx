@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { BATTLEFIELD_MAPS } from '../game/data/rtsData.js';
+import { getAvailableBattlefieldMaps } from '../game/data/rtsData.js';
 import { formatRoomCode, networkManager } from '../game/net/NetworkManager.js';
 
 export default function MultiplayerLobby({ onStartOnlineMatch }) {
   const [net, setNet] = useState(() => networkManager.getStatusSnapshot());
-  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(true);
   const [roomName, setRoomName] = useState('');
   const [selectedMapId, setSelectedMapId] = useState('normandy_fields');
   const [selectedMode, setSelectedMode] = useState('1v1');
@@ -30,16 +30,19 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
     };
   }, [onStartOnlineMatch]);
 
-  const handleAutoMatchmake = async () => {
+  const handleAutoMatchmake = async (mode = '1v1') => {
     setBusy(true);
     setStatusMsg('');
     const res = await networkManager.autoMatchmake({
+      mode,
       mapId: selectedMapId,
       startingResources: 600,
     });
     setBusy(false);
     if (res.createdNew) {
-      setStatusMsg('Nenhuma sala aberta encontrada — sala pública criada e aguardando oponente!');
+      setStatusMsg(
+        `Nenhuma sala ${mode.toUpperCase()} aberta encontrada — sala pública criada e aguardando oponentes!`
+      );
     }
   };
 
@@ -81,6 +84,7 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
     }
   };
 
+  const availableMaps = getAvailableBattlefieldMaps();
   const room = net.room;
   const openRooms = net.openRooms || [];
 
@@ -106,41 +110,79 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
           </div>
 
           <div className="mp-slots-grid">
-            {(room.mode === '2v2' ? [1, 3, 2, 4] : [1, 2]).map((slotNum) => {
-              const isAlly = slotNum === 1 || slotNum === 3;
+            {(room.mode === '2v2'
+              ? [1, 3, 2, 4]
+              : room.mode === '4p'
+                ? [1, 2, 3, 4]
+                : room.mode === '3p'
+                  ? [1, 2, 3]
+                  : [1, 2]
+            ).map((slotNum) => {
+              const slotColors = {
+                1: { hex: '#38bdf8', name: 'AZUL' },
+                2: { hex: '#ef4444', name: 'VERMELHO' },
+                3: { hex: '#f59e0b', name: 'ÂMBAR' },
+                4: { hex: '#10b981', name: 'ESMERALDA' },
+              };
+              const cMeta = slotColors[slotNum] || slotColors[1];
+              const isAlly = room.mode === '2v2' ? slotNum === 1 || slotNum === 3 : slotNum === 1;
               const humanUid = room.slots?.[slotNum];
               const bot = room.bots?.[slotNum];
-              const label =
-                slotNum === 1
-                  ? 'COMANDANTE 1 • ALIADOS (SUL/OESTE)'
+              const isFfa = room.mode === '3p' || room.mode === '4p';
+              const label = isFfa
+                ? `COMANDANTE ${slotNum} • ${cMeta.name} (FFA)`
+                : slotNum === 1
+                  ? `COMANDANTE 1 • ALIADOS (${cMeta.name})`
                   : slotNum === 3
-                  ? 'COMANDANTE 3 • ALIADOS (SUPORTE)'
-                  : slotNum === 2
-                  ? 'COMANDANTE 2 • EIXO (NORTE/LESTE)'
-                  : 'COMANDANTE 4 • EIXO (SUPORTE)';
+                    ? `COMANDANTE 3 • ALIADOS (${cMeta.name})`
+                    : slotNum === 2
+                      ? `COMANDANTE 2 • EIXO (${cMeta.name})`
+                      : `COMANDANTE 4 • EIXO (${cMeta.name})`;
               const displayName =
                 slotNum === 1
                   ? room.host?.name || 'Host'
                   : humanUid
-                  ? slotNum === 2 && room.guest?.uid === humanUid
-                    ? room.guest.name
-                    : `Comandante #${slotNum}`
-                  : bot
-                  ? bot.name
-                  : 'Vaga Aberta...';
+                    ? room.slotNames?.[slotNum] ||
+                      (slotNum === 2 && room.guest?.uid === humanUid
+                        ? room.guest.name
+                        : `Comandante #${slotNum}`)
+                    : bot
+                      ? bot.name
+                      : 'Vaga Aberta...';
+              const badges = humanUid ? room.slotLoadouts?.[slotNum] || [] : [];
               return (
                 <div
                   key={slotNum}
                   className={`mp-slot-card ${isAlly ? 'ally' : 'axis'} ${humanUid || bot ? 'filled' : ''}`}
+                  style={{ borderColor: cMeta.hex }}
                 >
-                  <span className="mp-slot-tag">{label}</span>
-                  <strong>{displayName}</strong>
+                  <span className="mp-slot-tag" style={{ color: cMeta.hex }}>
+                    {label}
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <strong>{displayName}</strong>
+                    {badges.map((bg) => (
+                      <span
+                        key={bg}
+                        style={{
+                          fontSize: '0.68rem',
+                          padding: '1px 6px',
+                          borderRadius: 4,
+                          background: 'rgba(250, 204, 21, 0.14)',
+                          border: '1px solid rgba(250, 204, 21, 0.35)',
+                          color: '#fde047',
+                        }}
+                      >
+                        {bg}
+                      </span>
+                    ))}
+                  </div>
                   <small className={humanUid || bot ? 'mp-ready-ok' : 'mp-ready-wait'}>
                     {humanUid
                       ? `✓ PRONTO ${net.localSlot === slotNum ? '(VOCÊ)' : ''}`
                       : bot
-                      ? '🤖 BOT IA ATIVO'
-                      : '⏳ Aguardando jogador ou Bot IA'}
+                        ? '🤖 BOT IA ATIVO (DIFÍCIL)'
+                        : '⏳ Aguardando jogador ou Bot IA'}
                   </small>
                   {net.localSlot === 1 && !humanUid && slotNum !== 1 && (
                     <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -148,38 +190,19 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
                         <button
                           type="button"
                           className="mil-pill"
-                          onClick={() => networkManager.setRoomBot(slotNum, true, 'medium')}
+                          onClick={() => networkManager.setRoomBot(slotNum, true)}
                         >
-                          + Adicionar Comandante IA
+                          + Adicionar IA (Difícil)
                         </button>
                       ) : (
-                        <>
-                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                            {[
-                              { id: 'easy', label: 'Fácil' },
-                              { id: 'medium', label: 'Normal' },
-                              { id: 'hard', label: 'Difícil' },
-                            ].map((d) => (
-                              <button
-                                key={d.id}
-                                type="button"
-                                className={`mil-pill ${(bot.difficulty || 'medium') === d.id ? 'active' : ''}`}
-                                style={{ padding: '2px 7px', fontSize: '0.72rem' }}
-                                onClick={() => networkManager.setRoomBot(slotNum, true, d.id)}
-                              >
-                                {d.label}
-                              </button>
-                            ))}
-                          </div>
-                          <button
-                            type="button"
-                            className="mil-pill"
-                            style={{ borderColor: 'rgba(239,68,68,0.45)', color: '#fca5a5' }}
-                            onClick={() => networkManager.setRoomBot(slotNum, false)}
-                          >
-                            ✕ Remover
-                          </button>
-                        </>
+                        <button
+                          type="button"
+                          className="mil-pill"
+                          style={{ borderColor: 'rgba(239,68,68,0.45)', color: '#fca5a5' }}
+                          onClick={() => networkManager.setRoomBot(slotNum, false)}
+                        >
+                          ✕ Remover Bot IA
+                        </button>
                       )}
                     </div>
                   )}
@@ -191,7 +214,7 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
           <div className="mp-form-row">
             <label>MAPA DA OPERAÇÃO</label>
             <div className="mil-pill-row">
-              {BATTLEFIELD_MAPS.map((m) => (
+              {availableMaps.map((m) => (
                 <button
                   key={m.id}
                   type="button"
@@ -232,22 +255,38 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
 
   return (
     <div className="mp-lobby-wrap">
-      {/* Barra Superior de Ações Rápidas */}
+      {/* Barra Superior de Matchmaking Rápido + Criação */}
       <div className="mp-top-actions">
         <button
           type="button"
           className="mil-btn-primary"
           disabled={busy}
-          onClick={handleAutoMatchmake}
+          onClick={() => handleAutoMatchmake('1v1')}
         >
-          🔍 MATCHMAKING AUTOMÁTICO
+          ⚡ Buscar 1v1
+        </button>
+        <button
+          type="button"
+          className="mil-btn-primary"
+          disabled={busy}
+          onClick={() => handleAutoMatchmake('2v2')}
+        >
+          ⚡ Buscar 2v2
+        </button>
+        <button
+          type="button"
+          className="mil-btn-primary"
+          disabled={busy}
+          onClick={() => handleAutoMatchmake('3p_4p')}
+        >
+          ⚡ Buscar 3P / 4P
         </button>
         <button
           type="button"
           className="mil-btn-secondary"
           onClick={() => setShowCreateForm((v) => !v)}
         >
-          ➕ CRIAR NOVA SALA
+          ➕ CRIAR SALA ONLINE
         </button>
         <div className="mp-join-inline">
           <input
@@ -309,18 +348,8 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
               />
             </div>
             <div className="mp-form-row">
-              <label>MODO & PRIVACIDADE</label>
+              <label>PRIVACIDADE</label>
               <div className="mil-pill-row">
-                {['1v1', '2v2'].map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    className={`mil-pill ${selectedMode === m ? 'active' : ''}`}
-                    onClick={() => setSelectedMode(m)}
-                  >
-                    {m.toUpperCase()}
-                  </button>
-                ))}
                 <button
                   type="button"
                   className={`mil-pill ${!isPrivate ? 'active' : ''}`}
@@ -350,16 +379,42 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
           </div>
 
           <div className="mp-form-row">
-            <label>MAPA</label>
+            <label>MODO DE JOGO</label>
+            <div className="mil-pill-row">
+              {[
+                { id: '1v1', label: '1v1 (2 Jogadores)' },
+                { id: '2v2', label: '2v2 (Duplas — 4 Jogadores)' },
+                { id: '3p', label: '3 Jogadores (1v1v1 FFA)' },
+                { id: '4p', label: '4 Jogadores (1v1v1v1 FFA)' },
+              ].map((md) => (
+                <button
+                  key={md.id}
+                  type="button"
+                  className={`mil-pill ${selectedMode === md.id ? 'active' : ''}`}
+                  onClick={() => setSelectedMode(md.id)}
+                >
+                  {md.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mp-form-row">
+            <label>MAPA (PADRÃO & GRANDES 16–20 SETORES)</label>
             <div className="mil-map-grid">
-              {BATTLEFIELD_MAPS.map((m) => (
+              {availableMaps.map((m) => (
                 <button
                   key={m.id}
                   type="button"
                   className={`mil-map-card ${selectedMapId === m.id ? 'active' : ''}`}
                   onClick={() => setSelectedMapId(m.id)}
                 >
-                  <strong>{m.name}</strong>
+                  <div className="mil-map-card-head">
+                    <strong>{m.name}</strong>
+                    <span className="mp-ping-badge">
+                      {m.isCustom ? 'CUSTOM' : m.group === 'large' ? 'GRANDE' : 'PADRÃO'}
+                    </span>
+                  </div>
                   <small>{m.subtitle}</small>
                 </button>
               ))}
@@ -403,21 +458,27 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
           <div className="mp-server-table">
             <div className="mp-server-row mp-server-head">
               <span>SALA</span>
-              <span>HOST</span>
+              <span>MODO</span>
               <span>MAPA</span>
-              <span>JOGADORES</span>
+              <span>VAGAS</span>
               <span>PING</span>
               <span>AÇÃO</span>
             </div>
             {openRooms.map((r) => {
-              const mapObj = BATTLEFIELD_MAPS.find((m) => m.id === r.mapId);
+              const mapObj = availableMaps.find((m) => m.id === r.mapId);
+              const modeLabel =
+                r.mode === '4p'
+                  ? '4P FFA'
+                  : r.mode === '3p'
+                    ? '3P FFA'
+                    : (r.mode || '1v1').toUpperCase();
               return (
                 <div key={r.roomId} className="mp-server-row">
                   <strong>
                     {r.isPrivate ? '🔒 ' : ''}
                     {r.roomName || r.codeFormatted}
                   </strong>
-                  <span>{r.host?.name || 'Host'}</span>
+                  <span>{modeLabel}</span>
                   <span>{mapObj?.name || r.mapId}</span>
                   <span>
                     {r.playersCount || 1}/{r.maxPlayers || 2}
@@ -429,7 +490,7 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
                     disabled={busy}
                     onClick={() => handleJoinRoom(r.roomId, r.isPrivate)}
                   >
-                    ⚔️ ENTRAR NA SALA
+                    ⚔️ ENTRAR
                   </button>
                 </div>
               );

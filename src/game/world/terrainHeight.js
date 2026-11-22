@@ -148,5 +148,42 @@ export function getTerrainHeight(x, z, map = null) {
     }
   }
 
+  // 4. Relevo Esculpido no Editor de Mapas (Heightmap 129x129 com interpolação bilinear)
+  if (map?.terrainSculptGrid && map.terrainSculptGrid.length >= 129 * 129) {
+    const gN = 129;
+    const u = Math.max(0, Math.min(1, x / size)) * (gN - 1);
+    const v = Math.max(0, Math.min(1, z / size)) * (gN - 1);
+    const ix = Math.min(gN - 2, Math.floor(u));
+    const iz = Math.min(gN - 2, Math.floor(v));
+    const fx = u - ix;
+    const fz = v - iz;
+    const grid = map.terrainSculptGrid;
+    const h00 = grid[iz * gN + ix] || 0;
+    const h10 = grid[iz * gN + ix + 1] || 0;
+    const h01 = grid[(iz + 1) * gN + ix] || 0;
+    const h11 = grid[(iz + 1) * gN + ix + 1] || 0;
+    const sculptH =
+      h00 * (1 - fx) * (1 - fz) +
+      h10 * fx * (1 - fz) +
+      h01 * (1 - fx) * fz +
+      h11 * fx * fz;
+    h += sculptH;
+  }
+
   return h;
+}
+
+export function getTerrainHeightAt(x, z, map = null) {
+  return getTerrainHeight(x, z, map);
+}
+
+export function getTerrainSlopeAt(x, z, map = null) {
+  const step = 32;
+  const hx1 = getTerrainHeight(x - step, z, map);
+  const hx2 = getTerrainHeight(x + step, z, map);
+  const hz1 = getTerrainHeight(x, z - step, map);
+  const hz2 = getTerrainHeight(x, z + step, map);
+  const dx = (hx2 - hx1) / (step * 2);
+  const dz = (hz2 - hz1) / (step * 2);
+  return Math.hypot(dx, dz);
 }
