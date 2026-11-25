@@ -37,6 +37,7 @@ import {
   BOTTOM_BAR_CATEGORIES,
   SPACING_PRESETS,
   BASE_BUILDINGS,
+  POWER_BUILDINGS,
   BASE_BUILDING_BY_ID,
   HQ_UPGRADES,
   ADVANCED_UNITS,
@@ -74,6 +75,8 @@ export default function HUD({
   const [sandboxCollapsed, setSandboxCollapsed] = useState(false);
   const [directorPanelCollapsed, setDirectorPanelCollapsed] = useState(false);
   const [isAdminState, setIsAdminState] = useState(() => Boolean(networkManager.isAdmin()));
+  const [hoverTip, setHoverTip] = useState('');
+  const [consolePage, setConsolePage] = useState('main'); // 'main' | 'extra' | 'air'
   const layoutApi = useHudLayout(); // Menus responsivos, redimensionáveis e fixáveis
 
   useEffect(() => {
@@ -535,35 +538,134 @@ export default function HUD({
         </div>
       )}
 
-      {/* TOPO ESQUERDO: Mini-Mapa / Quadro de Planejamento Tático Interativo (Oculto quando Editor de Mapa está aberto) */}
-      {!editorDrawerOpen && (
-      <HudPanel id="theater" className="hud-top-left" layoutApi={layoutApi}>
-        <Minimap gameRef={gameRef} expanded={false} />
+      {/* BARRA SUPERIOR FINA ESTILO OUTLIVE (36px) */}
+      {!editorDrawerOpen && (() => {
+        const p = hud.powerStats || { producedMw: 60, consumedMw: 0, efficiencyPct: 100, isLowPower: false };
+        const pColor = p.isLowPower ? '#ef4444' : p.efficiencyPct <= 115 ? '#facc15' : '#4ade80';
+        const ownedSec = (hud.sectors || []).filter((s) => s.owner === 'allies').length;
+        const totalSec = (hud.sectors || []).length || 1;
+        const lvl = hud.hqLevel || 1;
+        const cp = hud.commandPoints || 0;
+        const nextSpec = lvl < 3 ? HQ_UPGRADES[lvl + 1] : null;
+        return (
+          <header className="outlive-top-bar">
+            <div className="outlive-top-group">
+              <span className="outlive-res-item" title="Suprimentos Militares">
+                📦 SUP: <strong>{hud.supplies}</strong> <small>+{hud.supplyIncome}</small>
+              </span>
+              <span className="outlive-res-item" title="Munição Tática">
+                💣 MUN: <strong>{hud.ammo}</strong> <small>+{hud.ammoIncome}</small>
+              </span>
+              <span className="outlive-res-item" title="Combustível Militar">
+                ⛽ COMB: <strong>{hud.fuel}</strong> <small>+{hud.fuelIncome}</small>
+              </span>
+            </div>
 
-        <div className="district-card">
-          <div className="district-name">TEATRO DE OPERAÇÕES ({hud.gameMode.toUpperCase()})</div>
-          <div className="district-owner">
-            Aliados: {hud.allyUnitsCount} • Eixo Avistado: {hud.enemyUnitsCount}
-          </div>
-          <div className="district-meta">
-            <span>Próx. Onda: {hud.aiWaveTimer}s</span>
-            <span style={{ color: '#d4a338', fontWeight: 700 }}>
-              🏆 {hud.victoryPoints || 0} PTS
-            </span>
-          </div>
-          {hud.intelRevealed && (
-            <div className="war-progress-hint" style={{ color: '#a3be8c' }}>
-              ✓ INTELIGÊNCIA ATIVA: Base Inimiga, Minas & Trincheiras Expostas
+            <div className="outlive-top-group">
+              <div
+                className="outlive-power-pill"
+                style={{ borderColor: pColor, color: pColor }}
+                title="Balanço Energético da Base (Produção / Consumo MW)"
+              >
+                <span>⚡ ENERGIA: {p.producedMw} / {p.consumedMw} MW ({p.efficiencyPct}%)</span>
+                <div className="outlive-power-bar-track">
+                  <div
+                    className="outlive-power-bar-fill"
+                    style={{ width: `${Math.min(100, Math.max(8, p.efficiencyPct))}%`, background: pColor }}
+                  />
+                </div>
+              </div>
+
+              <span className="outlive-res-item" title="Setores sob domínio Aliado">
+                🚩 TERRITÓRIOS: <strong>{ownedSec} / {totalSec}</strong>
+              </span>
+              <span className="outlive-res-item" title="Próxima onda de ataque / Pontos">
+                ⏱️ Onda {hud.aiWaveTimer}s • 🏆 {hud.victoryPoints || 0}
+              </span>
             </div>
-          )}
-          {hud.surrenderedCount > 0 && (
-            <div className="war-progress-hint" style={{ color: '#ffffff' }}>
-              🏳 {hud.surrenderedCount} Esquadrão Rendido! Clique nele ou [G] p/ Interrogar
+
+            <div className="outlive-top-group">
+              {nextSpec && (
+                <button
+                  type="button"
+                  className="outlive-top-btn"
+                  onClick={() => gameRef.current?.upgradeHq()}
+                  title={`Evoluir para ${nextSpec.name}: ${nextSpec.unlocks}`}
+                >
+                  ⬆ QG Nv.{lvl + 1} ({nextSpec.supplyCost}S)
+                </button>
+              )}
+              <button
+                type="button"
+                className={`outlive-top-btn ${hud.techModalOpen ? 'active' : ''}`}
+                onClick={() => gameRef.current?.toggleTechModal()}
+                title={
+                  hud.sandboxMode || hud.researchCenterActive
+                    ? 'Árvore de Pesquisa & Tecnologia [Y]'
+                    : '🔒 Construa o Centro de Pesquisa na sua base para liberar pesquisas!'
+                }
+              >
+                <IconResearch size={12} /> {hud.sandboxMode || hud.researchCenterActive ? '[Y]' : '🔒 [Y]'}
+              </button>
+              <button
+                type="button"
+                className={`outlive-top-btn ${hud.tacticalMapOpen ? 'active' : ''}`}
+                onClick={() => gameRef.current?.toggleTacticalMap()}
+                title="Mapa Tático [TAB]"
+              >
+                <IconCompass size={12} /> [TAB]
+              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  className={`outlive-top-btn ${hud.sandboxMode ? 'active' : ''}`}
+                  onClick={() => gameRef.current?.toggleSandboxMode()}
+                  title="Sandbox [F10]"
+                >
+                  <IconWrench size={12} /> F10
+                </button>
+              )}
+              {isLocalHost && (
+                <button
+                  type="button"
+                  className="outlive-top-btn"
+                  onClick={() => {
+                    setEditorDrawerOpen(true);
+                    gameRef.current?.setMapEditorOpen?.(true, editorTool);
+                  }}
+                  title="Editor de Mapas 3D Local"
+                >
+                  🛠️ Editor
+                </button>
+              )}
+              <button
+                type="button"
+                className={`outlive-top-btn ${!hud.muted ? 'active' : ''}`}
+                onClick={onToggleMute}
+                title="Ativar / Silenciar Áudio Procedural [M]"
+              >
+                {hud.muted ? '🔇 Som Off' : '🔊 Som On'}
+              </button>
+              <button
+                type="button"
+                className={`outlive-top-btn ${tutorialOpen ? 'active' : ''}`}
+                onClick={() => setTutorialOpen((v) => !v)}
+                title="Guia Tático"
+              >
+                <IconBook size={12} /> GUIA
+              </button>
+              <button
+                type="button"
+                className={`outlive-top-btn ${systemMenuOpen ? 'active' : ''}`}
+                onClick={() => setSystemMenuOpen((v) => !v)}
+                title="Menu do Sistema [ESC]"
+              >
+                ☰ Menu
+              </button>
             </div>
-          )}
-        </div>
-      </HudPanel>
-      )}
+          </header>
+        );
+      })()}
 
       {/* TOPO CENTRO: 100% Livre e Transparente (apenas avisos flutuantes de combate) */}
       <div className="hud-top-center-notices">
@@ -585,266 +687,10 @@ export default function HUD({
         </div>
       </div>
 
-      {/* TOPO DIREITO / LATERAL ESQUERDA: Quando Editor de Mapa está aberto, esconde o HUD de partida e deixa só os menus de construção */}
+      {/* MODO EDITOR DE MAPA 3D (Mantido intacto quando editorDrawerOpen === true) */}
+      {editorDrawerOpen && (
       <HudPanel id="command" className="hud-top-right" layoutApi={layoutApi}>
-        {!editorDrawerOpen && (
-          <>
-            <div className="toolbar-row compact-combat-bar">
-              {(hud.droneStock?.uav_recon || 0) > 0 && (
-                <button
-                  type="button"
-                  className={`hud-btn ${hud.activeDroneLaunchMode === 'uav_recon' ? 'active' : ''}`}
-                  onClick={() => gameRef.current?.triggerDroneLaunchMode('uav_recon')}
-                  title="Lançar Drone UAV do Hangar"
-                >
-                  <IconDrone size={13} /> UAV ({hud.droneStock.uav_recon})
-                </button>
-              )}
-              {(hud.droneStock?.fpv_kamikaze || 0) > 0 && (
-                <button
-                  type="button"
-                  className={`hud-btn ${hud.activeDroneLaunchMode === 'fpv_kamikaze' ? 'active' : ''}`}
-                  onClick={() => gameRef.current?.triggerDroneLaunchMode('fpv_kamikaze')}
-                  title="Lançar Drone Kamikaze FPV do Hangar"
-                >
-                  <IconDrone size={13} /> FPV ({hud.droneStock.fpv_kamikaze})
-                </button>
-              )}
-              {hud.droneQueue?.length > 0 && (
-                <span className="hud-btn" style={{ cursor: 'default', opacity: 0.9 }}>
-                  <IconDrone size={12} /> {hud.droneQueue[0].remaining}s
-                </span>
-              )}
-
-              <button
-                type="button"
-                className={`hud-btn ${hud.techModalOpen ? 'active' : ''}`}
-                onClick={() => gameRef.current?.toggleTechModal()}
-                title="Árvore de Pesquisa & Drones [T]"
-              >
-                <IconResearch size={13} /> [T]
-              </button>
-              <button
-                type="button"
-                className={`hud-btn ${hud.tacticalMapOpen ? 'active' : ''}`}
-                onClick={() => gameRef.current?.toggleTacticalMap()}
-                title="Mapa Estratégico [TAB]"
-              >
-                <IconCompass size={13} /> [TAB]
-              </button>
-              {isAdmin && (
-                <button
-                  type="button"
-                  className={`hud-btn ${hud.sandboxMode ? 'active' : ''}`}
-                  onClick={() => gameRef.current?.toggleSandboxMode()}
-                  title="Modo Caixa de Areia / Campo de Testes [F10] (Exclusivo Admin)"
-                >
-                  <IconWrench size={13} /> F10
-                </button>
-              )}
-              <button
-                type="button"
-                className={`hud-btn ${tutorialOpen ? 'active' : ''}`}
-                onClick={() => setTutorialOpen((v) => !v)}
-                title="Tutorial Completo & Guia Tático de Campo"
-              >
-                <IconBook size={13} /> GUIA
-              </button>
-              <button
-                type="button"
-                className={`hud-btn gear-btn ${systemMenuOpen ? 'active' : ''}`}
-                onClick={() => setSystemMenuOpen((v) => !v)}
-                title="Opções do Sistema [ESC]"
-              >
-                <IconGear size={14} />
-              </button>
-            </div>
-
-            {/* BARRA DE PROGRESSÃO DO QG (NÍVEL 1-3) + PONTOS DE COMANDO (CP) */}
-            {(() => {
-              const lvl = hud.hqLevel || 1;
-              const cp = hud.commandPoints || 0;
-              const nextSpec = lvl < 3 ? HQ_UPGRADES[lvl + 1] : null;
-              const campaignLockedLv3 = Boolean(
-                hud.isCampaign &&
-                  lvl + 1 >= 3 &&
-                  (hud.campaignOwnedTerritoriesCount || 1) < 3
-              );
-              const canUpgradeHq =
-                nextSpec &&
-                !campaignLockedLv3 &&
-                cp >= (nextSpec.requiredCp || 0) &&
-                hud.supplies >= (nextSpec.supplyCost || 0) &&
-                hud.fuel >= (nextSpec.fuelCost || 0) &&
-                hud.ammo >= (nextSpec.ammoCost || 0);
-              return (
-                <div className="hq-progression-bar">
-                  <span className="hq-lvl-badge">
-                    <IconBuilding size={12} /> QG NV. {lvl}/3
-                  </span>
-                  <span className="hq-cp-badge">
-                    <IconStar size={12} /> {cp} CP
-                  </span>
-                  {nextSpec ? (
-                    <button
-                      type="button"
-                      disabled={campaignLockedLv3}
-                      className={`hud-btn hq-upgrade-btn ${canUpgradeHq ? 'ready' : 'locked'}`}
-                      onClick={() => gameRef.current?.upgradeHq()}
-                      title={
-                        campaignLockedLv3
-                          ? `🔒 Requer 3 Territórios Dominados (Atual: ${hud.campaignOwnedTerritoriesCount || 1}/3) — Expanda no Mapa Continental!`
-                          : `${nextSpec.name}: ${nextSpec.unlocks}`
-                      }
-                    >
-                      {campaignLockedLv3
-                        ? `🔒 Req. 3 Territórios (${hud.campaignOwnedTerritoriesCount || 1}/3)`
-                        : `+QG NV.${lvl + 1} (${nextSpec.supplyCost}S/${nextSpec.fuelCost}C • ${nextSpec.requiredCp}CP)`}
-                    </button>
-                  ) : (
-                    <span className="hq-max-badge">
-                      <IconShield size={12} /> NÍVEL MÁX.
-                    </span>
-                  )}
-                </div>
-              );
-            })()}
-
-            <div className="resources-bar">
-              <div className="res-pill sup" title="Suprimentos Militares">
-                <span>
-                  <IconSupply size={13} /> {hud.supplies} SUP
-                </span>
-                <small>+{hud.supplyIncome}</small>
-              </div>
-              <div className="res-pill ammo" title="Munição Tática (Tropas de Elite e Suporte Aéreo)">
-                <span>
-                  <IconAmmo size={13} /> {hud.ammo} MUN
-                </span>
-                <small>+{hud.ammoIncome}</small>
-              </div>
-              <div
-                className="res-pill fuel"
-                title="Combustível Militar (Prédios de Base e Blindados Pesados)"
-              >
-                <span>
-                  <IconFuel size={13} /> {hud.fuel} COMB
-                </span>
-                <small>+{hud.fuelIncome}</small>
-              </div>
-            </div>
-
-            {/* ATALHO DE PRÉDIOS DA BASE 3D (Clicar seleciona o prédio no mundo 3D e abre seu Menu de Produção) */}
-            {hud.alliedBaseBuildings && hud.alliedBaseBuildings.length > 0 && (
-              <div className="allied-buildings-strip">
-                {hud.alliedBaseBuildings.map((b) => {
-                  const isSel = selectedBld && selectedBld.id === b.id;
-                  return (
-                    <button
-                      key={b.id}
-                      type="button"
-                      className={`bstrip-btn ${isSel ? 'active' : ''}`}
-                      onClick={() => gameRef.current?.selectBaseBuilding(b.id)}
-                      title={`Selecionar ${b.name} no mapa 3D (${b.hp}/${b.maxHp} HP)`}
-                    >
-                      <span>
-                        <IconBuilding size={12} /> {b.short}
-                      </span>
-                      {b.queueLength > 0 && (
-                        <small className="bstrip-prog">
-                          {b.progress}% ({b.queueLength})
-                        </small>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </>
-        )}
-
-        {/* BARRA DE ACESSO RÁPIDO (CONSTRUÇÕES & COMANDO AÉREO) */}
-        {!editorDrawerOpen && (
-          <div className="left-quick-bar">
-            <button
-              type="button"
-              className={`quick-access-btn ${baseDrawerOpen ? 'active' : ''}`}
-              onClick={() => {
-                setBaseDrawerOpen((v) => {
-                  const next = !v;
-                  if (next) setAirDrawerOpen(false);
-                  return next;
-                });
-              }}
-              title="Abrir / Fechar Menu de Construções da Base (Atalho B)"
-            >
-              <span>
-                <IconBuilding size={13} /> CONSTRUÇÕES DA BASE
-              </span>
-              <small>[B] ({Math.max(0, builtSet.size - 1)}/5)</small>
-            </button>
-
-            <button
-              type="button"
-              className={`quick-access-btn ${
-                hasAirCommand ? (airDrawerOpen ? 'air-active active' : 'air-active') : 'air-locked'
-              }`}
-              onMouseEnter={() => {
-                if (!hasAirCommand) setAirLockNotice(true);
-              }}
-              onMouseLeave={() => setAirLockNotice(false)}
-              onClick={() => {
-                if (!hasAirCommand) {
-                  setAirLockNotice(true);
-                  gameRef.current?.notify(
-                    'COMANDO AÉREO BLOQUEADO',
-                    'Construa o Comando Aéreo / Radar no Menu de Construções para desbloquear os ataques aéreos!',
-                    '#fbbf24'
-                  );
-                  return;
-                }
-                setAirDrawerOpen((v) => {
-                  const next = !v;
-                  if (next) setBaseDrawerOpen(false);
-                  return next;
-                });
-              }}
-              title={
-                hasAirCommand
-                  ? 'Abrir Painel Exclusivo de Ataques Aéreos (Atalho V)'
-                  : 'Construa o Comando Aéreo / Radar no Menu de Construções para desbloquear os ataques aéreos!'
-              }
-            >
-              <span>
-                {hasAirCommand ? <IconAir size={13} /> : <IconLock size={13} />}{' '}
-                {hasAirCommand ? 'COMANDO AÉREO (ATIVO)' : 'COMANDO AÉREO (Requer Radar)'}
-              </span>
-              <small>[V]</small>
-            </button>
-
-            {isLocalHost && (
-              <button
-                type="button"
-                className="quick-access-btn"
-                style={{ borderColor: '#84cc16', color: '#d9f99d' }}
-                onClick={() => {
-                  setBaseDrawerOpen(false);
-                  setAirDrawerOpen(false);
-                  setEditorCollapsed(false);
-                  setEditorDrawerOpen(true);
-                  gameRef.current?.setMapEditorOpen(true, editorTool, editorAngleDeg, editorScale);
-                }}
-                title="Editor de Mapa 3D Local (Oculta HUD do jogo, pausa partida, libera Zoom amplo e salva em customMaps.json)"
-              >
-                <span>
-                  <IconWrench size={13} /> EDITOR DE MAPA (LOCAL)
-                </span>
-                <small>PAUSA + ZOOM</small>
-              </button>
-            )}
-          </div>
-        )}
-
+        <div className="toolbar-row compact-combat-bar" style={{ display: 'none' }} />
         {isLocalHost && editorDrawerOpen && (() => {
           const activeToolId = hud.mapEditorTool !== undefined ? hud.mapEditorTool : editorTool;
           const activeAngle =
@@ -1333,1057 +1179,711 @@ export default function HUD({
             </div>
           );
         })()}
-
-        {!hasAirCommand && airLockNotice && (
-          <div className="air-lock-warning">
-            Construa o <strong>Comando Aéreo / Radar</strong> no Menu de Construções para desbloquear os ataques aéreos!
-          </div>
-        )}
-
-        {/* MENU DE CONSTRUÇÕES DA BASE (ABERTO AO CLICAR EM CONSTRUÇÕES DA BASE) */}
-        {baseDrawerOpen && (
-          <div className="base-command-card">
-            <div className="drawer-header-bar">
-              <span>🏗️ CONSTRUÇÕES DA BASE</span>
-              <button
-                type="button"
-                className="drawer-close-btn"
-                onClick={() => setBaseDrawerOpen(false)}
-                title="Fechar painel (ESC)"
-              >
-                ✕ Fechar
-              </button>
-            </div>
-
-            <div className="base-tabs">
-              <button
-                type="button"
-                className={`base-tab-btn ${activeBaseTab === 'command' ? 'active' : ''}`}
-                onClick={() => setActiveBaseTab('command')}
-              >
-                🏢 COMANDO
-              </button>
-              <button
-                type="button"
-                className={`base-tab-btn ${activeBaseTab === 'defenses' ? 'active' : ''}`}
-                onClick={() => setActiveBaseTab('defenses')}
-              >
-                🧱 DEFESAS
-              </button>
-              <button
-                type="button"
-                className={`base-tab-btn ${activeBaseTab === 'logistics' ? 'active' : ''}`}
-                onClick={() => setActiveBaseTab('logistics')}
-              >
-                ⚡ LOGÍSTICA
-              </button>
-            </div>
-
-            {activeBaseTab === 'command' && (
-              <div className="base-grid">
-                {/* QUARTEL-GENERAL: EVOLUÇÃO NÍVEL 1 -> 2 -> 3 */}
-                <div className="hq-progress-card">
-                  <div className="hq-progress-top">
-                    <strong>🏛️ Quartel-General (QG Nv. {hud.hqLevel || 1}/3)</strong>
-                    <span>{Math.round(((hud.hqLevel || 1) / 3) * 100)}%</span>
-                  </div>
-                  <div className="hq-progress-track">
-                    <div
-                      className="hq-progress-fill"
-                      style={{ width: `${((hud.hqLevel || 1) / 3) * 100}%` }}
-                    />
-                  </div>
-                  <div className="hq-unlock-list">
-                    <div className={(hud.hqLevel || 1) >= 1 ? 'done' : ''}>
-                      Nv. 1: Infantaria Básica, Transporte, Trincheiras e Muros
-                    </div>
-                    <div className={(hud.hqLevel || 1) >= 2 ? 'done' : ''}>
-                      Nv. 2: Snipers, Antitanque, Humvee, APC Stryker e Bunkers
-                    </div>
-                    <div className={(hud.hqLevel || 1) >= 3 ? 'done' : ''}>
-                      Nv. 3: Tanque MBT 120mm, Artilharia e Ataques Aéreos
-                    </div>
-                  </div>
-                  {(hud.hqLevel || 1) < 3 && HQ_UPGRADES[(hud.hqLevel || 1) + 1] && (() => {
-                    const nextLv = (hud.hqLevel || 1) + 1;
-                    const lockedLv3 = Boolean(
-                      hud.isCampaign &&
-                        nextLv >= 3 &&
-                        (hud.campaignOwnedTerritoriesCount || 1) < 3
-                    );
-                    return (
-                      <button
-                        type="button"
-                        disabled={lockedLv3}
-                        className={`base-item-btn hq-up-btn ${lockedLv3 ? 'locked' : ''}`}
-                        onClick={() => gameRef.current?.upgradeHq()}
-                      >
-                        <div className="base-item-top">
-                          <strong>
-                            {lockedLv3
-                              ? `🔒 Requer 3 Territórios Dominados (Atual: ${hud.campaignOwnedTerritoriesCount || 1}/3) — Expanda no Mapa Continental!`
-                              : `⬆ Evoluir para QG Nível ${nextLv}`}
-                          </strong>
-                          <span>
-                            {HQ_UPGRADES[nextLv].supplyCost} SUP • {HQ_UPGRADES[nextLv].fuelCost} COMB
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })()}
-                </div>
-
-                {BASE_BUILDINGS.map((b) => {
-                  const isBuilt = builtSet.has(b.id);
-                  const canAfford = hud.supplies >= b.cost && hud.fuel >= (b.fuelCost || 0);
-                  const customDesc =
-                    b.id === 'spec_ops_center'
-                      ? 'Libera Snipers, Equipe Antitanque e Paraquedistas.'
-                      : b.id === 'motor_pool'
-                      ? 'Libera Caminhão, Humvee, APC Stryker e Tanque MBT.'
-                      : b.id === 'air_command'
-                      ? 'Revela radar no minimapa e DESBLOQUEIA o Menu de Ataques Aéreos.'
-                      : b.id === 'pow_camp'
-                      ? 'Permite escoltar e interrogar Comandantes rendidos.'
-                      : b.subtitle;
-                  return (
-                    <button
-                      key={b.id}
-                      type="button"
-                      className={`base-item-btn ${isBuilt ? 'built' : ''} ${
-                        !canAfford && !isBuilt ? 'locked' : ''
-                      }`}
-                      onClick={() => gameRef.current?.constructBaseBuilding(b.id)}
-                      title={`${b.name} — ${customDesc}`}
-                    >
-                      <div className="base-item-top">
-                        <strong>{b.short}</strong>
-                        <span>
-                          {isBuilt ? '✓ OPERACIONAL' : `${b.cost} SUP • ${b.fuelCost} COMB`}
-                        </span>
-                      </div>
-                      <div className="base-item-sub">{customDesc}</div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {activeBaseTab === 'defenses' && (
-              <div className="base-grid">
-                {['build_wall', 'build_bunker', 'build_trench', 'build_watchtower', 'build_wire', 'build_barricade'].map(
-                  (id) => {
-                    const cmd = COMMAND_BY_ID[id];
-                    if (!cmd) return null;
-                    const canAfford =
-                      hud.supplies >= (cmd.cost || 0) &&
-                      hud.ammo >= (cmd.ammoCost || 0) &&
-                      hud.fuel >= (cmd.fuelCost || 0);
-                    return (
-                      <button
-                        key={cmd.id}
-                        type="button"
-                        className={`base-item-btn ${!canAfford ? 'locked' : ''}`}
-                        onClick={() => gameRef.current?.triggerActionById(cmd.id)}
-                      >
-                        <div className="base-item-top">
-                          <strong>{cmd.short || cmd.name}</strong>
-                          <span>
-                            {cmd.cost || 0} SUP{cmd.ammoCost ? ` • ${cmd.ammoCost} MUN` : ''}
-                          </span>
-                        </div>
-                        <div className="base-item-sub">{cmd.subtitle}</div>
-                      </button>
-                    );
-                  }
-                )}
-              </div>
-            )}
-
-            {activeBaseTab === 'logistics' && (
-              <div className="base-grid">
-                {['build_outpost', 'build_emplacement'].map((id) => {
-                  const cmd = COMMAND_BY_ID[id];
-                  if (!cmd) return null;
-                  const canAfford =
-                    hud.supplies >= (cmd.cost || 0) &&
-                    hud.ammo >= (cmd.ammoCost || 0) &&
-                    hud.fuel >= (cmd.fuelCost || 0);
-                  return (
-                    <button
-                      key={cmd.id}
-                      type="button"
-                      className={`base-item-btn ${!canAfford ? 'locked' : ''}`}
-                      onClick={() => gameRef.current?.triggerActionById(cmd.id)}
-                    >
-                      <div className="base-item-top">
-                        <strong>{cmd.short || cmd.name}</strong>
-                        <span>
-                          {cmd.cost || 0} SUP{cmd.fuelCost ? ` • ${cmd.fuelCost} COMB` : ''}
-                        </span>
-                      </div>
-                      <div className="base-item-sub">{cmd.subtitle}</div>
-                    </button>
-                  );
-                })}
-                <div className="base-req-warn">
-                  💡 Capture <strong>Setores de Suprimento, Munição e Combustível</strong> no mapa ou construa o <strong>Campo de Prisioneiros</strong> (+5 SUP/s por cela) para expandir sua economia de guerra.
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* PAINEL EXCLUSIVO DE ATAQUES AÉREOS (SÓ ABRE APÓS CONSTRUIR O COMANDO AÉREO / RADAR) */}
-        {hasAirCommand && airDrawerOpen && (
-          <div className="air-doctrine-card">
-            <div className="drawer-header-bar">
-              <span style={{ color: '#38bdf8' }}>✈️ COMANDO AÉREO & RADAR</span>
-              <button
-                type="button"
-                className="drawer-close-btn"
-                onClick={() => setAirDrawerOpen(false)}
-                title="Fechar painel aéreo (ESC)"
-              >
-                ✕ Fechar
-              </button>
-            </div>
-            <div className="air-doctrine-list">
-              {AIR_DOCTRINES.map((doc) => {
-                const cd = hud.airCooldowns?.[doc.id] || 0;
-                const maxCd = doc.cooldown || 30;
-                const readyPct = cd > 0 ? Math.max(0, Math.min(100, ((maxCd - cd) / maxCd) * 100)) : 100;
-                const isTargeting = hud.activeAirStrikeMode === doc.id;
-                const canUse =
-                  cd <= 0 &&
-                  hud.supplies >= (doc.cost || 0) &&
-                  hud.ammo >= (doc.ammoCost || 0);
-                return (
-                  <button
-                    key={doc.id}
-                    type="button"
-                    className={`air-btn ${isTargeting ? 'active' : ''} ${!canUse ? 'locked' : ''}`}
-                    onClick={() => gameRef.current?.triggerAirDoctrine(doc.id)}
-                    title={`${doc.name} — ${doc.subtitle}`}
-                  >
-                    <div className="air-btn-top">
-                      <strong>
-                        [{doc.key}] {doc.short}
-                      </strong>
-                      <span>
-                        {cd > 0 ? `⏳ ${Math.ceil(cd)}s` : `${doc.cost} SUP • ${doc.ammoCost} MUN`}
-                      </span>
-                    </div>
-                    <div className="air-btn-sub">{doc.subtitle}</div>
-                    <div className="air-cooldown-track">
-                      <div
-                        className={`air-cooldown-fill ${cd > 0 ? 'recharging' : 'ready'}`}
-                        style={{ width: `${readyPct}%` }}
-                      />
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </HudPanel>
-
-      {/* BASE CENTRO: Barra Inferior Separada por 4 Categorias/Abas + Botão TODOS (Oculta quando Editor de Mapa está aberto) */}
-      {!editorDrawerOpen && (
-      <HudPanel id="hotbar" className="hud-bottom-center" layoutApi={layoutApi}>
-        <div className="bottom-command-deck">
-          {/* ABAS TÁTICAS DA BARRA INFERIOR ([F1] a [F5]) */}
-          <div className="bottom-cat-tabs">
-            {BOTTOM_BAR_CATEGORIES.map((cat) => {
-              const tabLabel = cat.label || cat.title;
-              const tabKey = cat.hotkey || cat.key;
-              return (
-                <button
-                  key={cat.id}
-                  type="button"
-                  className={`bottom-cat-tab ${activeBottomCat === cat.id ? 'active' : ''}`}
-                  onClick={() => gameRef.current?.setBottomCategory(cat.id)}
-                  title={`Categoria ${tabLabel} (${tabKey})`}
-                >
-                  <span className="cat-tab-icon">
-                    <GameCategoryIcon catId={cat.id} size={13} />
-                  </span>
-                  <span className="cat-tab-label">{tabLabel}</span>
-                  <small className="cat-tab-key">[{tabKey}]</small>
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              className={`bottom-cat-tab all-tab ${activeBottomCat === 'all' ? 'active' : ''}`}
-              onClick={() => gameRef.current?.setBottomCategory('all')}
-              title="Exibir todos os grupos empilhados ([F5])"
-            >
-              <span className="cat-tab-icon">
-                <GameCategoryIcon catId="all" size={13} />
-              </span>
-              <span className="cat-tab-label">TODOS</span>
-              <small className="cat-tab-key">[F5]</small>
-            </button>
-          </div>
-
-          {/* CONTEÚDO DAS ABAS: VISÃO DE CATEGORIA ÚNICA OU VISÃO "TODOS" SEPARADA POR CAIXAS */}
-          {activeBottomCat === 'all' ? (
-            <div className="bottom-all-groups">
-              {BOTTOM_BAR_CATEGORIES.map((cat) => (
-                <div key={cat.id} className="bottom-cat-group-box">
-                  <div className="bottom-cat-group-title">
-                    <span>
-                      {cat.icon} {cat.shortLabel || cat.label || cat.title}
-                    </span>
-                    <small>[{cat.hotkey || cat.key}]</small>
-                  </div>
-                  <div className="bottom-cat-group-slots">
-                    {cat.actionIds.map((actId, idx) => renderActionSlot(actId, idx, true))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="hotbar rts-hotbar categorized-hotbar">
-              {(
-                BOTTOM_BAR_CATEGORIES.find((c) => c.id === activeBottomCat) ||
-                BOTTOM_BAR_CATEGORIES[0]
-              ).actionIds.map((actId, idx) => renderActionSlot(actId, idx, false))}
-            </div>
-          )}
-
-          {/* Batalhões Especiais Desbloqueados por XP da Conta (incluindo Lançar Paraquedistas) */}
-          {(() => {
-            const unlockedSet = new Set(hud.unlockedBattalions || []);
-            const available = BATTALION_UNLOCKS.filter(
-              (b) => hud.sandboxMode || unlockedSet.has(b.id)
-            );
-            if (available.length === 0) return null;
-            return (
-              <div className="account-battalions-strip">
-                {available.map((b) =>
-                  b.isSpecialDrop ? (
-                    <button
-                      key={b.id}
-                      type="button"
-                      className={`hud-btn ${hud.activeCommandMode === 'paradrop' ? 'active' : ''}`}
-                      onClick={() => gameRef.current?.activateParatrooperDrop()}
-                      title={b.desc}
-                    >
-                      <IconParachute size={13} /> Lançar Paraquedistas
-                      {hud.paradropCooldown > 0 ? ` (${hud.paradropCooldown}s)` : ` (${b.costSup} SUP)`}
-                    </button>
-                  ) : (
-                    <button
-                      key={b.id}
-                      type="button"
-                      className="hud-btn"
-                      onClick={() =>
-                        gameRef.current?.deployUnlockedBattalion(b.id, b.unitType, b.costSup)
-                      }
-                      title={b.desc}
-                    >
-                      <IconShield size={13} /> {b.name.split('(')[0].trim()} ({b.costSup} SUP)
-                    </button>
-                  )
-                )}
-              </div>
-            );
-          })()}
-        </div>
       </HudPanel>
       )}
 
-      {/* BASE DIREITA: Exibida apenas quando houver Tropa ou Prédio da Base selecionado (Oculta quando Editor de Mapa está aberto) */}
-      {!editorDrawerOpen && (selectedBld || hud.selectedCount > 0) && (
-      <HudPanel id="squad" className="hud-bottom-right rts-selection-panel" layoutApi={layoutApi}>
-        {selectedBld && hud.selectedCount === 0 ? (
-          <div className="building-prod-panel">
-            <div className="selection-header">
-              <span>🏭 {selectedBld.name.toUpperCase()}</span>
-              <strong>
-                {selectedBld.hp}/{selectedBld.maxHp} HP
-              </strong>
-            </div>
+      {/* CONSOLE TÁTICO INFERIOR CLÁSSICO ESTILO OUTLIVE (175px • 3 MÓDULOS FIXOS) */}
+      {!editorDrawerOpen && (() => {
+        const pStats = hud.powerStats || { producedMw: 60, consumedMw: 0, efficiencyPct: 100, isLowPower: false };
+        const defaultTip = selectedBld
+          ? `${selectedBld.name} — Clique no mapa com Botão Direito para definir o Ponto de Encontro.`
+          : leadSquad
+            ? `${leadSquad.name} — Clique Direito no terreno/inimigo para mover ou atacar.`
+            : "Passe o mouse sobre qualquer botão da grade 4x2 para ver detalhes e requisitos.";
 
-            <div className="stat-track" style={{ marginBottom: 8 }}>
-              <div
-                className="stat-fill hp"
-                style={{ width: `${Math.round((selectedBld.hp / selectedBld.maxHp) * 100)}%` }}
-              />
-            </div>
+        const renderConsoleGrid = () => {
+          const mkBtn = (key, icon, name, cost, tip, onClick, opts = {}) => (
+            <button
+              key={key}
+              type="button"
+              className={`outlive-cmd-slot ${opts.locked ? "locked" : ""} ${opts.active ? "active" : ""}`}
+              onMouseEnter={() => setHoverTip(tip)}
+              onMouseLeave={() => setHoverTip("")}
+              onClick={onClick}
+            >
+              {opts.badge && <span className="outlive-cmd-queue-badge">{opts.badge}</span>}
+              <span className="outlive-cmd-slot-icon">{icon}</span>
+              <span className="outlive-cmd-slot-name">{name}</span>
+              <span className="outlive-cmd-slot-cost">{cost}</span>
+              {typeof opts.progress === "number" && (
+                <div className="outlive-cmd-progress">
+                  <div className="outlive-cmd-progress-fill" style={{ width: `${opts.progress}%` }} />
+                </div>
+              )}
+            </button>
+          );
 
-            <div style={{ marginBottom: 8 }}>
-              <button
-                type="button"
-                className="hud-btn"
-                style={{ width: '100%' }}
-                disabled={selectedBld.hp >= selectedBld.maxHp}
-                onClick={() => gameRef.current?.repairSelectedWallOrBuilding()}
-              >
-                🔧 Reparar Estrutura ({hud.sandboxMode ? '0' : '60'} SUP)
-              </button>
-            </div>
+          // 1. PRÉDIO SELECIONADO (Grade Contextual Dinâmica)
+          if (selectedBld && consolePage === "main") {
+            const bType = selectedBld.buildingType;
+            const rallyBtn = mkBtn(
+              "rally",
+              "📍",
+              "Ponto Encontro",
+              "Botão Dir.",
+              "Clique com o Botão Direito em qualquer ponto do mapa para definir o Ponto de Encontro.",
+              () => gameRef.current?.notify("📍 PONTO DE ENCONTRO", "Clique com o Botão Direito no mapa para definir onde as tropas irão.", "#38bdf8")
+            );
 
-            {/* Fila de Produção Visual 1 a 5 Slots + Barra de Progresso (Clique Direito cancela e reembolsa 100%) */}
-            <div className="bprod-queue-box">
-              <div className="bprod-progress-head">
-                <span>
-                  {selectedBld.productionQueue?.length > 0
-                    ? `⚙ ${selectedBld.productionQueue[0].name}`
-                    : '▪ Fila de Produção (Clique Dir. p/ cancelar)'}
-                </span>
-                <strong>
-                  {selectedBld.productionQueue?.length > 0
-                    ? `${selectedBld.productionProgress}% • ⏱ ${selectedBld.productionRemainingSec || 0}s`
-                    : '0/5'}
-                </strong>
-              </div>
-              <div className="stat-track">
-                <div
-                  className="stat-fill prod-fill"
-                  style={{ width: `${selectedBld.productionProgress || 0}%` }}
-                />
-              </div>
-              <div className="prod-slots-5">
-                {[0, 1, 2, 3, 4].map((slotIdx) => {
-                  const q = selectedBld.productionQueue?.[slotIdx];
-                  return (
-                    <div
-                      key={slotIdx}
-                      className={`prod-slot-box ${q ? 'filled' : 'empty'} ${slotIdx === 0 && q ? 'active' : ''}`}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        if (q) gameRef.current?.cancelBuildingQueueItem(selectedBld.id, slotIdx);
-                      }}
-                      title={
-                        q
-                          ? `${q.name} (${q.remainingSec || 0}s) — Clique Direito para cancelar e reembolsar 100%`
-                          : `Slot ${slotIdx + 1} livre`
-                      }
-                    >
-                      <span className="prod-slot-num">{slotIdx + 1}</span>
-                      <span className="prod-slot-name">{q ? q.short : '—'}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            if (bType === "drone_factory") {
+              const uavStock = hud.droneStock?.uav_recon || 0;
+              const fpvStock = hud.droneStock?.fpv_kamikaze || 0;
+              const intStock = hud.droneStock?.interceptor_drone || 0;
+              const dMode = hud.droneControlMode || "fixed";
+              return (
+                <div className="outlive-cmd-grid">
+                  {mkBtn(
+                    "make_uav",
+                    "🛸",
+                    "Fabricar UAV",
+                    "350S • 120M",
+                    "Fabricar Drone Recon (UAV) e armazenar no Hangar.",
+                    () => gameRef.current?.queueDroneProduction("uav_recon"),
+                    { locked: !completedTechSet.has("uav_recon") }
+                  )}
+                  {mkBtn(
+                    "make_fpv",
+                    "💥",
+                    "Fabricar FPV",
+                    "500S • 200M",
+                    "Fabricar Drone Kamikaze (FPV) e armazenar no Hangar.",
+                    () => gameRef.current?.queueDroneProduction("fpv_kamikaze"),
+                    { locked: !completedTechSet.has("fpv_kamikaze") }
+                  )}
+                  {mkBtn(
+                    "make_int",
+                    "🛡️",
+                    "Fabricar Int.",
+                    "280S • 90M",
+                    "Fabricar Drone Interceptador e armazenar no Hangar.",
+                    () => gameRef.current?.queueDroneProduction("interceptor_drone")
+                  )}
+                  {mkBtn(
+                    "drone_mode_toggle",
+                    dMode === "patrol" ? "🔄" : "🎯",
+                    dMode === "patrol" ? "Modo: Patrulha" : "Modo: Fixo",
+                    "Alternar",
+                    "Alterna o modo de lançamento entre Ponto Fixo (órbita) e Patrulha/Caça autônoma.",
+                    () => gameRef.current?.setDroneControlMode(dMode === "fixed" ? "patrol" : "fixed"),
+                    { active: dMode === "patrol" }
+                  )}
+                  {mkBtn(
+                    "launch_uav",
+                    "🚀",
+                    "Lançar UAV",
+                    `Hangar: ${uavStock}`,
+                    "Selecionar ponto no mapa para lançar Drone Recon (UAV) do Hangar.",
+                    () => gameRef.current?.triggerDroneLaunchMode("uav_recon"),
+                    { badge: uavStock > 0 ? `x${uavStock}` : null, active: hud.activeDroneLaunchMode === "uav_recon", locked: uavStock === 0 }
+                  )}
+                  {mkBtn(
+                    "launch_fpv",
+                    "🚀",
+                    "Lançar FPV",
+                    `Hangar: ${fpvStock}`,
+                    "Selecionar ponto no mapa para lançar Drone Kamikaze (FPV) do Hangar.",
+                    () => gameRef.current?.triggerDroneLaunchMode("fpv_kamikaze"),
+                    { badge: fpvStock > 0 ? `x${fpvStock}` : null, active: hud.activeDroneLaunchMode === "fpv_kamikaze", locked: fpvStock === 0 }
+                  )}
+                  {mkBtn(
+                    "launch_int",
+                    "🚀",
+                    "Lançar Int.",
+                    `Hangar: ${intStock}`,
+                    "Selecionar ponto no mapa para lançar Drone Interceptador do Hangar.",
+                    () => gameRef.current?.triggerDroneLaunchMode("interceptor_drone"),
+                    { badge: intStock > 0 ? `x${intStock}` : null, active: hud.activeDroneLaunchMode === "interceptor_drone", locked: intStock === 0 }
+                  )}
+                  {mkBtn(
+                    "drone_return",
+                    "🏠",
+                    "Recolher Base",
+                    `${hud.activeDronesCount || 0} ativos`,
+                    "Retornar todos os drones em voo para a Fábrica de Drones para recarregar bateria.",
+                    () => gameRef.current?.returnAllDronesToBase(),
+                    { locked: (hud.activeDronesCount || 0) === 0 }
+                  )}
+                </div>
+              );
+            }
 
-            {/* Botões de Produção de Tropas / Tanques do Prédio */}
-            {selectedBld.produces && selectedBld.produces.length > 0 ? (
-              <div className="bprod-units-grid">
-                {selectedBld.produces.map((unitId) => {
+            if (bType === "research_center") {
+              const techSlots = [
+                { id: "reactive_armor", icon: "🛡️", name: "Blind. Reativa", cost: "750S • 220C" },
+                { id: "ap_ammo", icon: "🎯", name: "Mun. Perfurante", cost: "500S • 150M" },
+                { id: "turbo_diesel", icon: "⚙️", name: "Motor Turbo", cost: "750S • 220C" },
+                { id: "high_eff_grid", icon: "⚡", name: "Rede Alta Efic.", cost: "400S • 60M" },
+                { id: "uav_recon", icon: "🛸", name: "Drones UAV", cost: "1200S" },
+                { id: "fpv_kamikaze", icon: "💣", name: "Enxame FPV", cost: "1800S" },
+                { id: "kevlar_vests", icon: "🦺", name: "Coletes Kevlar", cost: "500S • 150M" },
+              ];
+              return (
+                <div className="outlive-cmd-grid">
+                  {techSlots.map((ts) => {
+                    const node = TECH_NODE_BY_ID[ts.id];
+                    const done = completedTechSet.has(ts.id);
+                    const running = hud.activeResearch?.techId === ts.id;
+                    const pct = running ? Math.round((hud.activeResearch.progress / Math.max(1, hud.activeResearch.duration)) * 100) : undefined;
+                    return mkBtn(
+                      ts.id,
+                      ts.icon,
+                      ts.name,
+                      done ? "✅ Concluído" : running ? `${pct}%` : ts.cost,
+                      `${node?.name || ts.name}: ${node?.effectText || ""}`,
+                      () => gameRef.current?.startResearch(ts.id),
+                      { locked: done, progress: pct }
+                    );
+                  })}
+                  {mkBtn("open_full_tech", "🔬", "Painel [Y]", "Completo", "Abrir Árvore Completa de Pesquisas [Y].", () => gameRef.current?.toggleTechModal())}
+                </div>
+              );
+            }
+
+            if (bType === "air_command") {
+              return (
+                <div className="outlive-cmd-grid">
+                  {AIR_DOCTRINES.map((doc) => {
+                    const cd = hud.airCooldowns?.[doc.id] || 0;
+                    return mkBtn(
+                      doc.id,
+                      "✈️",
+                      `[${doc.key}] ${doc.short}`,
+                      cd > 0 ? `⏳ ${Math.ceil(cd)}s` : `${doc.cost}S • ${doc.ammoCost}M`,
+                      `[${doc.key}] ${doc.name}: ${doc.subtitle}`,
+                      () => gameRef.current?.triggerAirDoctrine(doc.id),
+                      { locked: cd > 0 }
+                    );
+                  })}
+                  {rallyBtn}
+                  {mkBtn("back", "↩️", "Base", "Construir", "Voltar ao menu de Construções.", () => gameRef.current?.selectBaseBuilding(null))}
+                </div>
+              );
+            }
+
+            if (bType === "pow_camp") {
+              return (
+                <div className="outlive-cmd-grid">
+                  {mkBtn(
+                    "pow_interrogate",
+                    "🕵️",
+                    "Interrogar",
+                    `${hud.powPrisonersCount || 0}/${hud.powPrisonersMax || 10}`,
+                    "Abrir Sala de Interrogatório de Prisioneiros (+SUP/s e Inteligência).",
+                    () => gameRef.current?.openPowInterrogation()
+                  )}
+                  {mkBtn("back", "↩️", "Base", "Construir", "Voltar ao menu de Construções.", () => gameRef.current?.selectBaseBuilding(null))}
+                </div>
+              );
+            }
+
+            // QG, Fábrica de Blindados, Operações Especiais, Refinaria
+            const unitIcon = (uid, uSpec) =>
+              uSpec?.unitSpec?.isConstructor
+                ? "🏗️"
+                : uSpec?.unitSpec?.isHarvester
+                  ? "🚜"
+                  : uid === "humvee"
+                    ? "🚙"
+                    : uSpec?.unitSpec?.isTransport
+                      ? "🚛"
+                      : uid === "mbt_tank"
+                        ? "🛡️"
+                        : uid === "rocket_artillery"
+                          ? "🚀"
+                          : uSpec?.unitSpec?.type === "vehicle"
+                            ? "🚜"
+                            : "🪖";
+
+            const slots = (selectedBld.produces || []).slice(0, bType === "hq_command" ? 5 : 6);
+            return (
+              <div className="outlive-cmd-grid">
+                {slots.map((unitId) => {
                   const uSpec = COMMAND_BY_ID[unitId];
                   if (!uSpec) return null;
                   const reqHq = uSpec.requiredHqLevel || 1;
-                  const hqUnlocked = (hud.hqLevel || 1) >= reqHq;
+                  const hqOk = (hud.hqLevel || 1) >= reqHq;
                   const canAfford =
-                    hqUnlocked &&
+                    hqOk &&
                     hud.supplies >= (uSpec.cost || 0) &&
                     hud.ammo >= (uSpec.ammoCost || 0) &&
                     hud.fuel >= (uSpec.fuelCost || 0);
-                  return (
-                    <button
-                      key={unitId}
-                      type="button"
-                      className={`base-item-btn ${!canAfford ? 'locked' : ''}`}
-                      onClick={() => gameRef.current?.queueUnitAtBuilding(selectedBld.id, unitId)}
-                      title={`Produzir ${uSpec.name} (${uSpec.subtitle})`}
-                    >
-                      <div className="base-item-top">
-                        <strong>▸ {uSpec.short}</strong>
-                        <span>
-                          {!hqUnlocked
-                            ? `🔒 Req. QG Nv.${reqHq}`
-                            : `${uSpec.cost} SUP${uSpec.ammoCost ? ` • ${uSpec.ammoCost} MUN` : ''}${uSpec.fuelCost ? ` • ${uSpec.fuelCost} COMB` : ''}${uSpec.buildTime ? ` • ⏱ ${Math.round(uSpec.buildTime)}s` : ''}`}
-                        </span>
-                      </div>
-                      <div className="base-item-sub">
-                        {uSpec.unitSpec?.isTransport
-                          ? '[Transporte 12x] '
-                          : uSpec.unitSpec?.antiArmorBonus
-                            ? '[Anti-Blindado] '
-                            : uSpec.unitSpec?.range >= 520
-                              ? '[Alcance Longo] '
-                              : ''}
-                        {uSpec.subtitle}
-                      </div>
-                    </button>
+                  const queuedCount = (selectedBld.productionQueue || []).filter((q) => q.unitId === unitId).length;
+                  const isProducingThis = selectedBld.productionQueue?.[0]?.unitId === unitId;
+                  return mkBtn(
+                    unitId,
+                    unitIcon(unitId, uSpec),
+                    uSpec.short,
+                    !hqOk ? `🔒 QG${reqHq}` : `${uSpec.cost || 0} SUP`,
+                    `${uSpec.name}: ${uSpec.subtitle}${!hqOk ? ` (Requer QG Nv.${reqHq})` : ""}`,
+                    () => gameRef.current?.queueUnitAtBuilding(selectedBld.id, unitId),
+                    {
+                      locked: !canAfford,
+                      badge: queuedCount > 0 ? `x${queuedCount}` : null,
+                      progress: isProducingThis ? selectedBld.productionProgress || 0 : undefined,
+                    }
                   );
                 })}
+                {bType === "hq_command" &&
+                  mkBtn(
+                    "upgrade_hq",
+                    "⬆️",
+                    `Evoluir QG`,
+                    (hud.hqLevel || 1) < 3 ? `${HQ_UPGRADES[(hud.hqLevel || 1) + 1]?.supplyCost || 650}S` : "MAX",
+                    "Evoluir Quartel-General para desbloquear tanques pesados e tecnologias.",
+                    () => gameRef.current?.upgradeHq(),
+                    { locked: (hud.hqLevel || 1) >= 3 }
+                  )}
+                {bType === "hq_command" &&
+                  mkBtn(
+                    "build_research",
+                    "🔬",
+                    "Centro Pesq.",
+                    "350S • 80M",
+                    "Posicionar Centro de Pesquisa Tecnológica (obrigatório para pesquisas).",
+                    () => gameRef.current?.startPlaceBaseBuilding("research_center")
+                  )}
+                {rallyBtn}
               </div>
-            ) : selectedBld.buildingType === 'drone_factory' ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
-                <div
-                  style={{
-                    padding: '8px 10px',
-                    background: 'rgba(15, 23, 42, 0.72)',
-                    border: '1px solid rgba(56, 189, 248, 0.45)',
-                    borderRadius: 6,
-                    fontSize: 12,
-                    color: '#f8fafc',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                  }}
-                >
-                  <span>🛸 Hangar de Drones:</span>
-                  <strong style={{ color: '#38bdf8' }}>
-                    {(hud.droneStock?.uav_recon || 0) + (hud.droneStock?.fpv_kamikaze || 0)}/
-                    {hud.maxDroneStock || 3} estoque • {hud.activeDronesCount || 0}/
-                    {hud.maxActiveDrones || 2} ativos
-                  </strong>
-                </div>
+            );
+          }
 
-                {[
-                  {
-                    id: 'uav_recon',
-                    name: '🛸 Drone UAV Recon',
-                    cost: '350 SUP • 120 MUN • 7s',
-                    desc: 'Reconhecimento aéreo contínuo que revela névoa de guerra.',
+          // 2. TROPAS DE INFANTARIA / ENGENHEIROS SELECIONADOS -> FORTIFICAÇÕES DE CAMPO NO FRONT
+          if (!selectedBld && leadSquad && leadSquad.isInfantry && consolePage === "main") {
+            const cdG = leadSquad.abilityCooldowns?.grenade || 0;
+            const cdF = leadSquad.abilityCooldowns?.suppression || 0;
+            const cdC = leadSquad.abilityCooldowns?.medkit || 0;
+            return (
+              <div className="outlive-cmd-grid">
+                {mkBtn(
+                  "field_trench",
+                  "🪖",
+                  "Cavar Trincheira",
+                  "60 SUP",
+                  "Infantaria corre até o ponto e cava Trincheira Conectada (+65% cobertura).",
+                  () => gameRef.current?.triggerActionById("build_trench")
+                )}
+                {mkBtn(
+                  "field_sandbag",
+                  "🧱",
+                  "Sacos de Areia",
+                  `${COMMAND_BY_ID.build_barricade?.cost || 45} SUP`,
+                  "Montar Barricada de Sacos de Areia rápida na linha de frente.",
+                  () => gameRef.current?.triggerActionById("build_barricade")
+                )}
+                {mkBtn(
+                  "field_wire",
+                  "🚧",
+                  "Arame & Ouriços",
+                  `${COMMAND_BY_ID.build_barricade?.cost || 45} SUP`,
+                  "Instalar Arame Farpado e Ouriços Antitanque contra avanços inimigos.",
+                  () => gameRef.current?.triggerActionById("build_barricade")
+                )}
+                {mkBtn(
+                  "field_mine",
+                  "💣",
+                  "Plantar Mina",
+                  `${COMMAND_BY_ID.build_mine?.cost || 70} SUP`,
+                  "Engenheiros/Tropas plantam campo de minas terrestres/antitanque no front.",
+                  () => gameRef.current?.triggerActionById("build_mine")
+                )}
+                {mkBtn(
+                  "sq_grenade",
+                  "💥",
+                  "Granada [G]",
+                  cdG > 0 ? `${cdG}s` : "15 MUN",
+                  "Lançar Granada de Fragmentação [G].",
+                  () => gameRef.current?.throwSelectedGrenade(),
+                  { locked: cdG > 0 }
+                )}
+                {mkBtn(
+                  "sq_suppression",
+                  "🔥",
+                  "Supressão [F]",
+                  leadSquad.suppressionMode ? "ATIVO" : cdF > 0 ? `${cdF}s` : "10 MUN",
+                  "Fogo de Supressão [F]: 2x cadência, reduz velocidade inimiga.",
+                  () => gameRef.current?.toggleSelectedSuppression(),
+                  { active: leadSquad.suppressionMode }
+                )}
+                {mkBtn(
+                  "sq_medkit",
+                  "🩹",
+                  "Médico [C]",
+                  leadSquad.medkitHealing ? "CURANDO" : cdC > 0 ? `${cdC}s` : "20 SUP",
+                  "Aplicar Kit Médico de Campo [C].",
+                  () => gameRef.current?.useSelectedMedkit()
+                )}
+                {mkBtn(
+                  "sq_extra",
+                  "🏗️",
+                  "+Base",
+                  "Prédios",
+                  "Alternar para catálogo de Construções da Base.",
+                  () => setConsolePage("extra")
+                )}
+              </div>
+            );
+          }
+
+          // 2b. VEÍCULOS SELECIONADOS -> PAINEL DE COMANDOS TÁTICOS ESTILO OUTLIVE
+          if (!selectedBld && leadSquad && leadSquad.isVehicle && !leadSquad.isConstructor && consolePage === "main") {
+            const stance = leadSquad.combatStance || "aggressive";
+            const stanceLabel = stance === "passive" ? "Passiva" : stance === "defensive" ? "Defensiva" : "Agressiva";
+            const canQuickRepair = leadSquad.hp < leadSquad.maxHp;
+            return (
+              <div className="outlive-cmd-grid">
+                {mkBtn(
+                  "veh_repair",
+                  "🔧",
+                  hud.hasRepairUnit ? "Chamar Reparo" : "Treinar Eng.",
+                  canQuickRepair ? `${Math.round((leadSquad.hp / Math.max(1, leadSquad.maxHp)) * 100)}% HP` : "100% HP",
+                  hud.hasRepairUnit
+                    ? "Envia o Engenheiro ou Carro Construtor mais próximo para soldar e reparar o veículo."
+                    : "Sem Engenheiro no mapa! Clique para retornar à Base ou treine Engenheiros no QG.",
+                  () => {
+                    if (hud.hasRepairUnit) {
+                      gameRef.current?.callRepairForSelectedVehicles();
+                    } else {
+                      gameRef.current?.returnSelectedToBase();
+                    }
                   },
-                  {
-                    id: 'fpv_kamikaze',
-                    name: '💥 Drone Kamikaze FPV',
-                    cost: '500 SUP • 200 MUN • 9s',
-                    desc: 'Mergulho explosivo de alta penetração contra tanques e bases.',
-                  },
-                ].map((dr) => {
-                  const researched = completedTechSet.has(dr.id);
-                  const stockCount = hud.droneStock?.[dr.id] || 0;
-                  return (
-                    <div key={dr.id} className="base-item-btn" style={{ cursor: 'default' }}>
-                      <div className="base-item-top">
-                        <strong>{dr.name}</strong>
-                        <span>{dr.cost}</span>
-                      </div>
-                      <div className="base-item-sub">{dr.desc}</div>
-                      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                        <button
-                          type="button"
-                          className="mil-pill"
-                          disabled={!researched || (hud.hqLevel || 1) < 3}
-                          onClick={() => gameRef.current?.queueDroneProduction(dr.id)}
-                        >
-                          {researched && (hud.hqLevel || 1) >= 3
-                            ? '🏭 Fabricar'
-                            : '🔒 Req. QG Nv.3 + Pesquisa [T]'}
-                        </button>
-                        <button
-                          type="button"
-                          className={`mil-pill ${hud.activeDroneLaunchMode === dr.id ? 'active' : ''}`}
-                          disabled={stockCount <= 0}
-                          onClick={() => gameRef.current?.triggerDroneLaunchMode(dr.id)}
-                        >
-                          🚀 Lançar ({stockCount})
-                        </button>
-                      </div>
-                    </div>
+                  { locked: !canQuickRepair }
+                )}
+                {mkBtn(
+                  "veh_patrol",
+                  "🔄",
+                  "Patrulhar",
+                  "Ida/Volta",
+                  "Clique e marque o destino B (segure Shift para vários pontos): patrulha contínua.",
+                  () => gameRef.current?.setActiveCommandMode?.("vehicle_patrol"),
+                  { active: hud.activeCommandMode === "vehicle_patrol" }
+                )}
+                {mkBtn(
+                  "veh_line_move",
+                  "➡️",
+                  "Linha Reta",
+                  "Sincronizar",
+                  "Move o grupo em formação alinhada na velocidade do tanque mais lento.",
+                  () => gameRef.current?.setActiveCommandMode?.("vehicle_line_move"),
+                  { active: hud.activeCommandMode === "vehicle_line_move" }
+                )}
+                {mkBtn(
+                  "veh_hold",
+                  "⚓",
+                  "Manter Pos.",
+                  leadSquad.holdPosition ? "TRAVADO" : "Livre",
+                  "Trava rodas/esteiras no local e atira sem sair da cobertura.",
+                  () => gameRef.current?.toggleSelectedHoldPosition(),
+                  { active: leadSquad.holdPosition }
+                )}
+                {mkBtn(
+                  "veh_attack_move",
+                  "⚔️",
+                  "Atacar Mov.",
+                  "Avançar",
+                  "Avança até o destino parando para destruir inimigos no caminho.",
+                  () => gameRef.current?.setActiveCommandMode?.("attack_move"),
+                  { active: hud.activeCommandMode === "attack_move" }
+                )}
+                {mkBtn(
+                  "veh_stance",
+                  "🛡️",
+                  "Postura",
+                  stanceLabel,
+                  "Alterna entre Agressiva (persegue), Defensiva (fixo) e Passiva (foge sem atirar).",
+                  () => gameRef.current?.cycleSelectedVehicleStance(),
+                  { active: stance !== "aggressive" }
+                )}
+                {mkBtn(
+                  "veh_rtb",
+                  "🏠",
+                  "Recuar Base",
+                  "Reparo QG",
+                  "Recua o veículo imediatamente para a área de reparo do QG/Fábrica.",
+                  () => gameRef.current?.returnSelectedToBase()
+                )}
+                {mkBtn(
+                  "veh_extra",
+                  "🏗️",
+                  "+Base",
+                  "Prédios",
+                  "Abrir catálogo de Construções da Base.",
+                  () => setConsolePage("extra")
+                )}
+              </div>
+            );
+          }
+
+          if (consolePage === "air") {
+            return (
+              <div className="outlive-cmd-grid">
+                {AIR_DOCTRINES.map((doc) => {
+                  const cd = hud.airCooldowns?.[doc.id] || 0;
+                  const canUse = hasAirCommand && cd <= 0 && hud.supplies >= (doc.cost || 0) && hud.ammo >= (doc.ammoCost || 0);
+                  return mkBtn(
+                    doc.id,
+                    "✈️",
+                    `[${doc.key}] ${doc.short}`,
+                    !hasAirCommand ? "🔒 Radar" : cd > 0 ? `⏳ ${Math.ceil(cd)}s` : `${doc.cost}S`,
+                    `[${doc.key}] ${doc.name}: ${doc.subtitle}`,
+                    () => {
+                      if (!hasAirCommand) {
+                        gameRef.current?.notify("COMANDO AÉREO BLOQUEADO", "Construa o Comando Aéreo / Radar primeiro!", "#fbbf24");
+                        return;
+                      }
+                      gameRef.current?.triggerAirDoctrine(doc.id);
+                    },
+                    { locked: !canUse }
                   );
                 })}
-                {hud.droneQueue?.length > 0 && (
-                  <div style={{ fontSize: 12, color: '#93c5fd', fontWeight: 700 }}>
-                    ⏳ Fabricando drone... {hud.droneQueue[0].remaining}s restantes
-                  </div>
-                )}
+                {mkBtn("back_main", "↩️", "Voltar", "Principal", "Voltar para a grade principal.", () => setConsolePage("main"))}
               </div>
-            ) : selectedBld.buildingType === 'pow_camp' ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
-                <div
-                  style={{
-                    padding: '8px 10px',
-                    background: 'rgba(15, 23, 42, 0.72)',
-                    border: '1px solid rgba(234, 179, 8, 0.4)',
-                    borderRadius: 6,
-                    fontSize: 12,
-                    color: '#f8fafc',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                  }}
-                >
-                  <span>⛓️ Prisioneiros na Cela:</span>
-                  <strong style={{ color: '#facc15' }}>
-                    {hud.powPrisonersCount || 0}/{hud.powPrisonersMax || 10} (+{hud.powIncomePerSec || 0} SUP/s)
-                  </strong>
-                </div>
-                <button
-                  type="button"
-                  className="base-item-btn"
-                  style={{
-                    borderColor: 'rgba(234, 179, 8, 0.7)',
-                    background: 'rgba(161, 98, 7, 0.25)',
-                  }}
-                  onClick={() => gameRef.current?.openPowInterrogation()}
-                >
-                  <div className="base-item-top">
-                    <strong>🕵️ ABRIR SALA DE INTERROGATÓRIO</strong>
-                    <span>{hud.powPrisonersCount > 0 ? 'PRONTO' : 'CELA VAZIA'}</span>
-                  </div>
-                  <div className="base-item-sub">
-                    Interrogue prisioneiros capturados para extrair mapas, comboios ou códigos.
-                  </div>
-                </button>
-              </div>
-            ) : (
-              <div className="bprod-idle-hint">
-                Esta instalação habilita o Suporte Aéreo ([Z], [X], [C]) no painel direito.
-              </div>
-            )}
-          </div>
-        ) : (
-          <>
-            {/* ABAS CLICÁVEIS DE MÚLTIPLAS UNIDADES SELECIONADAS */}
-            {hud.selectedUnits.length > 1 && (
-              <div className="multi-unit-tabs">
-                {hud.selectedUnits.map((u) => (
-                  <button
-                    key={u.id}
-                    type="button"
-                    className={`multi-unit-tab ${leadSquad?.id === u.id ? 'active' : ''}`}
-                    onClick={() => gameRef.current?.focusSelectedUnit(u.id)}
-                    title={`Focar em ${u.short} (${u.hp}/${u.maxHp} HP)`}
-                  >
-                    <span>{u.short}</span>
-                    <small>{Math.round((u.hp / Math.max(1, u.maxHp)) * 100)}%</small>
-                  </button>
-                ))}
-              </div>
-            )}
-            {hud.selectedCount === 0 ? (
-              <div className="selection-empty">
-                Clique/Toque em Tropas para selecionar. Clique Direito ou Toque perto de Muros/Trincheiras para Encaixar em Cobertura (Cover Snap).
-              </div>
-            ) : (
-              <>
-                {/* STATUS DE COBERTURA FÍSICA / ENCAIXE EM MURO OU TRINCHEIRA */}
-                {(hud.anySelectedSnappedToCover || hud.anySelectedCrouching) && (
-                  <div className="cover-snap-status-banner">
-                    <span>🛡 ENCAIXADO EM COBERTURA (POSTURA AGACHADA)</span>
-                    <small>85%+ Bloqueio Frontal contra Tiros</small>
-                  </div>
-                )}
+            );
+          }
 
-                {/* PAINEL EXCLUSIVO DE VEÍCULO VS CONTROLES DE INFANTARIA */}
-                {leadSquad && !leadSquad.isInfantry ? (
-                  <div className="vehicle-exclusive-box">
-                    <div className="veh-stat-grid">
-                      <div className="veh-stat-cell">
-                        <span>BLINDAGEM</span>
-                        <strong>{leadSquad.armorPct || 35}%</strong>
-                      </div>
-                      <div className="veh-stat-cell">
-                        <span>ARMAMENTO</span>
-                        <strong>
-                          {leadSquad.weaponLabel === 'tank_cannon'
-                            ? 'Canhão 120mm HE/AP'
-                            : leadSquad.weaponLabel === 'autocannon'
-                              ? 'Canhão 30mm'
-                              : leadSquad.weaponLabel === 'rocket_pod'
-                                ? 'Foguetes'
-                                : 'Metralhadora .50'}
-                        </strong>
-                      </div>
-                      {leadSquad.isTransport && (
-                        <div className="veh-stat-cell">
-                          <span>PASSAGEIROS</span>
-                          <strong>
-                            {leadSquad.cargoSoldiersCount || 0}/{leadSquad.maxCargoSoldiers || 12}
-                          </strong>
+          if (consolePage === "extra") {
+            const extraButtons = [
+              { id: "air_command", icon: "📡", name: "Comando Aéreo", cost: `${BASE_BUILDING_BY_ID.air_command?.cost || 250}S`, tip: "Comando Aéreo / Radar: Desbloqueia Drone Recon [Z], A-10 [X] e Bombardeio [C].", onClick: () => gameRef.current?.startPlaceBaseBuilding("air_command") },
+              { id: "thermal_plant", icon: "⚛️", name: "Termelétrica", cost: "420S • 80C", tip: "Usina Termelétrica: Gera +140 MW e conecta prédios em 36m.", onClick: () => gameRef.current?.startPlaceBaseBuilding("thermal_plant") },
+              { id: "pow_camp", icon: "⛓️", name: "Campo POW", cost: "260S • 40C", tip: "Campo de Prisioneiros: Gera +5 SUP/s por prisioneiro.", onClick: () => gameRef.current?.startPlaceBaseBuilding("pow_camp") },
+              { id: "build_bunker", icon: "🏰", name: "Bunker .50cal", cost: `${COMMAND_BY_ID.build_bunker?.cost || 180}S`, tip: "Bunker Blindado .50cal conectado à Rede Elétrica.", onClick: () => gameRef.current?.triggerActionById("build_bunker") },
+              { id: "build_fortified_wall", icon: "🧱", name: "Muralha", cost: `${COMMAND_BY_ID.build_fortified_wall?.cost || 80}S`, tip: "Muralha Contínua de Concreto.", onClick: () => gameRef.current?.triggerActionById("build_fortified_wall") },
+              { id: "build_outpost", icon: "📦", name: "Posto SUP", cost: "160S", tip: "Posto de Suprimentos: Aumenta renda do setor dominado.", onClick: () => gameRef.current?.triggerActionById("build_outpost") },
+              { id: "air_tab", icon: "✈️", name: "Ataques Aéreos", cost: hasAirCommand ? "Pronto" : "🔒 Radar", tip: "Abrir comandos de Suporte Aéreo ([Z], [X], [C]).", onClick: () => setConsolePage("air") },
+              { id: "back_main", icon: "↩️", name: "Voltar", cost: "Principal", tip: "Voltar para o catálogo principal da Base.", onClick: () => setConsolePage("main") },
+            ];
+            return (
+              <div className="outlive-cmd-grid">
+                {extraButtons.map((btn) => mkBtn(btn.id, btn.icon, btn.name, btn.cost, btn.tip, btn.onClick))}
+              </div>
+            );
+          }
+
+          // 3. CARRO CONSTRUTOR SELECIONADO ou BASE PADRÃO -> CATÁLOGO DE CONSTRUÇÕES DA BASE
+          const mainBuildSlots = [
+            { id: "wind_turbine", icon: "🌬️", name: "Usina Eólica", cost: "180 SUP • +45MW", tip: "Usina Eólica (+45 MW): Carro Construtor ergue e conecta prédios em 32m.", canAfford: hud.supplies >= 180, onClick: () => gameRef.current?.startPlaceBaseBuilding("wind_turbine") },
+            { id: "power_relay", icon: "🗼", name: "Relé Energia", cost: "90 SUP • +28m", tip: "Relé / Torre de Transmissão: Estende o raio da Rede Elétrica em +28m.", canAfford: hud.supplies >= 90, onClick: () => gameRef.current?.startPlaceBaseBuilding("power_relay") },
+            { id: "refinery", icon: "⛏️", name: "Refinaria", cost: "300 SUP • +Coletor", tip: "Refinaria: Envia 1 Caminhão Coletor automático para minerar jazidas.", canAfford: hud.supplies >= 300, onClick: () => gameRef.current?.startPlaceBaseBuilding("refinery") },
+            { id: "motor_pool", icon: "🏭", name: "Fáb. Blindados", cost: `${BASE_BUILDING_BY_ID.motor_pool?.cost || 280} SUP`, tip: "Fábrica de Blindados: Produz Humvees, APCs, Tanques MBT e Carros Construtores.", canAfford: hud.supplies >= (BASE_BUILDING_BY_ID.motor_pool?.cost || 280), onClick: () => gameRef.current?.startPlaceBaseBuilding("motor_pool") },
+            { id: "spec_ops_center", icon: "🪖", name: "Op. Especiais", cost: `${BASE_BUILDING_BY_ID.spec_ops_center?.cost || 220} SUP`, tip: "Operações Especiais: Recruta Snipers, Antitanque, Choque e Oficial.", canAfford: hud.supplies >= (BASE_BUILDING_BY_ID.spec_ops_center?.cost || 220), onClick: () => gameRef.current?.startPlaceBaseBuilding("spec_ops_center") },
+            { id: "research_center", icon: "🔬", name: "Centro Pesq.", cost: "350S • 80M", tip: "Centro de Pesquisa: Obrigatório para liberar pesquisas tecnológicas [Y].", canAfford: hud.supplies >= 350 && hud.ammo >= 80, onClick: () => gameRef.current?.startPlaceBaseBuilding("research_center") },
+            { id: "drone_factory", icon: "🛸", name: "Fáb. Drones", cost: "320S • 50C", tip: "Fábrica de Drones Táticos: Produz UAV Recon, FPV Kamikaze e Interceptador.", canAfford: hud.supplies >= 320 && hud.fuel >= 50, onClick: () => gameRef.current?.startPlaceBaseBuilding("drone_factory") },
+            { id: "more_base", icon: "➕", name: "+Defesas/Ar", cost: "Mais", tip: "Abrir Termelétrica, Comando Aéreo, Bunkers, Muralhas e Campo POW.", canAfford: true, onClick: () => setConsolePage("extra") },
+          ];
+
+          return (
+            <div className="outlive-cmd-grid">
+              {mainBuildSlots.map((slot) =>
+                mkBtn(slot.id, slot.icon, slot.name, slot.cost, slot.tip, slot.onClick, { locked: !slot.canAfford })
+              )}
+            </div>
+          );
+        };
+
+        return (
+          <footer className="outlive-bottom-console">
+            <div className="outlive-console-left">
+              <Minimap gameRef={gameRef} compact />
+            </div>
+
+            <div className="outlive-console-center">
+              {selectedBld ? (
+                <>
+                  <div className="outlive-visor-head">
+                    <div className="outlive-visor-title">
+                      <div className="outlive-visor-portrait">🏭</div>
+                      <div>
+                        <strong style={{ fontSize: 13 }}>{selectedBld.name}</strong>
+                        <div style={{ fontSize: 10.5, color: selectedBld.underConstruction ? "#38bdf8" : selectedBld.powerConnected ? "#4ade80" : "#ef4444", fontWeight: 700 }}>
+                          {selectedBld.underConstruction
+                            ? `🚧 Em Construção (${selectedBld.buildProgress || 0}%)`
+                            : selectedBld.powerConnected
+                              ? "⚡ Conectado à Rede (100%)"
+                              : "⚠️ Sem Energia — Construa Usina/Relé"}
                         </div>
-                      )}
-                    </div>
-                    <div className="stance-toolbar" style={{ marginTop: 6 }}>
-                      <button
-                        type="button"
-                        className="stance-btn rtb-btn"
-                        onClick={() => gameRef.current?.returnSelectedToBase()}
-                      >
-                        ▸ RETORNAR À BASE / REPARAR [B]
-                      </button>
-                      <button
-                        type="button"
-                        className={`stance-btn ${hud.selectedHoldPosition ? 'active hold-active' : ''}`}
-                        onClick={() => gameRef.current?.toggleSelectedHoldPosition()}
-                      >
-                        {hud.selectedHoldPosition ? '▪ MODO ARTILHARIA / FIXO [H]' : '▸ FOGO LIVRE [H]'}
-                      </button>
-                      {leadSquad.isTransport && (leadSquad.cargoSquadsCount || 0) > 0 && (
-                        <button
-                          type="button"
-                          className="stance-btn"
-                          onClick={() => gameRef.current?.disembarkAllFromTransport(leadSquad.id)}
-                        >
-                          ▸ DESEMBARCAR ({leadSquad.cargoSoldiersCount}) [U]
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                {/* 1. BOTÕES DE FORMAÇÃO TÁTICA */}
-                <div className="formation-toolbar">
-                  {Object.values(SQUAD_FORMATIONS).map((f) => (
-                    <button
-                      key={f.id}
-                      type="button"
-                      className={`formation-btn ${hud.selectedFormation === f.id ? 'active' : ''}`}
-                      onClick={() => gameRef.current?.setSelectedFormation(f.id)}
-                      title={`${f.name}: ${f.desc}`}
-                    >
-                      {f.short}
-                    </button>
-                  ))}
-                </div>
-
-                {/* 2. ESPAÇAMENTO TÁTICO COMPACTO EM 1 LINHA (SEM OCUPAR MEIA TELA) */}
-                <div className="compact-spacing-bar">
-                  <span className="compact-spacing-label">ESPAÇO:</span>
-                  {SPACING_PRESETS.map((preset) => {
-                    const isPresetActive =
-                      Math.abs((hud.selectedSpacing || 3.0) - preset.meters) < 0.2;
-                    return (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        className={`spacing-preset-btn ${isPresetActive ? 'active' : ''}`}
-                        onClick={() => gameRef.current?.setSelectedSpacing(preset.meters)}
-                        title={`${preset.label} (${preset.meters}m)`}
-                      >
-                        {preset.meters}m
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* 3. TRAVAR POSIÇÃO [H], RETORNAR À BASE [B/R] & DESOCUPAR GUARNIÇÃO [U] */}
-                <div className="stance-toolbar">
-                  <button
-                    type="button"
-                    className={`stance-btn ${hud.selectedHoldPosition ? 'active hold-active' : ''}`}
-                    onClick={() => gameRef.current?.toggleSelectedHoldPosition()}
-                    title="Travar Posição [H]: O esquadrão não sai da cobertura/trincheira para perseguir inimigos"
-                  >
-                    {hud.selectedHoldPosition ? <IconLock size={12} /> : <IconUnlock size={12} />}{' '}
-                    {hud.selectedHoldPosition ? 'POSIÇÃO TRAVADA [H]' : 'TRAVAR POSIÇÃO [H]'}
-                  </button>
-                  {leadSquad && (
-                    <button
-                      type="button"
-                      className="stance-btn rtb-btn"
-                      onClick={() => gameRef.current?.returnSelectedToBase()}
-                      title="Recuar rápido para o QG para se curar [Tecla R]"
-                    >
-                      RECUAR P/ QG [R]
-                    </button>
-                  )}
-                  {hud.anySelectedGarrisoned && (
-                    <button
-                      type="button"
-                      className="stance-btn ungarrison-btn"
-                      onClick={() => gameRef.current?.ungarrisonSelected()}
-                      title="Desocupar Casa/Prédio [U]"
-                    >
-                      SAIR DO PRÉDIO [U]
-                    </button>
-                  )}
-                  {leadSquad && (leadSquad.unitType === 'engineers' || leadSquad.canBuild) && (
-                    <button
-                      type="button"
-                      className="stance-btn"
-                      style={{ borderColor: '#38bdf8', color: '#7dd3fc' }}
-                      onClick={() => gameRef.current?.repairNearestVehicleForSelected()}
-                      title="Enviar Engenheiros para consertar o veículo aliado danificado mais próximo"
-                    >
-                      <IconWrench size={12} /> Consertar Veículo
-                    </button>
-                  )}
-                </div>
-                  </>
-                )}
-
-                {/* HABILIDADES TÁTICAS & POSTURA DO ESQUADRÃO */}
-                {leadSquad && leadSquad.isInfantry && (
-                  <div className="squad-abilities-box">
-                    <div className="squad-abilities-row">
-                      {(() => {
-                        const cdG = leadSquad.abilityCooldowns?.grenade || 0;
-                        const cdF = leadSquad.abilityCooldowns?.suppression || 0;
-                        const cdC = leadSquad.abilityCooldowns?.medkit || 0;
-                        return (
-                          <>
-                            <button
-                              type="button"
-                              className={`ability-btn ${cdG > 0 ? 'on-cd' : ''}`}
-                              onClick={() => gameRef.current?.throwSelectedGrenade()}
-                              title="Lançar Granada Fragmentação [G] (15 MUN • Recarga 12s)"
-                            >
-                              <span>
-                                <IconGrenade size={12} /> Granada [G]
-                              </span>
-                              <small>{cdG > 0 ? `${cdG}s` : '15 MUN'}</small>
-                            </button>
-                            <button
-                              type="button"
-                              className={`ability-btn ${leadSquad.suppressionMode ? 'active' : ''} ${cdF > 0 && !leadSquad.suppressionMode ? 'on-cd' : ''}`}
-                              onClick={() => gameRef.current?.toggleSelectedSuppression()}
-                              title="Fogo de Supressão [F] (2x Cadência • Pinned -70% vel. • 10 MUN • 15s)"
-                            >
-                              <span>
-                                <IconFlame size={12} /> Supressão [F]
-                              </span>
-                              <small>{leadSquad.suppressionMode ? 'ATIVO' : cdF > 0 ? `${cdF}s` : '10 MUN'}</small>
-                            </button>
-                            <button
-                              type="button"
-                              className={`ability-btn ${leadSquad.medkitHealing ? 'active-heal' : ''} ${cdC > 0 && !leadSquad.medkitHealing ? 'on-cd' : ''}`}
-                              onClick={() => gameRef.current?.useSelectedMedkit()}
-                              title="Kit Médico [C] (+45 HP em 5s • 20 SUP • Recarga 20s)"
-                            >
-                              <span>
-                                <IconMedkit size={12} /> Médico [C]
-                              </span>
-                              <small>{leadSquad.medkitHealing ? 'CURANDO' : cdC > 0 ? `${cdC}s` : '20 SUP'}</small>
-                            </button>
-                          </>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                )}
-
-                {/* PAINEL DE CARGA DO VEÍCULO DE TRANSPORTE DE TROPAS */}
-                {leadSquad && leadSquad.isTransport && (
-                  <div className="transport-cargo-box">
-                    <div className="transport-cargo-head">
-                      <span>
-                        🚛 TROPAS A BORDO: {leadSquad.cargoSquadsCount}/{leadSquad.maxCargoSquads}{' '}
-                        ({leadSquad.cargoSoldiersCount}/{leadSquad.maxCargoSoldiers} Sold.)
-                      </span>
-                    </div>
-                    {leadSquad.cargoNames && leadSquad.cargoNames.length > 0 ? (
-                      <div className="transport-cargo-list">
-                        {leadSquad.cargoNames.map((cn, idx) => (
-                          <span key={idx} className="transport-cargo-pill">
-                            🪖 {cn}
-                          </span>
-                        ))}
                       </div>
-                    ) : (
-                      <div className="transport-cargo-empty">
-                        Selecione infantaria e clique neste veículo para embarcar.
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      className="stance-btn ungarrison-btn"
-                      style={{ width: '100%', marginTop: 6 }}
-                      disabled={!leadSquad.cargoSquadsCount}
-                      onClick={() => gameRef.current?.disembarkAllFromTransport(leadSquad.id)}
-                      title="Abrir rampa traseira e desembarcar tropas em formação [Tecla U]"
-                    >
-                      🚪 DESEMBARCAR TROPAS [TECLA U]
-                    </button>
+                    </div>
+                    <strong style={{ fontSize: 12, color: "#86efac" }}>
+                      {selectedBld.hp}/{selectedBld.maxHp} HP
+                    </strong>
                   </div>
-                )}
-
-                {/* 4. VIDA INDIVIDUAL POR SOLDADO (CARDS COM HP PRÓPRIO, ARMA E SELEÇÃO INDIVIDUAL) */}
-                {leadSquad && leadSquad.isInfantry && leadSquad.soldiers ? (
-                  <div className="individual-soldiers-section">
-                    <div className="sel-unit-top" style={{ marginBottom: 5 }}>
+                  <div className="stat-track" style={{ marginTop: 4 }}>
+                    <div className="stat-fill hp" style={{ width: `${Math.round((selectedBld.hp / Math.max(1, selectedBld.maxHp)) * 100)}%` }} />
+                  </div>
+                  <div className="outlive-visor-stats">
+                    <div className="outlive-stat-box"><span>Integridade</span><strong>{Math.round((selectedBld.hp / Math.max(1, selectedBld.maxHp)) * 100)}%</strong></div>
+                    <div className="outlive-stat-box"><span>Rede Elétrica</span><strong style={{ color: pStats.isLowPower ? "#facc15" : "#4ade80" }}>{selectedBld.powerConnected ? `${pStats.efficiencyPct}%` : "OFFLINE"}</strong></div>
+                    <div className="outlive-stat-box"><span>Fila</span><strong>{selectedBld.productionQueue?.length || 0} / 5</strong></div>
+                    <div className="outlive-stat-box">
+                      <span>{selectedBld.underConstruction ? "Obra" : "Progresso"}</span>
                       <strong>
-                        {leadSquad.short} ({leadSquad.soldiersAlive}/{leadSquad.maxSoldiers}{' '}
-                        Soldados)
+                        {selectedBld.underConstruction
+                          ? `${selectedBld.buildProgress || 0}%`
+                          : selectedBld.productionQueue?.length > 0
+                            ? `${selectedBld.productionProgress}% (${selectedBld.productionRemainingSec || 0}s)`
+                            : "Ocioso"}
                       </strong>
-                      <span>
-                        {leadSquad.garrisonedBuildingId
-                          ? '🏠 Guarnição (+75%)'
-                          : leadSquad.camouflagedInForest
-                            ? '🌲 CAMUFLADO NA MATA (+50% DEF • Furtivo)'
-                            : leadSquad.inForestStealth
-                              ? '🌲 NA MATA (+50% DEF • Revelado)'
-                              : leadSquad.inTrench
-                                ? '🛡 Trincheira (+65%)'
-                                : leadSquad.inHeavyCover
-                                  ? '🟢 Muro Pesado (+75%)'
-                                  : leadSquad.inLightCover
-                                    ? '🟡 Cobertura Leve (+40%)'
-                                    : leadSquad.inTreelineCover
-                                      ? '🌲 Árvores (+35%)'
-                                      : `${leadSquad.hp}/${leadSquad.maxHp} HP Total`}
-                      </span>
                     </div>
-
-                    <div className="soldier-cards-grid">
-                      {leadSquad.soldiers.map((s) => {
-                        const hpPct = Math.max(0, Math.min(100, Math.round((s.hp / s.maxHp) * 100)));
-                        const hpColorClass =
-                          hpPct > 50 ? 'hp-green' : hpPct >= 25 ? 'hp-yellow' : 'hp-red';
+                  </div>
+                </>
+              ) : leadSquad ? (
+                <>
+                  <div className="outlive-visor-head">
+                    <div className="outlive-visor-title">
+                      <div className="outlive-visor-portrait">{leadSquad.isConstructor ? "🏗️" : leadSquad.isHarvester ? "🚜" : leadSquad.unitType === "humvee" ? "🚙" : leadSquad.isVehicle ? "🛡️" : "🪖"}</div>
+                      <div>
+                        <strong style={{ fontSize: 13 }}>{leadSquad.name} {hud.selectedCount > 1 ? `(+${hud.selectedCount - 1})` : ""}</strong>
+                        <div style={{ fontSize: 10.5, color: "#93c5fd" }}>
+                          {leadSquad.isHarvester
+                            ? `Estado: ${leadSquad.harvesterState === "harvesting" ? "Minerando Jazida" : leadSquad.harvesterState === "to_refinery" ? "Retornando à Refinaria" : "Em Rota"}`
+                            : leadSquad.inTrench
+                              ? "🛡 Em Trincheira (+65% Cobertura)"
+                              : leadSquad.camouflagedInForest
+                                ? "🌲 Camuflado na Mata (+50% DEF)"
+                                : leadSquad.holdPosition
+                                  ? "🔒 Posição Travada [H]"
+                                  : "⚡ Pronto para Combate"}
+                        </div>
+                      </div>
+                    </div>
+                    <strong style={{ fontSize: 12, color: "#86efac" }}>{leadSquad.hp}/{leadSquad.maxHp} HP</strong>
+                  </div>
+                  <div className="stat-track" style={{ marginTop: 4 }}>
+                    <div className="stat-fill hp" style={{ width: `${Math.round((leadSquad.hp / Math.max(1, leadSquad.maxHp)) * 100)}%` }} />
+                  </div>
+                  {hud.selectedUnits.length > 1 ? (
+                    <div className="outlive-multi-grid">
+                      {hud.selectedUnits.map((u) => {
+                        const pct = Math.max(0, Math.min(100, Math.round((u.hp / Math.max(1, u.maxHp)) * 100)));
                         return (
                           <button
-                            key={s.id}
+                            key={u.id}
                             type="button"
-                            className={`soldier-card-btn ${s.selected ? 'selected' : ''}`}
-                            onClick={(e) =>
-                              gameRef.current?.toggleSelectSoldierInUnit(
-                                leadSquad.id,
-                                s.id,
-                                e.ctrlKey
-                              )
-                            }
-                            title={`Clique para selecionar/desmarcar ${s.name} (${s.weapon} • ${s.hp}/${s.maxHp} HP)`}
+                            className={`outlive-mini-unit-btn ${leadSquad.id === u.id ? "active" : ""}`}
+                            onClick={() => gameRef.current?.focusSelectedUnit(u.id)}
                           >
-                            <div className="soldier-card-top">
-                              <span className="soldier-name">
-                                <svg className="mil-svg-icon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                                  {s.selected ? (
-                                    <path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z" />
-                                  ) : (
-                                    <path d="M12 3a8 8 0 0 0-8 8v3h16v-3a8 8 0 0 0-8-8zm-9 13v2h18v-2H3z" />
-                                  )}
-                                </svg>
-                                {s.name}
-                              </span>
-                              <span className="soldier-hp-num">
-                                {s.hp}/{s.maxHp}
-                              </span>
-                            </div>
-                            <div className="soldier-weapon-row">
-                              <span>
-                                <svg className="mil-svg-icon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                                  <path d="M2 10h14l2-2h4v3h-3l-2 2H9l-1 4H5l1-4H2v-3z" />
-                                </svg>
-                                {s.weapon}
-                              </span>
-                            </div>
-                            <div className="soldier-hp-track">
-                              <div
-                                className={`soldier-hp-fill ${hpColorClass}`}
-                                style={{ width: `${hpPct}%` }}
-                              />
+                            <span>{u.short}</span>
+                            <div className="outlive-mini-hp-track">
+                              <div className="outlive-mini-hp-fill" style={{ width: `${pct}%` }} />
                             </div>
                           </button>
                         );
                       })}
                     </div>
-
-                    {/* 5. TRANSFERIR SOLDADOS ENTRE ESQUADRÕES E DESTACAR SOLDADO (ESTILO MEN OF WAR) */}
-                    <div className="soldier-ops-toolbar">
-                      <button
-                        type="button"
-                        className="soldier-op-btn split-btn"
-                        disabled={leadSquad.soldiersAlive < 2}
-                        onClick={() => gameRef.current?.splitSelectedSoldiers(leadSquad.id)}
-                        title="Destacar 1 ou mais soldados selecionados como um novo Esquadrão Independente (Tecla K)"
-                      >
-                        ✂ Separar Soldado [K]
-                        {selectedSoldierCount > 0 ? ` (${selectedSoldierCount})` : ' (1)'}
-                      </button>
-
-                      {hud.selectedCount >= 2 ? (
-                        <button
-                          type="button"
-                          className="soldier-op-btn transfer-btn"
-                          onClick={() => gameRef.current?.mergeSelectedSquads()}
-                          title="Mesclar soldados dos esquadrões selecionados em um único esquadrão reforçado"
-                        >
-                          ⇄ Mesclar Esquadrões ({hud.selectedCount})
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className={`soldier-op-btn transfer-btn ${showTransferPicker ? 'active' : ''
-                            }`}
-                          disabled={
-                            !hud.otherAlliedInfantrySquads ||
-                            hud.otherAlliedInfantrySquads.length === 0
-                          }
-                          onClick={() => {
-                            const others = hud.otherAlliedInfantrySquads || [];
-                            if (others.length === 1) {
-                              gameRef.current?.transferSoldiersToSquad(leadSquad.id, others[0].id);
-                              setShowTransferPicker(false);
-                            } else {
-                              setShowTransferPicker((v) => !v);
-                            }
-                          }}
-                          title="Transferir soldado(s) selecionado(s) para outro esquadrão aliado"
-                        >
-                          Transferir ➡️
-                          {selectedSoldierCount > 0 ? ` (${selectedSoldierCount})` : ''}
-                        </button>
-                      )}
+                  ) : (
+                    <div className="outlive-visor-stats">
+                      <div className="outlive-stat-box"><span>{leadSquad.isHarvester ? "Carga" : "Ataque"}</span><strong>{leadSquad.isHarvester ? `${leadSquad.harvesterLoad || 0}%` : leadSquad.attack || 0}</strong></div>
+                      <div className="outlive-stat-box"><span>Blindagem</span><strong>{leadSquad.armor || 0}%</strong></div>
+                      <div className="outlive-stat-box"><span>Alcance</span><strong>{leadSquad.range || 0}m</strong></div>
+                      <div className="outlive-stat-box"><span>Efetivo</span><strong>{leadSquad.isInfantry ? `${leadSquad.soldiersAlive}/${leadSquad.maxSoldiers}` : "1 Veículo"}</strong></div>
                     </div>
-
-                    {showTransferPicker &&
-                      hud.otherAlliedInfantrySquads &&
-                      hud.otherAlliedInfantrySquads.length > 0 && (
-                        <div className="transfer-target-picker">
-                          <div className="transfer-picker-title">
-                            Escolha o Esquadrão Destino para Reforçar:
-                          </div>
-                          <div className="transfer-picker-list">
-                            {hud.otherAlliedInfantrySquads.map((targetSq) => (
-                              <button
-                                key={targetSq.id}
-                                type="button"
-                                className="transfer-target-btn"
-                                onClick={() => {
-                                  gameRef.current?.transferSoldiersToSquad(
-                                    leadSquad.id,
-                                    targetSq.id
-                                  );
-                                  setShowTransferPicker(false);
-                                }}
-                              >
-                                <span>➡️ {targetSq.short}</span>
-                                <small>
-                                  {targetSq.soldiersAlive}/{targetSq.maxSoldiers} ef.
-                                </small>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                  </div>
-                ) : (
-                  /* Lista padrão quando veículos ou múltiplos grupos estão selecionados */
-                  <div className="selection-list">
-                    {hud.selectedUnits.slice(0, 4).map((u) => (
-                      <div key={u.id} className="sel-unit-row">
-                        <div className="sel-unit-top">
-                          <strong>{u.short}</strong>
-                          <span>
-                            {u.hp}/{u.maxHp} HP
-                          </span>
-                        </div>
-                        <div className="stat-track">
-                          <div
-                            className="stat-fill hp"
-                            style={{
-                              width: `${Math.round((u.hp / u.maxHp) * 100)}%`,
-                            }}
-                          />
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="outlive-visor-head">
+                    <div className="outlive-visor-title">
+                      <div className="outlive-visor-portrait">🏛️</div>
+                      <div>
+                        <strong style={{ fontSize: 13 }}>COMANDO CENTRAL — QG NV. {hud.hqLevel || 1}/3</strong>
+                        <div style={{ fontSize: 10.5, color: "#9ca3af" }}>
+                          Aliados: {hud.allyUnitsCount} • Eixo Avistado: {hud.enemyUnitsCount} • {hud.commandPoints || 0} CP
                         </div>
                       </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="outlive-top-btn"
+                      onClick={() => setConsolePage((p) => (p === "extra" ? "main" : "extra"))}
+                    >
+                      {consolePage === "extra" ? "↩ Principal" : "+Mais Prédios"}
+                    </button>
+                  </div>
+                  <div className="outlive-multi-grid">
+                    {(hud.alliedBaseBuildings || []).map((b) => (
+                      <button
+                        key={b.id}
+                        type="button"
+                        className="outlive-mini-unit-btn"
+                        style={{ width: "auto", minWidth: 82 }}
+                        onClick={() => {
+                          gameRef.current?.selectBaseBuilding(b.id);
+                          setConsolePage("main");
+                        }}
+                      >
+                        <span>🏭 {b.short}</span>
+                        <div className="outlive-mini-hp-track">
+                          <div className="outlive-mini-hp-fill" style={{ width: `${Math.round((b.hp / Math.max(1, b.maxHp)) * 100)}%` }} />
+                        </div>
+                      </button>
                     ))}
                   </div>
-                )}
+                </>
+              )}
+            </div>
 
-                {hud.selectedUnits.length > 1 && (
-                  <div className="sel-more">
-                    +{hud.selectedUnits.length - 1} outra(s) unidade(s) selecionada(s) no grupo
-                  </div>
-                )}
-              </>
-            )}
-          </>
-        )}
-      </HudPanel>
-      )}
+            <div className="outlive-console-right">
+              <div className="outlive-quick-orders">
+                <button
+                  type="button"
+                  className={`outlive-quick-btn ${hud.activeCommandMode === "attack_move" ? "active" : ""}`}
+                  onMouseEnter={() => setHoverTip("Atacar / Avançar: Ordena tropas atacarem qualquer inimigo no caminho.")}
+                  onMouseLeave={() => setHoverTip("")}
+                  onClick={() => gameRef.current?.setActiveCommandMode?.("attack_move")}
+                >
+                  ⚔️ Atacar
+                </button>
+                <button
+                  type="button"
+                  className={`outlive-quick-btn ${hud.selectedHoldPosition ? "active" : ""}`}
+                  onMouseEnter={() => setHoverTip("Defender / Manter Posição [H]: Impede perseguição automática.")}
+                  onMouseLeave={() => setHoverTip("")}
+                  onClick={() => gameRef.current?.toggleSelectedHoldPosition?.()}
+                >
+                  🛡️ Defender
+                </button>
+                <button
+                  type="button"
+                  className="outlive-quick-btn"
+                  onMouseEnter={() => setHoverTip("Parar / Recuar para Base [R]: Interrompe ordens atuais.")}
+                  onMouseLeave={() => setHoverTip("")}
+                  onClick={() => gameRef.current?.returnSelectedToBase?.()}
+                >
+                  🛑 Parar
+                </button>
+                <button
+                  type="button"
+                  className="outlive-quick-btn"
+                  disabled={!selectedBld}
+                  onMouseEnter={() =>
+                    setHoverTip(
+                      selectedBld && !selectedBld.isMainHQ && selectedBld.hp >= selectedBld.maxHp
+                        ? "Vender Prédio Selecionado (reembolsa 50% dos Suprimentos)."
+                        : "Reparar Prédio / Estrutura Selecionada."
+                    )
+                  }
+                  onMouseLeave={() => setHoverTip("")}
+                  onClick={() => {
+                    if (!selectedBld) return;
+                    if (selectedBld.hp < selectedBld.maxHp) {
+                      gameRef.current?.repairSelectedWallOrBuilding?.();
+                    } else if (!selectedBld.isMainHQ) {
+                      gameRef.current?.sellSelectedBuilding?.();
+                    }
+                  }}
+                >
+                  {selectedBld && !selectedBld.isMainHQ && selectedBld.hp >= selectedBld.maxHp ? "💰 Vender" : "🔄 Reparar"}
+                </button>
+              </div>
+
+              {renderConsoleGrid()}
+
+              <div className="outlive-tooltip-bar">
+                💡 {hoverTip || defaultTip}
+              </div>
+            </div>
+          </footer>
+        );
+      })()}
 
       {/* BARRA SANDBOX COMPACTA E RECOLHÍVEL (Sem colidir com o topo direito ou avisos) */}
       {!editorDrawerOpen && isAdmin && hud.sandboxMode && (

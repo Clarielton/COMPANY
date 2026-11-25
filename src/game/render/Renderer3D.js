@@ -1893,6 +1893,138 @@ export class Renderer3D {
       beacon.scale.set(4, 4, 4);
       beacon.position.set(-22, 36, -10);
       g.add(beacon);
+    } else if (bld.buildingType === 'power_relay') {
+      // Relé / Torre de Transmissão Elétrica
+      const base = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+      base.scale.set(28, 6, 28);
+      base.position.y = 3;
+      g.add(base);
+      const pylon = new THREE.Mesh(this.geometries.cyl, this.materials.gunMetal);
+      pylon.scale.set(5, 58, 5);
+      pylon.position.y = 32;
+      pylon.castShadow = true;
+      g.add(pylon);
+      const crossArm = new THREE.Mesh(this.geometries.box, this.materials.gunMetal);
+      crossArm.scale.set(34, 3, 4);
+      crossArm.position.y = 54;
+      g.add(crossArm);
+      const bulb = new THREE.Mesh(
+        this.geometries.sphere,
+        new THREE.MeshStandardMaterial({
+          color: isAlly ? 0x22d3ee : 0xef4444,
+          emissive: isAlly ? 0x06b6d4 : 0xdc2626,
+          emissiveIntensity: 1.5,
+        })
+      );
+      bulb.scale.set(5, 5, 5);
+      bulb.position.y = 64;
+      g.add(bulb);
+    } else if (bld.buildingType === 'wind_turbine') {
+      // Usina Eólica / Gerador Tático com Turbina Giratória
+      const pad = new THREE.Mesh(this.geometries.cyl, this.materials.concrete);
+      pad.scale.set(26, 4, 26);
+      pad.position.y = 2;
+      g.add(pad);
+      const mast = new THREE.Mesh(this.geometries.cyl, this.materials.whiteFlag);
+      mast.scale.set(5.5, 72, 5.5);
+      mast.position.y = 38;
+      mast.castShadow = true;
+      g.add(mast);
+      const nacelle = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+      nacelle.scale.set(14, 10, 22);
+      nacelle.position.set(0, 76, 0);
+      g.add(nacelle);
+      const rotor = new THREE.Group();
+      rotor.position.set(0, 76, 13);
+      for (let i = 0; i < 3; i++) {
+        const blade = new THREE.Mesh(this.geometries.box, this.materials.whiteFlag);
+        blade.scale.set(3.2, 34, 1.4);
+        blade.position.y = 17;
+        const arm = new THREE.Group();
+        arm.rotation.z = (i * Math.PI * 2) / 3;
+        arm.add(blade);
+        rotor.add(arm);
+      }
+      g.add(rotor);
+      g.userData.windRotor = rotor;
+    } else if (bld.buildingType === 'refinery') {
+      // Refinaria de Recursos (Doca de Descarga + Silos + Moega de Minério)
+      const pad = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+      pad.scale.set(138, 4, 114);
+      pad.position.y = 2;
+      g.add(pad);
+      const hall = new THREE.Mesh(this.geometries.box, this.materials.brickBarn);
+      hall.scale.set(84, 30, 62);
+      hall.position.set(-16, 17, -10);
+      hall.castShadow = true;
+      g.add(hall);
+      const hopper = new THREE.Mesh(this.geometries.box, this.materials.gunMetal);
+      hopper.scale.set(40, 22, 34);
+      hopper.position.set(38, 13, 18);
+      hopper.castShadow = true;
+      g.add(hopper);
+      for (const sx of [-42, -16]) {
+        const silo = new THREE.Mesh(this.geometries.cyl, this.materials.rustMetal);
+        silo.scale.set(14, 42, 14);
+        silo.position.set(sx, 23, 28);
+        silo.castShadow = true;
+        g.add(silo);
+      }
+      const oreGlow = new THREE.Mesh(
+        this.geometries.box,
+        new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0xd97706, emissiveIntensity: 1.1 })
+      );
+      oreGlow.scale.set(28, 6, 22);
+      oreGlow.position.set(38, 25, 18);
+      g.add(oreGlow);
+    } else if (bld.buildingType === 'research_center') {
+      // Centro de Pesquisa Tecnológica (Domo Geodésico + Antena + Laboratório)
+      const pad = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+      pad.scale.set(126, 4, 108);
+      pad.position.y = 2;
+      g.add(pad);
+      const lab = new THREE.Mesh(this.geometries.box, this.materials.concrete);
+      lab.scale.set(82, 26, 66);
+      lab.position.set(-10, 15, 0);
+      lab.castShadow = true;
+      g.add(lab);
+      const dome = new THREE.Mesh(this.geometries.sphere, this.materials.gunMetal);
+      dome.scale.set(24, 22, 24);
+      dome.position.set(22, 26, 0);
+      dome.castShadow = true;
+      g.add(dome);
+      const core = new THREE.Mesh(
+        this.geometries.sphere,
+        new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 1.4 })
+      );
+      core.scale.set(8, 8, 8);
+      core.position.set(22, 42, 0);
+      g.add(core);
+    } else if (bld.buildingType === 'thermal_plant') {
+      // Usina Termelétrica / Reator Pesado
+      const pad = new THREE.Mesh(this.geometries.box, this.materials.concreteDark);
+      pad.scale.set(130, 4, 108);
+      pad.position.y = 2;
+      g.add(pad);
+      const hall = new THREE.Mesh(this.geometries.box, this.materials.concrete);
+      hall.scale.set(92, 32, 68);
+      hall.position.set(-10, 18, 0);
+      hall.castShadow = true;
+      g.add(hall);
+      for (const sz of [-24, 24]) {
+        const tower = new THREE.Mesh(this.geometries.cyl, this.materials.concreteDark);
+        tower.scale.set(16, 48, 16);
+        tower.position.set(42, 26, sz);
+        tower.castShadow = true;
+        g.add(tower);
+      }
+      const coreGlow = new THREE.Mesh(
+        this.geometries.box,
+        new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0ea5e9, emissiveIntensity: 1.4 })
+      );
+      coreGlow.scale.set(22, 12, 54);
+      coreGlow.position.set(-10, 36, 0);
+      g.add(coreGlow);
     } else {
       // Comando Aéreo / Radar: Edifício Técnico + Torre de Controle Envidraçada + Parabólica Rotativa + Geradores + Luzes Piscantes
       const pad = new THREE.Mesh(this.geometries.box, this.materials.concrete);
@@ -4157,62 +4289,262 @@ export class Renderer3D {
       return g;
     }
 
-    // Humvee Blindado Tático com Capô Inclinado, Para-choque, Faróis Acesos, 4 Rodas Giratórias e Torre .50
-    const hull = new THREE.Mesh(this.geometries.box, bodyMat);
-    hull.scale.set(28, 12, 48);
-    hull.position.y = 9;
+    if (subType === 'constructor_truck') {
+      // Carro Construtor Estilo Outlive: Amarelo-Industrial (#eab308) + Chassi Grafite (#27272a), Giroflex Âmbar, Bobinas Ciano & Braço de Solda
+      const chassisMat = new THREE.MeshStandardMaterial({ color: 0x27272a, roughness: 0.72, metalness: 0.35 });
+      const yellowMat = new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.55, metalness: 0.25 });
+      const stripeMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.8 });
+      const coilMat = new THREE.MeshStandardMaterial({ color: 0x06b6d4, emissive: 0x0891b2, emissiveIntensity: 1.2 });
+      const beaconMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0xf59e0b, emissiveIntensity: 1.5 });
+      const laserMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.88 });
+
+      const chassis = new THREE.Mesh(this.geometries.box, chassisMat);
+      chassis.scale.set(32, 9, 54);
+      chassis.position.y = 7.5;
+      chassis.castShadow = true;
+      chassis.receiveShadow = true;
+      g.add(chassis);
+
+      // Cabine frontal blindada amarela + faixas pretas de alerta
+      const cab = new THREE.Mesh(this.geometries.box, yellowMat);
+      cab.scale.set(28, 15, 20);
+      cab.position.set(0, 17, 15);
+      cab.castShadow = true;
+      g.add(cab);
+
+      const stripe = new THREE.Mesh(this.geometries.box, stripeMat);
+      stripe.scale.set(28.8, 3.2, 20.6);
+      stripe.position.set(0, 12.5, 15);
+      g.add(stripe);
+
+      const windshield = new THREE.Mesh(this.geometries.box, this.materials.glass);
+      windshield.scale.set(24, 6.5, 1.5);
+      windshield.position.set(0, 19, 25.2);
+      g.add(windshield);
+
+      const beacon = new THREE.Mesh(this.geometries.cyl, beaconMat);
+      beacon.scale.set(3.2, 3.6, 3.2);
+      beacon.position.set(0, 26.2, 16);
+      g.add(beacon);
+
+      addHeadlights(27.2, 9.5, 11);
+
+      // Bobinas de energia azul-ciano na carroceria traseira
+      for (const cx of [-8, 8]) {
+        const coil = new THREE.Mesh(this.geometries.cyl, coilMat);
+        coil.scale.set(4.5, 11, 4.5);
+        coil.position.set(cx, 16.5, -14);
+        g.add(coil);
+      }
+
+      // Braço mecânico articulado / guindaste de solda
+      const craneGroup = new THREE.Group();
+      craneGroup.position.set(0, 14, -4);
+      const baseTurret = new THREE.Mesh(this.geometries.cyl, chassisMat);
+      baseTurret.scale.set(6.5, 5, 6.5);
+      craneGroup.add(baseTurret);
+
+      const boom = new THREE.Mesh(this.geometries.box, yellowMat);
+      boom.scale.set(4.2, 4.2, 26);
+      boom.rotation.x = -0.45;
+      boom.position.set(0, 10, 10);
+      boom.castShadow = true;
+      craneGroup.add(boom);
+
+      const nozzle = new THREE.Mesh(this.geometries.cyl, coilMat);
+      nozzle.rotation.x = Math.PI / 2;
+      nozzle.scale.set(2.2, 5, 2.2);
+      nozzle.position.set(0, 15.5, 22);
+      craneGroup.add(nozzle);
+
+      const weldingLaser = new THREE.Mesh(this.geometries.cyl, laserMat);
+      weldingLaser.rotation.x = Math.PI / 2;
+      weldingLaser.scale.set(1.3, 68, 1.3);
+      weldingLaser.position.set(0, 15.5, 56);
+      weldingLaser.visible = false;
+      craneGroup.add(weldingLaser);
+
+      g.add(craneGroup);
+
+      const wheelOffsets = [
+        [-17, 6.0, 16],
+        [17, 6.0, 16],
+        [-17, 6.0, -16],
+        [17, 6.0, -16],
+      ];
+      for (const [wx, wy, wz] of wheelOffsets) {
+        createWheelWithHub(wx, wy, wz, 12.0, 5.8);
+      }
+      g.userData = { beaconMat, craneGroup, weldingLaser, wheels };
+      return g;
+    }
+
+    if (subType === 'harvester_truck') {
+      // Carro Coletor / Harvester: 1.4x maior, Laranja-Ferrugem (#d97706) + Cinza-Aço (#475569), 6 Rodas, Pá Dentada e Caçamba Dinâmica
+      const steelMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.7, metalness: 0.4 });
+      const orangeMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.58, metalness: 0.25 });
+      const oreMat = new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0xd97706, emissiveIntensity: 0.9, roughness: 0.35 });
+
+      const frame = new THREE.Mesh(this.geometries.box, steelMat);
+      frame.scale.set(40, 11, 72);
+      frame.position.y = 9.5;
+      frame.castShadow = true;
+      frame.receiveShadow = true;
+      g.add(frame);
+
+      // Cabine frontal robusta laranja industrial
+      const cab = new THREE.Mesh(this.geometries.box, orangeMat);
+      cab.scale.set(34, 17, 22);
+      cab.position.set(0, 21, 21);
+      cab.castShadow = true;
+      g.add(cab);
+
+      const windshield = new THREE.Mesh(this.geometries.box, this.materials.glass);
+      windshield.scale.set(28, 7, 1.6);
+      windshield.position.set(0, 23, 32.2);
+      g.add(windshield);
+
+      // Pá / Escavadeira frontal dentada
+      const scoop = new THREE.Mesh(this.geometries.box, steelMat);
+      scoop.scale.set(40, 9, 10);
+      scoop.rotation.x = 0.28;
+      scoop.position.set(0, 8, 39);
+      scoop.castShadow = true;
+      g.add(scoop);
+      for (const tx of [-15, -7.5, 0, 7.5, 15]) {
+        const tooth = new THREE.Mesh(this.geometries.box, this.materials.gunMetal);
+        tooth.scale.set(2.5, 2.5, 5.5);
+        tooth.position.set(tx, 5, 44.5);
+        g.add(tooth);
+      }
+
+      addHeadlights(32.5, 14, 13);
+
+      // Caçamba basculante traseira + Cristais de recurso dinâmicos (0% -> 100%)
+      const bed = new THREE.Mesh(this.geometries.box, orangeMat);
+      bed.scale.set(36, 14, 38);
+      bed.position.set(0, 19, -13);
+      bed.castShadow = true;
+      g.add(bed);
+
+      const bedInner = new THREE.Mesh(this.geometries.box, steelMat);
+      bedInner.scale.set(31, 3, 33);
+      bedInner.position.set(0, 25.5, -13);
+      g.add(bedInner);
+
+      const cargoGroup = new THREE.Group();
+      cargoGroup.position.set(0, 26, -13);
+      for (const [ox, oz, sx, sy, sz] of [
+        [-7, -6, 12, 9, 12],
+        [7, -4, 11, 11, 13],
+        [-5, 7, 13, 10, 11],
+        [7, 8, 10, 8, 10],
+      ]) {
+        const ore = new THREE.Mesh(this.geometries.box, oreMat);
+        ore.scale.set(sx, sy, sz);
+        ore.position.set(ox, sy * 0.4, oz);
+        ore.rotation.y = ox * 0.2;
+        cargoGroup.add(ore);
+      }
+      cargoGroup.visible = false;
+      g.add(cargoGroup);
+
+      // 6 Rodas grandes (3 eixos)
+      const wheelOffsets = [
+        [-21.5, 7.2, 22],
+        [21.5, 7.2, 22],
+        [-21.5, 7.2, -3],
+        [21.5, 7.2, -3],
+        [-21.5, 7.2, -25],
+        [21.5, 7.2, -25],
+      ];
+      for (const [wx, wy, wz] of wheelOffsets) {
+        createWheelWithHub(wx, wy, wz, 14.5, 6.8);
+      }
+      g.userData = { cargoGroup, wheels };
+      return g;
+    }
+
+    // Humvee Tático (humvee — Verde-Oliva Camuflado #3d4f35, Capô Inclinado, Para-lamas Largos, Antena & Torreta .50cal c/ Caixa Munição)
+    const humveeOliveMat = new THREE.MeshStandardMaterial({ color: 0x3d4f35, roughness: 0.72, metalness: 0.2 });
+    const hull = new THREE.Mesh(this.geometries.box, humveeOliveMat);
+    hull.scale.set(30, 10, 48);
+    hull.position.y = 8.5;
     hull.castShadow = true;
     hull.receiveShadow = true;
     g.add(hull);
 
-    const cab = new THREE.Mesh(this.geometries.box, bodyMat);
-    cab.scale.set(26, 9.5, 25);
-    cab.position.set(0, 18.5, -2);
+    const hood = new THREE.Mesh(this.geometries.box, humveeOliveMat);
+    hood.scale.set(26, 4.5, 16);
+    hood.rotation.x = 0.16;
+    hood.position.set(0, 13.5, 15);
+    hood.castShadow = true;
+    g.add(hood);
+
+    // Para-lamas largos
+    for (const fx of [-15.5, 15.5]) {
+      for (const fz of [15.5, -15.5]) {
+        const fender = new THREE.Mesh(this.geometries.box, humveeOliveMat);
+        fender.scale.set(5.5, 3, 13);
+        fender.position.set(fx, 12.2, fz);
+        g.add(fender);
+      }
+    }
+
+    const cab = new THREE.Mesh(this.geometries.box, humveeOliveMat);
+    cab.scale.set(27, 9.5, 24);
+    cab.position.set(0, 18, -3);
     cab.castShadow = true;
     g.add(cab);
 
     const windshield = new THREE.Mesh(this.geometries.box, this.materials.glass);
     windshield.scale.set(23, 6.2, 1.4);
-    windshield.position.set(0, 18.5, 10.6);
+    windshield.position.set(0, 18.2, 9.2);
+    windshield.rotation.x = -0.18;
     g.add(windshield);
 
     const bumper = new THREE.Mesh(this.geometries.box, this.materials.gunMetal);
-    bumper.scale.set(28, 4, 3);
-    bumper.position.set(0, 6.5, 25);
+    bumper.scale.set(30, 4, 3);
+    bumper.position.set(0, 6.5, 25.2);
     g.add(bumper);
 
     addHeadlights(24.5, 10.5, 10);
 
     const wheelOffsets = [
-      [-14.8, 5.5, 15.5],
-      [14.8, 5.5, 15.5],
-      [-14.8, 5.5, -15.5],
-      [14.8, 5.5, -15.5],
+      [-15.8, 5.8, 15.5],
+      [15.8, 5.8, 15.5],
+      [-15.8, 5.8, -15.5],
+      [15.8, 5.8, -15.5],
     ];
     for (const [wx, wy, wz] of wheelOffsets) {
-      createWheelWithHub(wx, wy, wz, 11.0, 5.2);
+      createWheelWithHub(wx, wy, wz, 11.6, 5.8);
     }
 
     const turret = new THREE.Group();
-    turret.position.set(0, 23.5, -2);
+    turret.position.set(0, 23, -3);
 
-    const shield = new THREE.Mesh(this.geometries.box, bodyMat);
+    const shield = new THREE.Mesh(this.geometries.box, humveeOliveMat);
     shield.scale.set(11, 7.5, 1.8);
     shield.position.set(0, 3, 4.8);
     turret.add(shield);
 
     const hmg = new THREE.Mesh(this.geometries.cyl, this.materials.gunMetal);
     hmg.rotation.x = Math.PI / 2;
-    hmg.scale.set(1.9, 17, 1.9);
-    hmg.position.set(0, 3, 9.5);
+    hmg.scale.set(1.9, 19, 1.9);
+    hmg.position.set(0, 3.2, 10.5);
     turret.add(hmg);
+
+    const ammoBox = new THREE.Mesh(this.geometries.box, humveeOliveMat);
+    ammoBox.scale.set(4.5, 4.2, 5.5);
+    ammoBox.position.set(5.2, 2.5, 3.5);
+    turret.add(ammoBox);
 
     g.add(turret);
     const antenna = new THREE.Mesh(this.geometries.cyl, this.materials.gunMetal);
-    antenna.scale.set(0.35, 18, 0.35);
-    antenna.position.set(-11, 21, -12);
+    antenna.scale.set(0.35, 20, 0.35);
+    antenna.position.set(-12, 22, -17);
     g.add(antenna);
-    g.userData = { turret, barrel: hmg, barrelBaseZ: 9.5, antenna, wheels };
+    g.userData = { turret, barrel: hmg, barrelBaseZ: 10.5, antenna, wheels };
     return g;
   }
 
@@ -5000,6 +5332,9 @@ export class Renderer3D {
       if (bm.userData.dishGroup) {
         bm.userData.dishGroup.rotation.y += dt * 1.25;
       }
+      if (bm.userData.windRotor && bld.powerConnected !== false) {
+        bm.userData.windRotor.rotation.z += dt * 3.0;
+      }
       if (bm.userData.flagMesh) {
         bm.userData.flagMesh.rotation.y = Math.sin((this._animTime || 0) * 4.2) * 0.22;
       }
@@ -5016,6 +5351,45 @@ export class Renderer3D {
       if (bm.userData.lvl3Group) {
         bm.userData.lvl3Group.visible = (bld.level || 1) >= 3;
       }
+      if (bld.underConstruction) {
+        const prog = Math.max(0.15, Math.min(1, (bld.buildProgress || 0) / 100));
+        bm.scale.y = prog;
+        if (!bm.userData.constructionStakes) {
+          const stakes = new THREE.Group();
+          const stakeMat = new THREE.MeshStandardMaterial({ color: 0xeab308, emissive: 0x854d0e, emissiveIntensity: 0.4 });
+          const r = (bld.radius || 80) * 0.72;
+          for (const [sx, sz] of [[-r, -r], [r, -r], [-r, r], [r, r]]) {
+            const st = new THREE.Mesh(this.geometries.box, stakeMat);
+            st.scale.set(4, 24, 4);
+            st.position.set(sx, 12, sz);
+            stakes.add(st);
+          }
+          bm.add(stakes);
+          bm.userData.constructionStakes = stakes;
+        }
+        bm.userData.constructionStakes.visible = true;
+        if (!bm.userData.isGhostOpacity) {
+          bm.traverse((obj) => {
+            if (obj.isMesh && obj.material && obj !== bm.userData.selRing && obj.parent !== bm.userData.constructionStakes) {
+              obj.material.transparent = true;
+              obj.material.opacity = 0.45;
+            }
+          });
+          bm.userData.isGhostOpacity = true;
+        }
+      } else {
+        bm.scale.y = 1;
+        if (bm.userData.constructionStakes) bm.userData.constructionStakes.visible = false;
+        if (bm.userData.isGhostOpacity) {
+          bm.traverse((obj) => {
+            if (obj.isMesh && obj.material && obj !== bm.userData.selRing) {
+              obj.material.transparent = false;
+              obj.material.opacity = 1.0;
+            }
+          });
+          bm.userData.isGhostOpacity = false;
+        }
+      }
       bm.visible =
         bld.team === (game.localPlayerTeam || 'allies') ||
         game.intelRevealed ||
@@ -5025,6 +5399,46 @@ export class Renderer3D {
       if (!activeBaseIds.has(id)) {
         this.dynamicGroup.remove(mesh);
         this.baseBuildingMeshes.delete(id);
+      }
+    }
+
+    // 2b. Jazidas de Recursos Naturais (Minério / Cristais Industriais)
+    if (!this.depositMeshes) this.depositMeshes = new Map();
+    const activeDepIds = new Set();
+    for (const dep of game.map?.resourceDeposits || []) {
+      if ((dep.amount || 0) <= 0) continue;
+      activeDepIds.add(dep.id);
+      let dm = this.depositMeshes.get(dep.id);
+      if (!dm) {
+        dm = new THREE.Group();
+        const oreMat = new THREE.MeshStandardMaterial({
+          color: 0xf59e0b,
+          emissive: 0xb45309,
+          emissiveIntensity: 0.9,
+          roughness: 0.35,
+          metalness: 0.65,
+        });
+        for (let i = 0; i < 6; i++) {
+          const rock = new THREE.Mesh(this.geometries.box, oreMat);
+          const ang = (i / 6) * Math.PI * 2;
+          const r = i === 0 ? 0 : 18 + (i % 2) * 10;
+          rock.scale.set(16 + (i % 3) * 6, 12 + (i % 2) * 10, 14 + (i % 3) * 5);
+          rock.position.set(Math.cos(ang) * r, 7, Math.sin(ang) * r);
+          rock.rotation.y = ang;
+          rock.castShadow = true;
+          dm.add(rock);
+        }
+        dm.position.set(dep.x, getTerrainHeight(dep.x, dep.y, game.map), dep.y);
+        this.dynamicGroup.add(dm);
+        this.depositMeshes.set(dep.id, dm);
+      }
+      const ratio = Math.max(0.28, (dep.amount || 0) / (dep.maxAmount || 3500));
+      dm.scale.set(ratio, ratio, ratio);
+    }
+    for (const [id, mesh] of this.depositMeshes.entries()) {
+      if (!activeDepIds.has(id)) {
+        this.dynamicGroup.remove(mesh);
+        this.depositMeshes.delete(id);
       }
     }
 
@@ -5251,8 +5665,63 @@ export class Renderer3D {
             wGroup.rotation.x += wheelRot;
           }
         }
-        // Recuo sutil do chassi ao disparar canhão principal
-        vehicleMesh.rotation.x = u.recoilTimer > 0 && u.spec.weaponModel === 'tank_cannon' ? -0.05 : 0;
+        // Suspensão Dinâmica (Pitch ao acelerar/frear/recuo + Roll nas curvas) + Escapamento/Poeira
+        const prevSpeed = vehicleMesh.userData.prevSpeed || 0;
+        const accel = dt > 0 ? (speed - prevSpeed) / dt : 0;
+        vehicleMesh.userData.prevSpeed = speed;
+        const prevAng = vehicleMesh.userData.prevAngle ?? u.angle;
+        let dAng = u.angle - prevAng;
+        while (dAng > Math.PI) dAng -= Math.PI * 2;
+        while (dAng < -Math.PI) dAng += Math.PI * 2;
+        vehicleMesh.userData.prevAngle = u.angle;
+        const turnRate = dt > 0 ? dAng / dt : 0;
+
+        const recoilPitch = u.recoilTimer > 0 && u.spec.weaponModel === 'tank_cannon' ? -0.065 : 0;
+        const targetPitch = Math.max(-0.07, Math.min(0.07, -accel * 0.0005)) + recoilPitch;
+        const targetRoll = Math.max(-0.09, Math.min(0.09, turnRate * 0.035));
+        vehicleMesh.rotation.x += (targetPitch - vehicleMesh.rotation.x) * Math.min(1, dt * 10);
+        vehicleMesh.rotation.z += (targetRoll - vehicleMesh.rotation.z) * Math.min(1, dt * 10);
+
+        if (speed > 18 && Math.random() < dt * 7 && game.particles) {
+          game.particles.push({
+            x: u.x - Math.cos(u.angle) * 26 + (Math.random() - 0.5) * 10,
+            y: u.y - Math.sin(u.angle) * 26 + (Math.random() - 0.5) * 10,
+            z: 6,
+            vx: -Math.cos(u.angle) * 12 + (Math.random() - 0.5) * 8,
+            vy: -Math.sin(u.angle) * 12 + (Math.random() - 0.5) * 8,
+            vz: 14,
+            radius: 4.5,
+            color: '#9ca3af',
+            life: 0.55,
+            maxLife: 0.55,
+          });
+        }
+
+        // Giroflex âmbar piscante e laser de solda do Carro Construtor
+        if (vehicleMesh.userData.beaconMat) {
+          vehicleMesh.userData.beaconMat.emissiveIntensity = Math.sin(now * 9 + (u.id || 0)) > 0 ? 2.2 : 0.25;
+        }
+        if (vehicleMesh.userData.weldingLaser && vehicleMesh.userData.craneGroup) {
+          const site = u.constructorTargetBuildingId
+            ? (game.baseBuildings || []).find((b) => b.id === u.constructorTargetBuildingId && b.alive !== false && b.underConstruction)
+            : null;
+          const inWeldRange = site && Math.hypot(site.x - u.x, site.y - u.y) <= (site.radius || 90) + 125;
+          vehicleMesh.userData.weldingLaser.visible = Boolean(inWeldRange);
+          if (inWeldRange) {
+            vehicleMesh.userData.craneGroup.rotation.y = Math.sin(now * 5) * 0.16;
+            vehicleMesh.userData.weldingLaser.material.color.setHex(Math.sin(now * 24) > 0 ? 0x38bdf8 : 0xf97316);
+          } else {
+            vehicleMesh.userData.craneGroup.rotation.y = 0;
+          }
+        }
+        // Caçamba dinâmica de minério do Carro Coletor (0% -> 100%)
+        if (vehicleMesh.userData.cargoGroup) {
+          const loadPct = Math.max(0, Math.min(100, u.harvesterLoad || 0));
+          vehicleMesh.userData.cargoGroup.visible = loadPct > 2;
+          if (loadPct > 2) {
+            vehicleMesh.userData.cargoGroup.scale.y = 0.15 + 0.85 * (loadPct / 100);
+          }
+        }
       }
 
       if (u.spec.type === 'infantry' && u.soldiers && soldiersMeshes.length < u.soldiers.length) {
@@ -5764,22 +6233,86 @@ export class Renderer3D {
       const sc = this.worldToScreen(game.worldMouse.x, game.worldMouse.y, 2);
       ctx.save();
       const isOutpostMode = game.activeCommandMode === 'build_outpost';
+      const isPowerPlaceMode =
+        game.activeCommandMode === 'place_base_building' ||
+        game.activeCommandMode === 'build_watchtower' ||
+        game.activeCommandMode === 'build_bunker';
       const outpostStatus = isOutpostMode
         ? game.getOutpostPlacementStatus?.(game.worldMouse.x, game.worldMouse.y, 'allies')
         : null;
+      const powerStatus = isPowerPlaceMode
+        ? game.getPowerPlacementStatus?.(
+            game.worldMouse.x,
+            game.worldMouse.y,
+            game.pendingBaseBuildingId || game.activeCommandMode,
+            game.localPlayerTeam || 'allies'
+          )
+        : null;
+
+      // Desenha círculos luminosos de alcance energético e linhas de transmissão estilo Outlive
+      if (isPowerPlaceMode) {
+        const myTeam = game.localPlayerTeam || 'allies';
+        for (const b of game.baseBuildings || []) {
+          if (b.alive === false || b.team !== myTeam || !b.powerRadius || b.powerConnected === false) continue;
+          const bSc = this.worldToScreen(b.x, b.y, 2);
+          const edgeSc = this.worldToScreen(b.x + b.powerRadius, b.y, 2);
+          const pxRad = Math.max(24, Math.hypot(edgeSc.x - bSc.x, edgeSc.y - bSc.y));
+          ctx.save();
+          ctx.strokeStyle = 'rgba(34, 211, 238, 0.45)';
+          ctx.fillStyle = 'rgba(34, 211, 238, 0.06)';
+          ctx.lineWidth = 1.6;
+          ctx.setLineDash([8, 6]);
+          ctx.beginPath();
+          ctx.arc(bSc.x, bSc.y, pxRad, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+        }
+        if (powerStatus?.nearestNode) {
+          const nSc = this.worldToScreen(powerStatus.nearestNode.x, powerStatus.nearestNode.y, 10);
+          ctx.save();
+          ctx.strokeStyle = powerStatus.ok ? '#22d3ee' : '#ef4444';
+          ctx.lineWidth = 2.6;
+          ctx.setLineDash([8, 6]);
+          ctx.beginPath();
+          ctx.moveTo(nSc.x, nSc.y);
+          ctx.lineTo(sc.x, sc.y);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
       const previewColor = game.activeAirStrikeMode
         ? '#ef4444'
         : isOutpostMode
           ? outpostStatus?.ok
             ? '#4ade80'
             : '#ef4444'
-          : '#c87d28';
+          : isPowerPlaceMode
+            ? powerStatus?.ok
+              ? '#22d3ee'
+              : '#ef4444'
+            : '#c87d28';
       ctx.strokeStyle = previewColor;
       ctx.lineWidth = 2.4;
       ctx.setLineDash([6, 4]);
       ctx.beginPath();
       ctx.arc(sc.x, sc.y, game.activeAirStrikeMode ? 54 : 32, 0, Math.PI * 2);
       ctx.stroke();
+
+      if (isPowerPlaceMode && powerStatus) {
+        ctx.setLineDash([]);
+        ctx.font = "700 12px 'Inter', 'Segoe UI', sans-serif";
+        ctx.textAlign = 'center';
+        const tw = ctx.measureText(powerStatus.message).width + 18;
+        ctx.fillStyle = powerStatus.ok ? 'rgba(12, 24, 28, 0.9)' : 'rgba(69, 10, 10, 0.92)';
+        ctx.fillRect(sc.x - tw * 0.5, sc.y - 58, tw, 24);
+        ctx.strokeStyle = previewColor;
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(sc.x - tw * 0.5, sc.y - 58, tw, 24);
+        ctx.fillStyle = previewColor;
+        ctx.fillText(powerStatus.message, sc.x, sc.y - 42);
+      }
 
       if (isOutpostMode && outpostStatus) {
         ctx.setLineDash([]);
@@ -6061,7 +6594,30 @@ export class Renderer3D {
       ctx.restore();
     }
 
-    // 6. Barras de HP e Produção dos Prédios de Base Militar 3D
+    // 6. Barras de HP, Linhas de Transmissão & Produção dos Prédios de Base Militar 3D
+    const showGridLines =
+      Boolean(game.selectedBuildingId) ||
+      game.activeCommandMode === 'place_base_building' ||
+      game.activeCommandMode === 'build_bunker' ||
+      game.activeCommandMode === 'build_watchtower';
+    if (showGridLines) {
+      for (const bld of game.baseBuildings || []) {
+        if (bld.alive === false || !bld.poweredByNodeId) continue;
+        const src = (game.baseBuildings || []).find((n) => n.id === bld.poweredByNodeId && n.alive !== false);
+        if (!src) continue;
+        const aSc = this.worldToScreen(src.x, src.y, 12);
+        const bSc = this.worldToScreen(bld.x, bld.y, 12);
+        if (!aSc.visible && !bSc.visible) continue;
+        ctx.save();
+        ctx.strokeStyle = bld.team === (game.localPlayerTeam || 'allies') ? 'rgba(34, 211, 238, 0.72)' : 'rgba(239, 68, 68, 0.65)';
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.moveTo(aSc.x, aSc.y);
+        ctx.lineTo(bSc.x, bSc.y);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
     for (const bld of game.baseBuildings || []) {
       if (bld.alive === false) continue;
       const vis =
@@ -6077,6 +6633,13 @@ export class Renderer3D {
       const hpRatio = clamp((bld.hp || 1500) / (bld.maxHp || 1500), 0, 1);
 
       ctx.save();
+      if (bld.powerConnected === false) {
+        const pulse = 0.6 + Math.abs(Math.sin(performance.now() * 0.006)) * 0.4;
+        ctx.fillStyle = `rgba(239, 68, 68, ${pulse})`;
+        ctx.font = "800 11px 'Inter', sans-serif";
+        ctx.textAlign = 'center';
+        ctx.fillText(`⚡ SEM ENERGIA: ${(bld.short || bld.name || 'PRÉDIO').toUpperCase()}`, sc.x, sc.y - 22);
+      }
       ctx.font = "700 11px 'Inter', 'Segoe UI', sans-serif";
       ctx.textAlign = 'center';
       const title = `${bld.team === 'allies' ? '🏭' : '🎯'} ${(bld.short || bld.name || 'BASE').toUpperCase()}`;

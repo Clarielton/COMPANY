@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { BATTLEFIELD_SIZE, FOG_GRID_SIZE } from '../game/world/BattlefieldMap.js';
 
-export default function Minimap({ gameRef, expanded = false }) {
+export default function Minimap({ gameRef, expanded = false, compact = false }) {
   const canvasRef = useRef(null);
   const [toolMode, setToolMode] = useState('order'); // 'order' | 'ping_attack'
   const [orderMode, setOrderMode] = useState('ASSAULT'); // 'ASSAULT' | 'DEFEND' | 'MARCH'
@@ -11,7 +11,7 @@ export default function Minimap({ gameRef, expanded = false }) {
   const dragCurrRef = useRef(null);
   const selectBoxRef = useRef(null);
 
-  const canvasSize = expanded ? 1080 : 238;
+  const canvasSize = expanded ? 1080 : compact ? 170 : 238;
 
   useEffect(() => {
     let rafId = 0;
@@ -182,6 +182,22 @@ export default function Minimap({ gameRef, expanded = false }) {
         }
       }
 
+      // 7b. Jazidas de Recursos no Radar (Losangos Dourados)
+      for (const dep of map.resourceDeposits || []) {
+        if ((dep.amount || 0) <= 0) continue;
+        const dx = dep.x * scale;
+        const dy = dep.y * scale;
+        const r = expanded ? 5.5 : 3.2;
+        ctx.fillStyle = '#fbbf24';
+        ctx.beginPath();
+        ctx.moveTo(dx, dy - r);
+        ctx.lineTo(dx + r, dy);
+        ctx.lineTo(dx, dy + r);
+        ctx.lineTo(dx - r, dy);
+        ctx.closePath();
+        ctx.fill();
+      }
+
       // 8. Todos os 12 Pontos de Suprimento sem sobreposição de texto (offset inteligente)
       const placedBoxes = [];
       for (const sec of map.sectors) {
@@ -322,16 +338,31 @@ export default function Minimap({ gameRef, expanded = false }) {
 
         const ux = u.x * scale;
         const uy = u.y * scale;
+        const isHarv = u.unitType === 'harvester_truck' || u.spec?.isHarvester;
+        const isCons = u.unitType === 'constructor_truck' || u.spec?.isConstructor;
         ctx.fillStyle = u.surrendered
           ? '#ffffff'
+          : isHarv && u.faction === myFaction
+          ? '#f59e0b'
+          : isCons && u.faction === myFaction
+          ? '#eab308'
           : u.faction === myFaction
           ? '#7faed9'
           : u.team === myTeam
           ? '#d4a338'
           : '#d9534f';
-        ctx.beginPath();
         const rad = u.spec.type === 'vehicle' ? (expanded ? 8.5 : 3.5) : expanded ? 7.0 : 2.8;
-        ctx.arc(ux, uy, rad, 0, Math.PI * 2);
+        ctx.beginPath();
+        if (isHarv) {
+          ctx.rect(ux - rad, uy - rad, rad * 2, rad * 2);
+        } else if (isCons) {
+          ctx.moveTo(ux, uy - rad * 1.25);
+          ctx.lineTo(ux + rad * 1.1, uy + rad);
+          ctx.lineTo(ux - rad * 1.1, uy + rad);
+          ctx.closePath();
+        } else {
+          ctx.arc(ux, uy, rad, 0, Math.PI * 2);
+        }
         ctx.fill();
         if (u.selected) {
           ctx.strokeStyle = `rgba(250, 204, 21, ${pulse.toFixed(2)})`;

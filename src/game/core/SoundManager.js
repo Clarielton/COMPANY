@@ -383,14 +383,14 @@ export class SoundManager {
       return;
     }
 
-    // 1. Motor Diesel + Esteiras
+    // 1. Motor Diesel + Esteiras (Filtro Lowpass 85Hz - 140Hz)
     if (movingVehicles > 0 && closestVehicleDist < 1800) {
       const distAtten = Math.max(0, 1 - closestVehicleDist / 1800);
       const targetVol = Math.min(0.28, (0.08 + movingVehicles * 0.03) * distAtten);
       const basePitch = 34 + maxSpeedRatio * 26;
       this._engineOsc.frequency.setTargetAtTime(basePitch, t, 0.12);
       this._engineSubOsc.frequency.setTargetAtTime(basePitch * 2.0, t, 0.12);
-      this._engineFilter.frequency.setTargetAtTime(140 + maxSpeedRatio * 220, t, 0.12);
+      this._engineFilter.frequency.setTargetAtTime(85 + maxSpeedRatio * 55, t, 0.12);
       this._engineGain.gain.setTargetAtTime(targetVol, t, 0.1);
     } else {
       this._engineGain.gain.setTargetAtTime(0, t, 0.15);
@@ -404,6 +404,14 @@ export class SoundManager {
     } else {
       this._droneGain.gain.setTargetAtTime(0, t, 0.12);
     }
+  }
+
+  playWeldingPulse() {
+    if (!this.ctx || this.muted || this.mode !== 'battle') return;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (this.last.weld && now - this.last.weld < 160) return;
+    this.last.weld = now;
+    this._noiseBuf(this.whiteNoiseBuf, 0.09, 2400 + Math.random() * 1400, 0.055, 'bandpass', this.sfxGain);
   }
 
   _noiseBuf(buffer, dur, freq, vol, type = 'lowpass', dest = this.sfxGain) {

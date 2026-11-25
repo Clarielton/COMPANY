@@ -756,6 +756,30 @@ export class BattlefieldMap {
     this.frontlineSamples = 40;
     this.frontlineX = new Float32Array(this.frontlineSamples).fill(this.size * 0.5);
     this._applyCustomMapOverrides();
+    this._generateResourceDeposits(rng);
+  }
+
+  _generateResourceDeposits(rng) {
+    const spots = [
+      { x: 2250, y: 3850 },
+      { x: 2350, y: 5750 },
+      { x: 3750, y: 2450 },
+      { x: 3850, y: 7150 },
+      { x: 4800, y: 3650 },
+      { x: 4800, y: 5950 },
+      { x: 5850, y: 2450 },
+      { x: 5750, y: 7150 },
+      { x: 7250, y: 3850 },
+      { x: 7350, y: 5750 },
+    ];
+    this.resourceDeposits = spots.map((pt, idx) => ({
+      id: `dep_${idx + 1}`,
+      x: Math.round(pt.x + (rng() - 0.5) * 180),
+      y: Math.round(pt.y + (rng() - 0.5) * 180),
+      amount: 3500,
+      maxAmount: 3500,
+      radius: 58,
+    }));
   }
 
   _applyCustomMapOverrides() {
@@ -2045,10 +2069,12 @@ export class BattlefieldMap {
     for (const b of baseBuildings) {
       if (b.alive === false) continue;
       if (b.team === visionTeam) {
+        if (b.buildingType === 'air_command' && b.powerConnected === false) continue;
         if (b.isMainHQ || b.buildingType === 'hq_command') hasTeamHQBuilding = true;
-        const bSight = b.isMainHQ || b.buildingType === 'hq_command'
+        let bSight = b.isMainHQ || b.buildingType === 'hq_command'
           ? Math.min(b.sightRadius || 720, 720)
           : (b.sightRadius || 560);
+        if (b.buildingType === 'air_command' && b.isLowPower) bSight *= 0.5;
         this._revealCircle(b.x, b.y, bSight);
       }
     }
