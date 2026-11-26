@@ -16,8 +16,8 @@ const ACTIVE_ROOMS_KEY = 'COF_ACTIVE_ROOMS';
 const LOCAL_CAMPAIGN_SAVES_KEY = 'COF_LOCAL_CAMPAIGN_SAVES';
 const BROADCAST_CHANNEL_NAME = 'cof_multiplayer_v2';
 const MASTER_ADMIN_KEYS = ['FRONT-ADMIN-1944', 'ADMIN1944', 'clarielton'];
-const ADMIN_EMAILS = ['clarielton.empreendimentos@outlook.com'];
-const ADMIN_CALLSIGNS = ['clarielton', 'clarieltonjunior'];
+const ADMIN_EMAILS = ['clarieltonpereirajunior@gmail.com'];
+const ADMIN_CALLSIGNS = ['clarieltonpereirajunior'];
 const ADMIN_STORAGE_OVERRIDE_KEY = 'COF_ADMIN_ROLE_OVERRIDE';
 const BANNED_PLAYERS_STORAGE_KEY = 'COF_BANNED_PLAYERS';
 
@@ -388,18 +388,17 @@ export class NetworkManager {
   _checkIsAdmin(user) {
     if (!user) return false;
     try {
-      if (typeof window !== 'undefined' && localStorage.getItem(ADMIN_STORAGE_OVERRIDE_KEY) === '1') {
-        return true;
+      if (typeof window !== 'undefined' && localStorage.getItem(ADMIN_STORAGE_OVERRIDE_KEY)) {
+        localStorage.removeItem(ADMIN_STORAGE_OVERRIDE_KEY);
       }
     } catch {}
+    if (user.provider === 'anonymous' || user.provider === 'guest_local') {
+      return false;
+    }
     const name = (user.callsign || '').trim().toLowerCase();
     const email = (user.email || '').trim().toLowerCase();
     if (ADMIN_EMAILS.includes(email)) return true;
     if (ADMIN_CALLSIGNS.includes(name)) return true;
-    if (!name || name === 'comandante' || user.provider === 'anonymous' || user.provider === 'guest_local') {
-      return false;
-    }
-    if (user.role === 'admin') return true;
     return false;
   }
 
@@ -408,19 +407,17 @@ export class NetworkManager {
   }
 
   claimAdmin(key = '') {
+    if (!this.currentUser || !this._checkIsAdmin(this.currentUser)) {
+      return { ok: false, error: 'Acesso administrativo restrito exclusivamente à conta principal.' };
+    }
     const clean = String(key || '').trim();
     if (MASTER_ADMIN_KEYS.includes(clean)) {
-      try {
-        localStorage.setItem(ADMIN_STORAGE_OVERRIDE_KEY, '1');
-      } catch {}
-      if (this.currentUser) {
-        this.currentUser = {
-          ...this.currentUser,
-          role: 'admin',
-        };
-        this._syncUserToCloud(this.currentUser);
-        this._emit();
-      }
+      this.currentUser = {
+        ...this.currentUser,
+        role: 'admin',
+      };
+      this._syncUserToCloud(this.currentUser);
+      this._emit();
       return { ok: true, message: 'Privilégios de Administrador ativados com sucesso!' };
     }
     return { ok: false, error: 'Chave de segurança administrativa inválida.' };
@@ -455,7 +452,7 @@ export class NetworkManager {
     const prog = computeLevelFromXp(xp);
     const ownedPacks = Array.isArray(existing?.ownedCampaignPacks) ? existing.ownedCampaignPacks : [];
     const unlockedBats = Array.isArray(existing?.unlockedBattalions) ? existing.unlockedBattalions : [];
-    const isAdmin = this._checkIsAdmin({ callsign, email }) || existing?.role === 'admin';
+    const isAdmin = this._checkIsAdmin({ callsign, email, provider });
 
     // Checagem de banimento local
     let isBanned = Boolean(existing?.banned);
@@ -482,7 +479,7 @@ export class NetworkManager {
       hasGoldInsignia: ownedPacks.includes('vip_combo'),
       wins: existing?.wins || 0,
       losses: existing?.losses || 0,
-      role: isAdmin ? 'admin' : (existing?.role || 'user'),
+      role: isAdmin ? 'admin' : 'user',
       banned: isBanned,
       banReason,
       idToken: idToken || null,
@@ -535,7 +532,7 @@ export class NetworkManager {
           ])
         );
         const isCloudAdmin =
-          this._checkIsAdmin(cloud) || cloud.role === 'admin' || this._checkIsAdmin(this.currentUser);
+          this._checkIsAdmin(cloud) || this._checkIsAdmin(this.currentUser);
         const isCloudBanned = Boolean(cloud.banned) || this.currentUser.banned;
         this.currentUser = {
           ...this.currentUser,
@@ -551,7 +548,7 @@ export class NetworkManager {
               : (this.currentUser.militaryGold ?? 0),
           wins: Math.max(this.currentUser.wins || 0, cloud.wins || 0),
           losses: Math.max(this.currentUser.losses || 0, cloud.losses || 0),
-          role: isCloudAdmin ? 'admin' : (this.currentUser.role || 'user'),
+          role: isCloudAdmin ? 'admin' : 'user',
           banned: isCloudBanned,
           banReason: cloud.banReason || this.currentUser.banReason,
           muted: Boolean(cloud.muted),
