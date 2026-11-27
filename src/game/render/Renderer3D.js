@@ -5,6 +5,7 @@ import { getTerrainHeight } from '../world/terrainHeight.js';
 import {
   createOrganicBattlefieldTextures,
   createGroundDetailTexture,
+  createHighFreqGroundTextures,
   createRoadSurfaceTexture,
 } from './terrainTexture.js';
 import { VFXManager } from './VFXManager.js';
@@ -202,8 +203,8 @@ export class Renderer3D {
     this.renderer.toneMappingExposure = 1.08;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x98b0c4);
-    this.scene.fog = new THREE.FogExp2(0xa3b8c9, 0.00012);
+    this.scene.background = new THREE.Color(0x1e2923);
+    this.scene.fog = new THREE.Fog(0x1e2923, 1800, 4800);
 
     this.camera = new THREE.PerspectiveCamera(46, this.width / this.height, 8, 14000);
     this.camTarget = new THREE.Vector3(2400, 0, 4800);
@@ -256,21 +257,25 @@ export class Renderer3D {
   }
 
   _setupDaylight() {
-    this.hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x4f622c, 1.32);
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.25);
+    this.scene.add(this.ambientLight);
+
+    this.hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x29251c, 0.55);
     this.scene.add(this.hemiLight);
 
-    this.sunLight = new THREE.DirectionalLight(0xfffbeb, 1.85);
-    this.sunLight.position.set(2200, 1550, 2200);
+    this.sunLight = new THREE.DirectionalLight(0xfff1d6, 1.85);
+    this.sunLight.position.set(1200, 1400, 900);
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.set(2048, 2048);
     this.sunLight.shadow.camera.near = 200;
-    this.sunLight.shadow.camera.far = 4200;
-    const d = 1750;
+    this.sunLight.shadow.camera.far = 3600;
+    const d = 1100;
     this.sunLight.shadow.camera.left = -d;
     this.sunLight.shadow.camera.right = d;
     this.sunLight.shadow.camera.top = d;
     this.sunLight.shadow.camera.bottom = -d;
     this.sunLight.shadow.bias = -0.0004;
+    this.sunLight.shadow.normalBias = 0.03;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
   }
@@ -280,26 +285,29 @@ export class Renderer3D {
     if (mood === 'night') {
       this.scene.background = new THREE.Color(0x0b1020);
       if (this.scene.fog) this.scene.fog.color.setHex(0x0d1326);
+      if (this.ambientLight) this.ambientLight.intensity = 0.16;
       this.hemiLight.color.setHex(0x334155);
       this.hemiLight.groundColor.setHex(0x0f172a);
-      this.hemiLight.intensity = 0.62;
+      this.hemiLight.intensity = 0.42;
       this.sunLight.color.setHex(0x93c5fd);
       this.sunLight.intensity = 0.78;
     } else if (mood === 'sunset') {
-      this.scene.background = new THREE.Color(0xd97757);
-      if (this.scene.fog) this.scene.fog.color.setHex(0xc26d53);
+      this.scene.background = new THREE.Color(0x4a291f);
+      if (this.scene.fog) this.scene.fog.color.setHex(0x4a291f);
+      if (this.ambientLight) this.ambientLight.intensity = 0.22;
       this.hemiLight.color.setHex(0xfed7aa);
-      this.hemiLight.groundColor.setHex(0x3f2e21);
-      this.hemiLight.intensity = 1.05;
+      this.hemiLight.groundColor.setHex(0x29251c);
+      this.hemiLight.intensity = 0.5;
       this.sunLight.color.setHex(0xfb923c);
       this.sunLight.intensity = 1.65;
     } else {
-      this.scene.background = new THREE.Color(0x98b0c4);
-      if (this.scene.fog) this.scene.fog.color.setHex(0xa3b8c9);
+      this.scene.background = new THREE.Color(0x1e2923);
+      if (this.scene.fog) this.scene.fog.color.setHex(0x1e2923);
+      if (this.ambientLight) this.ambientLight.intensity = 0.25;
       this.hemiLight.color.setHex(0xdbeafe);
-      this.hemiLight.groundColor.setHex(0x4f622c);
-      this.hemiLight.intensity = 1.32;
-      this.sunLight.color.setHex(0xfffbeb);
+      this.hemiLight.groundColor.setHex(0x29251c);
+      this.hemiLight.intensity = 0.55;
+      this.sunLight.color.setHex(0xfff1d6);
       this.sunLight.intensity = 1.85;
     }
   }
@@ -659,19 +667,20 @@ export class Renderer3D {
     this.windmillBlades = [];
     this.vfx?.clear();
 
-    // 1. Terreno 3D com Relevo Real (256x256) + Textura Orgânica + Detail Tiling 64x64 + Anisotropic Máximo
+    // 1. Terreno 3D com Relevo Real (256x256) + Textura Procedural 512x512 (32x32) + Bump/Roughness + VertexColors
     this.currentMap = map;
     const isDesert = map.theme === 'desert';
     const isWinter = map.theme === 'winter';
     const maxAniso = this.renderer?.capabilities?.getMaxAnisotropy?.() || 8;
-    this.scene.fog = new THREE.FogExp2(
-      isDesert ? 0xcab28b : isWinter ? 0xbcd4e6 : 0x95a593,
-      isWinter ? 0.00026 : 0.00022
-    );
-    this.scene.background = new THREE.Color(isDesert ? 0xcab28b : isWinter ? 0xbcd4e6 : 0x95a593);
-    const { colorMap: groundTex, bumpMap: groundBump } = createOrganicBattlefieldTextures(map);
+    const fogHex = isDesert ? 0x3b3124 : isWinter ? 0x24313d : 0x1e2923;
+    this.scene.fog = new THREE.Fog(fogHex, 1800, 4800);
+    this.scene.background = new THREE.Color(fogHex);
+
+    const { map: groundTex, bumpMap: groundBump, roughnessMap: groundRough } =
+      createHighFreqGroundTextures(map.theme || 'rural');
     groundTex.anisotropy = maxAniso;
     groundBump.anisotropy = maxAniso;
+    groundRough.anisotropy = maxAniso;
 
     const groundGeo = new THREE.PlaneGeometry(map.size, map.size, 256, 256);
     groundGeo.rotateX(-Math.PI / 2);
@@ -692,8 +701,9 @@ export class Renderer3D {
     const groundMat = new THREE.MeshStandardMaterial({
       map: groundTex,
       bumpMap: groundBump,
-      bumpScale: 2.8,
-      roughness: 0.9,
+      bumpScale: 0.35,
+      roughnessMap: groundRough,
+      roughness: 0.92,
       metalness: 0.02,
       vertexColors: true,
     });
@@ -706,26 +716,9 @@ export class Renderer3D {
     this.worldGroup.add(ground);
     this.syncTerrainSculptGeometry(map);
 
-    // 1b. Camada de Micro-Detalhe (RepeatWrapping 84x84) para nitidez total ao aproximar a câmera
-    const detailTex = createGroundDetailTexture(map.theme || 'rural');
-    detailTex.anisotropy = maxAniso;
-    const detailMat = new THREE.MeshStandardMaterial({
-      map: detailTex,
-      transparent: true,
-      opacity: 0.28,
-      blending: THREE.MultiplyBlending,
-      premultipliedAlpha: true,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-    });
-    const detailMesh = new THREE.Mesh(groundGeo, detailMat);
-    detailMesh.position.set(halfMap, 0.12, halfMap);
-    detailMesh.receiveShadow = true;
-    this.worldGroup.add(detailMesh);
-
-    // 1c. Malha Dedicada de Estradas Nítidas (Repeat 1x40 ao longo do comprimento) + Tufos de Vegetação Rasteira (InstancedMesh)
+    // 1c. Malha Dedicada de Estradas Nítidas + Água Reflexiva + Vegetação Rasteira + Ferrovias
     this._buildRoadMeshes(map, maxAniso);
+    this._buildWaterMeshes(map);
     this._buildGrassTuftsInstanced(map);
     this._buildRailways(map);
 
@@ -1051,6 +1044,7 @@ export class Renderer3D {
     const halfMap = this.terrainHalfMap || map.size * 0.5;
     const rockGrid = map.terrainRockGrid;
     const gN = map.terrainSculptSize || 129;
+    const step = 28;
 
     for (let i = 0; i < gPos.count; i++) {
       const vx = gPos.getX(i) + halfMap;
@@ -1058,16 +1052,47 @@ export class Renderer3D {
       if (wx !== null && wz !== null) {
         if (Math.abs(vx - wx) > radiusWorld || Math.abs(vz - wz) > radiusWorld) continue;
       }
-      gPos.setY(i, getTerrainHeight(vx, vz, map));
-      if (gCol && rockGrid) {
-        const u = Math.max(0, Math.min(gN - 1, Math.round((vx / map.size) * (gN - 1))));
-        const v = Math.max(0, Math.min(gN - 1, Math.round((vz / map.size) * (gN - 1))));
-        const rk = (rockGrid[v * gN + u] || 0) / 255;
-        if (rk > 0.05) {
-          gCol.setXYZ(i, 1 - rk * 0.52, 1 - rk * 0.52, 1 - rk * 0.48);
-        } else {
-          gCol.setXYZ(i, 1.0, 1.0, 1.0);
+      const h = getTerrainHeight(vx, vz, map);
+      gPos.setY(i, h);
+
+      if (gCol) {
+        // Campos abertos mais claros e definidos
+        let r = 1.08;
+        let g = 1.1;
+        let b = 0.98;
+
+        // Vales e margens de estradas escurecidos (#24331c)
+        const nearRoad = map.isOnRoad?.(vx, vz, 62);
+        if (h < -1.5 || nearRoad) {
+          const darkT = nearRoad ? 0.55 : Math.min(0.65, Math.abs(h) * 0.04);
+          r = r * (1 - darkT) + 0.42 * darkT;
+          g = g * (1 - darkT) + 0.56 * darkT;
+          b = b * (1 - darkT) + 0.34 * darkT;
         }
+
+        // Encostas íngremes, topos de morros e pintura de rocha -> cinza-ardósia (#4b5563)
+        const hx = getTerrainHeight(vx + step, vz, map) - getTerrainHeight(vx - step, vz, map);
+        const hz = getTerrainHeight(vx, vz + step, map) - getTerrainHeight(vx, vz - step, map);
+        const slope = Math.hypot(hx, hz) / (step * 2);
+
+        let rk = 0;
+        if (rockGrid) {
+          const u = Math.max(0, Math.min(gN - 1, Math.round((vx / map.size) * (gN - 1))));
+          const v = Math.max(0, Math.min(gN - 1, Math.round((vz / map.size) * (gN - 1))));
+          rk = (rockGrid[v * gN + u] || 0) / 255;
+        }
+        const hillRockT = Math.max(
+          rk,
+          slope > 0.28 ? Math.min(1, (slope - 0.28) * 2.4) : 0,
+          h > 28 ? Math.min(0.85, (h - 28) * 0.03) : 0
+        );
+        if (hillRockT > 0.05) {
+          r = r * (1 - hillRockT) + 0.62 * hillRockT;
+          g = g * (1 - hillRockT) + 0.67 * hillRockT;
+          b = b * (1 - hillRockT) + 0.74 * hillRockT;
+        }
+
+        gCol.setXYZ(i, r, g, b);
       }
     }
     gPos.needsUpdate = true;
@@ -2179,21 +2204,104 @@ export class Renderer3D {
     this.worldGroup.add(inst);
   }
 
+  _buildWaterMeshes(map) {
+    const waterFields = (map.fields || []).filter(
+      (f) => f.type === 'water' || f.type === 'lake' || f.type === 'river' || f.type === 'ice_lake'
+    );
+    const rivers = Array.isArray(map.rivers) ? map.rivers : [];
+    if (waterFields.length === 0 && rivers.length === 0) return;
+
+    const waterMat = new THREE.MeshStandardMaterial({
+      color: 0x0f293a,
+      roughness: 0.12,
+      metalness: 0.75,
+      transparent: true,
+      opacity: 0.9,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+    });
+    const bankMat = new THREE.MeshStandardMaterial({
+      color: map.theme === 'desert' ? 0x6b5335 : 0x2b241b,
+      roughness: 0.95,
+      metalness: 0.02,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+    });
+
+    for (const wf of waterFields) {
+      const cx = wf.x + wf.w * 0.5;
+      const cz = wf.y + wf.h * 0.5;
+      const wy = getTerrainHeight(cx, cz, map);
+      const bankGeo = new THREE.CircleGeometry(Math.max(wf.w, wf.h) * 0.54, 36);
+      bankGeo.rotateX(-Math.PI / 2);
+      const bankMesh = new THREE.Mesh(bankGeo, bankMat);
+      bankMesh.position.set(cx, wy + 0.18, cz);
+      bankMesh.scale.set(1, 1, wf.h / Math.max(1, wf.w));
+      bankMesh.rotation.y = -(wf.angle || 0);
+      bankMesh.receiveShadow = true;
+      this.worldGroup.add(bankMesh);
+
+      const wGeo = new THREE.CircleGeometry(Math.max(wf.w, wf.h) * 0.48, 36);
+      wGeo.rotateX(-Math.PI / 2);
+      const wMesh = new THREE.Mesh(wGeo, waterMat);
+      wMesh.position.set(cx, wy + 0.35, cz);
+      wMesh.scale.set(1, 1, wf.h / Math.max(1, wf.w));
+      wMesh.rotation.y = -(wf.angle || 0);
+      wMesh.receiveShadow = true;
+      this.worldGroup.add(wMesh);
+    }
+
+    for (const rv of rivers) {
+      if (!rv.points || rv.points.length < 2) continue;
+      const curve = new THREE.CatmullRomCurve3(rv.points.map((p) => new THREE.Vector3(p.x, 0, p.y)));
+      const segs = 120;
+      const halfW = (rv.width || 110) * 0.5;
+      for (const [mat, wMul, yOff] of [
+        [bankMat, 1.22, 0.16],
+        [waterMat, 1.0, 0.36],
+      ]) {
+        const verts = [];
+        const indices = [];
+        for (let i = 0; i <= segs; i++) {
+          const t = i / segs;
+          const pt = curve.getPoint(t);
+          const tan = curve.getTangent(t);
+          const nx = -tan.z;
+          const nz = tan.x;
+          const wy = getTerrainHeight(pt.x, pt.z, map) + yOff;
+          verts.push(pt.x - nx * halfW * wMul, wy, pt.z - nz * halfW * wMul);
+          verts.push(pt.x + nx * halfW * wMul, wy, pt.z + nz * halfW * wMul);
+          if (i < segs) {
+            const b = i * 2;
+            indices.push(b, b + 1, b + 2, b + 1, b + 3, b + 2);
+          }
+        }
+        const rGeo = new THREE.BufferGeometry();
+        rGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+        rGeo.setIndex(indices);
+        rGeo.computeVertexNormals();
+        const rMesh = new THREE.Mesh(rGeo, mat);
+        rMesh.receiveShadow = true;
+        this.worldGroup.add(rMesh);
+      }
+    }
+  }
+
   _buildRoadMeshes(map, maxAniso = 8) {
     const roadTex = createRoadSurfaceTexture(map.theme || 'rural');
     roadTex.anisotropy = maxAniso;
     const roadBump = roadTex.userData?.bumpMap || null;
     if (roadBump) roadBump.anisotropy = maxAniso;
 
-    // AlphaMap para misturar suavemente as bordas irregulares da estrada na grama
+    // AlphaMap preservando bordas escuras de cascalho/meio-fio
     const aCanvas = document.createElement('canvas');
     aCanvas.width = 64;
     aCanvas.height = 16;
     const actx = aCanvas.getContext('2d');
     const aGrad = actx.createLinearGradient(0, 0, 64, 0);
     aGrad.addColorStop(0, '#000000');
-    aGrad.addColorStop(0.16, '#ffffff');
-    aGrad.addColorStop(0.84, '#ffffff');
+    aGrad.addColorStop(0.06, '#ffffff');
+    aGrad.addColorStop(0.94, '#ffffff');
     aGrad.addColorStop(1, '#000000');
     actx.fillStyle = aGrad;
     actx.fillRect(0, 0, 64, 16);
@@ -5251,7 +5359,7 @@ export class Renderer3D {
     this.camera.position.set(this.camTarget.x, height, this.camTarget.z + backOffset);
     this.camera.lookAt(this.camTarget.x, lowCam ? 18 : 0, this.camTarget.z - (lowCam ? 95 : 40));
 
-    this.sunLight.position.set(this.camTarget.x + 700, 1300, this.camTarget.z - 600);
+    this.sunLight.position.set(this.camTarget.x + 1200, 1400, this.camTarget.z + 900);
     this.sunLight.target.position.copy(this.camTarget);
   }
 
@@ -5308,7 +5416,7 @@ export class Renderer3D {
       if (!sg) continue;
       const { ring, flag, flagMat } = sg.userData;
       const col =
-        sec.owner === 'allies' ? 0x6b9bd2 : sec.owner === 'enemies' ? 0xc94a38 : 0xd6d3c4;
+        sec.owner === 'allies' ? 0x6b9bd2 : sec.owner === 'enemies' ? 0xc94a38 : sec.owner === 'rebels' ? 0xea580c : 0xd6d3c4;
       ring.material.color.setHex(col);
       flagMat.color.setHex(col);
       flagMat.emissive.setHex(col);
@@ -6581,8 +6689,10 @@ export class Renderer3D {
       ctx.font = "700 11px 'Inter', 'Segoe UI', sans-serif";
       ctx.textAlign = 'center';
       const col =
-        sec.owner === 'allies' ? '#7faed9' : sec.owner === 'enemies' ? '#d9534f' : '#d6d3c4';
-      const labelText = `${sec.shortName || sec.name} (${sec.shortLabel || `+${sec.supplyBonus} SUP`})`;
+        sec.owner === 'allies' ? '#7faed9' : sec.owner === 'enemies' ? '#d9534f' : sec.owner === 'rebels' ? '#ea580c' : '#d6d3c4';
+      const labelText = sec.rebelLocked
+        ? `🏴‍☠️ ${sec.shortName || sec.name} (Guarnecido por Rebeldes)`
+        : `${sec.shortName || sec.name} (${sec.shortLabel || `+${sec.supplyBonus} SUP`})`;
       const tw = Math.max(108, ctx.measureText(labelText).width + 14);
       ctx.fillStyle = 'rgba(20, 24, 18, 0.86)';
       ctx.fillRect(sc.x - tw * 0.5, sc.y - 11, tw, 17);
@@ -6592,6 +6702,32 @@ export class Renderer3D {
       ctx.fillStyle = col;
       ctx.fillText(labelText, sc.x, sc.y + 1);
       ctx.restore();
+    }
+
+    // 5b. Anéis Táticos Tracejados das Áreas Rebeldes no Editor de Mapas
+    if (game.mapEditorOpen && Array.isArray(game.map?.rebelZones)) {
+      for (const rz of game.map.rebelZones) {
+        const cSc = this.worldToScreen(rz.x, rz.y, 6);
+        const eSc = this.worldToScreen(rz.x + (rz.radius || 392), rz.y, 6);
+        if (!cSc.visible || !eSc.visible) continue;
+        const pxR = Math.max(18, Math.hypot(eSc.x - cSc.x, eSc.y - cSc.y));
+        const isSel = game.selectedRebelZoneId === rz.id;
+        ctx.save();
+        ctx.setLineDash([8, 6]);
+        ctx.strokeStyle = isSel ? '#fb923c' : '#ea580c';
+        ctx.lineWidth = isSel ? 2.6 : 1.8;
+        ctx.beginPath();
+        ctx.arc(cSc.x, cSc.y, pxR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(234, 88, 12, 0.1)';
+        ctx.fill();
+        ctx.setLineDash([]);
+        ctx.font = "800 11px 'Inter', sans-serif";
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#fdba74';
+        ctx.fillText(`🏴‍☠️ ÁREA REBELDE NV.${rz.level || 1} (${Math.round((rz.radius || 392) / 14)}m)`, cSc.x, cSc.y - pxR - 6);
+        ctx.restore();
+      }
     }
 
     // 6. Barras de HP, Linhas de Transmissão & Produção dos Prédios de Base Militar 3D
@@ -6983,7 +7119,7 @@ export class Renderer3D {
     ctx.fillStyle = 'rgba(18, 21, 16, 0.92)';
     ctx.fillRect(bx - 0.8, by - 0.8, bw + 1.6, bh + 1.6);
     const ratio = clamp(u.hp / u.maxHp, 0, 1);
-    ctx.fillStyle = ratio > 0.5 ? '#689d6a' : ratio > 0.25 ? '#d4a338' : '#c94a38';
+    ctx.fillStyle = u.team === 'rebels' ? '#ea580c' : ratio > 0.5 ? '#689d6a' : ratio > 0.25 ? '#d4a338' : '#c94a38';
     ctx.fillRect(bx, by, bw * ratio, bh);
 
     ctx.restore();

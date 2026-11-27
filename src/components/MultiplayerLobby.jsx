@@ -4,7 +4,7 @@ import { formatRoomCode, networkManager } from '../game/net/NetworkManager.js';
 
 export default function MultiplayerLobby({ onStartOnlineMatch }) {
   const [net, setNet] = useState(() => networkManager.getStatusSnapshot());
-  const [showCreateForm, setShowCreateForm] = useState(true);
+  const [showCreateForm, setShowCreateForm] = useState(false);
   const [roomName, setRoomName] = useState('');
   const [selectedMapId, setSelectedMapId] = useState('normandy_fields');
   const [selectedMode, setSelectedMode] = useState('1v1');
@@ -254,40 +254,48 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
   }
 
   return (
-    <div className="mp-lobby-wrap">
-      {/* Barra Superior de Matchmaking Rápido + Criação */}
-      <div className="mp-top-actions">
+    <div className="mp-lobby-wrap" style={{ gap: 10 }}>
+      {/* Cabeçalho Interno CRT Outlive + 2 Botões Largos */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+        <span style={{ fontSize: '0.78rem', fontWeight: 900, letterSpacing: '0.1em', color: '#00e5ff' }}>
+          BATALHA MULTIPLAYER • SELEÇÃO DE OPERAÇÃO
+        </span>
+        <span style={{ fontSize: '0.68rem', color: net.isOnline ? '#4ade80' : '#94a3b8', fontWeight: 700 }}>
+          {net.isOnline ? '● REDE ONLINE' : '○ MODO LOCAL'}
+        </span>
+      </div>
+
+      <div className="mp-outlive-actions">
         <button
           type="button"
-          className="mil-btn-primary"
+          className={`mp-outlive-wide-btn ${showCreateForm ? 'primary' : ''}`}
+          onClick={() => setShowCreateForm((v) => !v)}
+        >
+          {showCreateForm ? '✕ FECHAR CRIAÇÃO' : 'CRIAR NOVA OPERAÇÃO'}
+        </button>
+        <button
+          type="button"
+          className="mp-outlive-wide-btn"
           disabled={busy}
           onClick={() => handleAutoMatchmake('1v1')}
         >
-          ⚡ Buscar 1v1
+          BUSCA RÁPIDA
         </button>
-        <button
-          type="button"
-          className="mil-btn-primary"
-          disabled={busy}
-          onClick={() => handleAutoMatchmake('2v2')}
-        >
-          ⚡ Buscar 2v2
-        </button>
-        <button
-          type="button"
-          className="mil-btn-primary"
-          disabled={busy}
-          onClick={() => handleAutoMatchmake('3p_4p')}
-        >
-          ⚡ Buscar 3P / 4P
-        </button>
-        <button
-          type="button"
-          className="mil-btn-secondary"
-          onClick={() => setShowCreateForm((v) => !v)}
-        >
-          ➕ CRIAR SALA ONLINE
-        </button>
+      </div>
+
+      {/* Filtros rápidos de Matchmaking + Entrar por Código */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <button type="button" className="mil-pill" disabled={busy} onClick={() => handleAutoMatchmake('1v1')}>
+            ⚡ 1v1
+          </button>
+          <button type="button" className="mil-pill" disabled={busy} onClick={() => handleAutoMatchmake('2v2')}>
+            ⚡ 2v2
+          </button>
+          <button type="button" className="mil-pill" disabled={busy} onClick={() => handleAutoMatchmake('3p_4p')}>
+            ⚡ 3P / 4P FFA
+          </button>
+        </div>
         <div className="mp-join-inline">
           <input
             type="text"
@@ -303,7 +311,7 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
             disabled={busy || joinCode.trim().length < 3}
             onClick={() => handleJoinRoom(joinCode, false)}
           >
-            🔑 ENTRAR POR CÓDIGO
+            🔑 CÓDIGO
           </button>
         </div>
       </div>
@@ -435,67 +443,43 @@ export default function MultiplayerLobby({ onStartOnlineMatch }) {
         </div>
       )}
 
-      {/* Tabela ao Vivo de Salas Abertas (Server Browser) */}
-      <div className="mp-card">
-        <div className="mp-card-head">
-          <div>
-            <span className="mp-kicker">SERVER BROWSER EM TEMPO REAL</span>
-            <h3>SALAS ABERTAS ({openRooms.length})</h3>
-          </div>
-          <div className={`mp-status-pill ${net.isOnline ? 'online' : 'offline'}`}>
-            {net.isOnline
-              ? '🟢 ONLINE — Firebase + Local Sync'
-              : '⚪ MODO LOCAL — 2 Abas (COF_ACTIVE_ROOMS)'}
-          </div>
-        </div>
-
+      {/* Lista de Salas Abertas (Server Browser Estilo Outlive) */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {openRooms.length === 0 ? (
-          <div className="mil-empty-box">
-            Nenhuma sala aberta no momento. Clique em <strong>➕ CRIAR NOVA SALA</strong> ou{' '}
-            <strong>🔍 MATCHMAKING AUTOMÁTICO</strong> para iniciar!
+          <div className="mil-empty-box" style={{ padding: '14px 16px' }}>
+            Nenhuma sala aberta no momento. Clique em <strong>CRIAR NOVA OPERAÇÃO</strong> ou{' '}
+            <strong>BUSCA RÁPIDA</strong> para iniciar!
           </div>
         ) : (
-          <div className="mp-server-table">
-            <div className="mp-server-row mp-server-head">
-              <span>SALA</span>
-              <span>MODO</span>
-              <span>MAPA</span>
-              <span>VAGAS</span>
-              <span>PING</span>
-              <span>AÇÃO</span>
-            </div>
-            {openRooms.map((r) => {
-              const mapObj = availableMaps.find((m) => m.id === r.mapId);
-              const modeLabel =
-                r.mode === '4p'
-                  ? '4P FFA'
-                  : r.mode === '3p'
-                    ? '3P FFA'
-                    : (r.mode || '1v1').toUpperCase();
-              return (
-                <div key={r.roomId} className="mp-server-row">
-                  <strong>
-                    {r.isPrivate ? '🔒 ' : ''}
-                    {r.roomName || r.codeFormatted}
-                  </strong>
-                  <span>{modeLabel}</span>
-                  <span>{mapObj?.name || r.mapId}</span>
-                  <span>
-                    {r.playersCount || 1}/{r.maxPlayers || 2}
+          openRooms.map((r) => {
+            const mapObj = availableMaps.find((m) => m.id === r.mapId);
+            const modeLabel =
+              r.mode === '4p'
+                ? '4P FFA'
+                : r.mode === '3p'
+                  ? '3P FFA'
+                  : (r.mode || '1v1').toUpperCase();
+            return (
+              <div key={r.roomId} className="mp-outlive-row">
+                <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                  <span className="mp-outlive-row-title">
+                    {r.isPrivate ? '🔒 ' : ''}[{modeLabel}] {mapObj?.name || r.mapId}
                   </span>
-                  <span>{r.pingMs || net.pingMs} ms</span>
-                  <button
-                    type="button"
-                    className="mil-btn-primary mp-join-row-btn"
-                    disabled={busy}
-                    onClick={() => handleJoinRoom(r.roomId, r.isPrivate)}
-                  >
-                    ⚔️ ENTRAR
-                  </button>
+                  <span className="mp-outlive-row-meta">
+                    • {r.roomName || r.codeFormatted} • {r.playersCount || 1}/{r.maxPlayers || 2} vagas • {r.pingMs || net.pingMs} ms
+                  </span>
                 </div>
-              );
-            })}
-          </div>
+                <button
+                  type="button"
+                  className="mp-outlive-enter-btn"
+                  disabled={busy}
+                  onClick={() => handleJoinRoom(r.roomId, r.isPrivate)}
+                >
+                  ENTRAR
+                </button>
+              </div>
+            );
+          })
         )}
       </div>
     </div>

@@ -718,6 +718,25 @@ export function createRoadSurfaceTexture(theme = 'rural') {
     bctx.stroke();
   }
 
+  // Bordas escuras de cascalho / meio-fio para destacar claramente a estrada do gramado
+  const leftBorder = ctx.createLinearGradient(0, 0, 28, 0);
+  leftBorder.addColorStop(0, isDesert ? 'rgba(98, 74, 44, 0.82)' : 'rgba(28, 24, 18, 0.85)');
+  leftBorder.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = leftBorder;
+  ctx.fillRect(0, 0, 28, h);
+
+  const rightBorder = ctx.createLinearGradient(w - 28, 0, w, 0);
+  rightBorder.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  rightBorder.addColorStop(1, isDesert ? 'rgba(98, 74, 44, 0.82)' : 'rgba(28, 24, 18, 0.85)');
+  ctx.fillStyle = rightBorder;
+  ctx.fillRect(w - 28, 0, 28, h);
+
+  // Marcas centrais sutis (faixa desgastada / eixo central)
+  ctx.fillStyle = isDesert ? 'rgba(235, 212, 168, 0.24)' : isWinter ? 'rgba(210, 222, 232, 0.28)' : 'rgba(204, 192, 158, 0.22)';
+  for (let dashY = 12; dashY < h; dashY += 64) {
+    ctx.fillRect(w * 0.5 - 2.5, dashY, 5, 30);
+  }
+
   for (let k = 0; k < 8; k++) {
     const px = w * 0.24 + rng() * w * 0.52;
     const py = rng() * h;
@@ -750,4 +769,129 @@ export function createRoadSurfaceTexture(theme = 'rural') {
 
   tex.userData = { bumpMap: bumpTex };
   return tex;
+}
+
+/**
+ * Gera textura procedural de alta frequência 512x512 (RepeatWrapping 32x32)
+ * com grãos de terra, grama escura (#2d4222), grama seca (#4a5328) e pedregulhos,
+ * retornando map, bumpMap e roughnessMap sincronizados.
+ */
+export function createHighFreqGroundTextures(theme = 'rural') {
+  const isDesert = theme === 'desert';
+  const isWinter = theme === 'winter';
+  const size = 512;
+
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d');
+
+  const bc = document.createElement('canvas');
+  bc.width = size;
+  bc.height = size;
+  const bctx = bc.getContext('2d');
+
+  const rc = document.createElement('canvas');
+  rc.width = size;
+  rc.height = size;
+  const rctx = rc.getContext('2d');
+
+  const rng = mulberry32(isDesert ? 5511 : isWinter ? 8844 : 2044);
+
+  // Base rica (sem aspecto lavado)
+  ctx.fillStyle = isDesert ? '#9c7c4a' : isWinter ? '#b6c4cf' : '#2d4222';
+  ctx.fillRect(0, 0, size, size);
+
+  bctx.fillStyle = '#787878';
+  bctx.fillRect(0, 0, size, size);
+
+  rctx.fillStyle = '#e6e6e6';
+  rctx.fillRect(0, 0, size, size);
+
+  // Manchas de grama seca (#4a5328) e terra batida
+  for (let i = 0; i < 420; i++) {
+    const x = rng() * size;
+    const y = rng() * size;
+    const rad = 8 + rng() * 24;
+    const grad = ctx.createRadialGradient(x, y, 1, x, y, rad);
+    if (isDesert) {
+      grad.addColorStop(0, i % 2 === 0 ? 'rgba(182, 148, 92, 0.35)' : 'rgba(116, 86, 52, 0.32)');
+    } else if (isWinter) {
+      grad.addColorStop(0, i % 2 === 0 ? 'rgba(218, 228, 236, 0.38)' : 'rgba(118, 126, 132, 0.30)');
+    } else {
+      grad.addColorStop(
+        0,
+        i % 3 === 0
+          ? 'rgba(74, 83, 40, 0.52)'
+          : i % 2 === 0
+          ? 'rgba(58, 46, 30, 0.42)'
+          : 'rgba(34, 52, 24, 0.48)'
+      );
+    }
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, rad, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Grãos de terra, tufos de grama e pedregulhos (com bump e roughness correspondentes)
+  for (let i = 0; i < 14000; i++) {
+    const x = rng() * size;
+    const y = rng() * size;
+    const sz = 1 + rng() * 2.4;
+    const kind = i % 6;
+
+    if (kind === 0) {
+      // Pedregulho claro/ardósia
+      ctx.fillStyle = isDesert ? 'rgba(196, 170, 126, 0.55)' : 'rgba(104, 108, 102, 0.52)';
+      bctx.fillStyle = 'rgba(235, 235, 235, 0.55)';
+      rctx.fillStyle = 'rgba(175, 175, 175, 0.5)';
+    } else if (kind === 1 || kind === 2) {
+      // Tufo de grama escura (#2d4222)
+      ctx.fillStyle = isDesert
+        ? 'rgba(132, 102, 62, 0.48)'
+        : isWinter
+        ? 'rgba(148, 166, 182, 0.42)'
+        : 'rgba(45, 66, 34, 0.65)';
+      bctx.fillStyle = 'rgba(185, 185, 185, 0.45)';
+      rctx.fillStyle = 'rgba(240, 240, 240, 0.55)';
+    } else if (kind === 3) {
+      // Grama seca (#4a5328)
+      ctx.fillStyle = isDesert
+        ? 'rgba(208, 174, 114, 0.45)'
+        : isWinter
+        ? 'rgba(236, 244, 250, 0.48)'
+        : 'rgba(74, 83, 40, 0.60)';
+      bctx.fillStyle = 'rgba(165, 165, 165, 0.4)';
+      rctx.fillStyle = 'rgba(228, 228, 228, 0.5)';
+    } else {
+      // Grão de terra escura
+      ctx.fillStyle = isDesert ? 'rgba(96, 72, 42, 0.42)' : 'rgba(42, 34, 22, 0.48)';
+      bctx.fillStyle = 'rgba(58, 58, 58, 0.45)';
+      rctx.fillStyle = 'rgba(250, 250, 250, 0.55)';
+    }
+
+    ctx.fillRect(x, y, sz, sz);
+    bctx.fillRect(x, y, sz, sz);
+    rctx.fillRect(x, y, sz, sz);
+  }
+
+  const setupTex = (canvas, isColor) => {
+    const tex = new THREE.CanvasTexture(canvas);
+    if (isColor) tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(32, 32);
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = 16;
+    return tex;
+  };
+
+  return {
+    map: setupTex(c, true),
+    bumpMap: setupTex(bc, false),
+    roughnessMap: setupTex(rc, false),
+  };
 }

@@ -37,6 +37,8 @@ export class BattlefieldMap {
     this.fogGrid = new Uint8Array(this.fogSize * this.fogSize); // 0 por padrão (Escuridão Total / Névoa Densa)
     this.tempVisionZones = []; // Zonas temporárias reveladas por Avião/Drone Recon ou Interrogatório Militar
     this.bushes = [];
+    this.rebelZones = [];
+    this.rebelUnits = [];
     this.terrainSculptSize = 129;
     this.terrainSculptGrid = new Float32Array(this.terrainSculptSize * this.terrainSculptSize);
     this.terrainRockGrid = new Uint8Array(this.terrainSculptSize * this.terrainSculptSize);
@@ -791,6 +793,14 @@ export class BattlefieldMap {
         if (userEntry?.data) override = userEntry.data;
         const localRaw = localStorage.getItem(`COF_CUSTOM_MAP_${this.mapId}`);
         if (localRaw) override = JSON.parse(localRaw);
+        if (!override && typeof localStorage !== 'undefined') {
+          const listRaw = localStorage.getItem('COF_USER_CUSTOM_MAPS_V1');
+          if (listRaw) {
+            const list = JSON.parse(listRaw);
+            const found = Array.isArray(list) ? list.find((m) => m.id === this.mapId) : null;
+            if (found?.data) override = found.data;
+          }
+        }
       } catch { }
     }
     if (!override || typeof override !== 'object') return;
@@ -821,6 +831,12 @@ export class BattlefieldMap {
     }
     if (Array.isArray(override.customTrenches)) {
       this.customTrenches = override.customTrenches.map((t) => ({ ...t }));
+    }
+    if (Array.isArray(override.rebelZones)) {
+      this.rebelZones = override.rebelZones.map((rz) => ({ ...rz }));
+    }
+    if (Array.isArray(override.rebelUnits)) {
+      this.rebelUnits = override.rebelUnits.map((ru) => ({ ...ru }));
     }
     if (Array.isArray(override.sectors) && override.sectors.length > 0) {
       this.sectors = override.sectors.map((saved, idx) => ({
@@ -897,6 +913,8 @@ export class BattlefieldMap {
       craters: (this.craters || []).map((c) => ({ ...c })),
       forestZones: (this.forestZones || []).map((fz) => ({ ...fz })),
       customTrenches: (this.customTrenches || []).map((t) => ({ ...t })),
+      rebelZones: (this.rebelZones || []).map((rz) => ({ ...rz })),
+      rebelUnits: (this.rebelUnits || []).map((ru) => ({ ...ru })),
     };
   }
 

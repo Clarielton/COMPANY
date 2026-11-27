@@ -17,6 +17,9 @@ import {
   SQUAD_FORMATIONS,
   SQUAD_FORMATION_BY_ID,
   saveUserCustomMapEntry,
+  deleteUserCustomMapEntry,
+  duplicateUserCustomMapEntry,
+  getAvailableBattlefieldMaps,
 } from './data/rtsData.js';
 import {
   TECH_NODES,
@@ -449,12 +452,11 @@ export class Game {
             this.barricades
           )
           : null;
+      u.patrolRoute = null;
       u.tacticalOrderMode = mode;
       u.tacticalTargetLabel = targetLabel;
       u.tacticalAttackOrder = mode === 'ASSAULT';
       u.setMoveOrder(fx, fy, null, null, path);
-      // Desmarcação Automática após enviar a tropa para agilizar o comando da próxima unidade
-      u.selected = false;
     });
 
     if (this.isMultiplayer && this.networkManager) {
@@ -1358,6 +1360,8 @@ export class Game {
       }
     }
 
+    this._spawnRebelZones();
+
     // Atualiza Névoa de Guerra e Linha de Frente inicial
     this.map.updateFogOfWar(this.units, this.baseBuildings, 0.1);
     this.map.updateFrontline(this.units, 1.0);
@@ -1373,6 +1377,196 @@ export class Game {
     const u = new SquadUnit({ x, y, faction, unitType, angle });
     this.units.push(u);
     return u;
+  }
+
+  createRebelZoneAt(wx, wy, radiusMeters = 28, level = 1) {
+    if (!this.map) return null;
+    if (!Array.isArray(this.map.rebelZones)) this.map.rebelZones = [];
+    const radius = clamp(Number(radiusMeters) || 28, 12, 50) * 14;
+    let nearestSec = null;
+    let bestD = Infinity;
+    for (const s of this.map.sectors || []) {
+      const d = dist(wx, wy, s.x, s.y);
+      if (d <= radius && d < bestD) {
+        bestD = d;
+        nearestSec = s;
+      }
+    }
+    if (!nearestSec) {
+      nearestSec = this.createEditorSector(wx, wy);
+    }
+    if (nearestSec) {
+      nearestSec.owner = 'rebels';
+      nearestSec.initialOwner = 'rebels';
+      nearestSec.rebelLocked = true;
+      nearestSec.hadRebelGarrison = true;
+    }
+    const rz = {
+      id: `rz_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+      x: Math.round(wx),
+      y: Math.round(wy),
+      radius,
+      level: clamp(Number(level) || 1, 1, 3),
+      sectorId: nearestSec?.id || null,
+    };
+    this.map.rebelZones.push(rz);
+    this.selectedRebelZoneId = rz.id;
+    this.audio?.play?.('pickup');
+    this.spawnText(wx, wy - 26, `🏴‍☠️ ÁREA REBELDE NV.${rz.level} (${Math.round(radius / 14)}m)`, '#ea580c');
+    this._emitHud();
+    return rz;
+  }
+
+  updateRebelZone(zoneId, patch = {}) {
+    const rz = (this.map?.rebelZones || []).find((z) => z.id === zoneId);
+    if (!rz) return false;
+    if (typeof patch.level === 'number') rz.level = clamp(patch.level, 1, 3);
+    if (typeof patch.radiusMeters === 'number') rz.radius = clamp(patch.radiusMeters, 12, 50) * 14;
+    this.audio?.play?.('switch');
+    this._emitHud();
+    return true;
+  }
+
+  deleteRebelZone(zoneId) {
+    if (!this.map?.rebelZones) return false;
+    this.map.rebelZones = this.map.rebelZones.filter((z) => z.id !== zoneId);
+    if (this.selectedRebelZoneId === zoneId) {
+      this.selectedRebelZoneId = this.map.rebelZones[0]?.id || null;
+    }
+    this.audio?.play?.('door');
+    this._emitHud();
+    return true;
+  }
+
+  selectRebelZone(zoneId) {
+    this.selectedRebelZoneId = zoneId || null;
+    this._emitHud();
+  }
+
+  _spawnRebelZones() {
+    if (!this.map) return;
+    if (!Array.isArray(this.map.rebelZones)) this.map.rebelZones = [];
+    // Garante zona rebelde automática para setores marcados inicialmente como 'rebels'
+    for (const sec of this.map.sectors || []) {
+      if ((sec.initialOwner === 'rebels' || sec.owner === 'rebels')) {
+        sec.owner = 'rebels';
+        sec.hadRebelGarrison = true;
+        const hasZone = this.map.rebelZones.some((rz) => dist(rz.x, rz.y, sec.x, sec.y) <= (rz.radius || 392) + 80);
+        if (!hasZone) {
+          this.map.rebelZones.push({
+            id: `rz_sec_${sec.id}`,
+            x: sec.x,
+            y: sec.y,
+            radius: 28 * 14,
+            level: 1,
+            sectorId: sec.id,
+          });
+        }
+      }
+    }
+
+    const assignToZone = (u, rz) => {
+      if (!u) return u;
+      u.rebelZoneId = rz.id;
+      u.rebelHomeX = rz.x;
+      u.rebelHomeY = rz.y;
+      u.rebelRadius = rz.radius || 392;
+      return u;
+    };
+
+    for (const rz of this.map.rebelZones) {
+      const lvl = clamp(Number(rz.level) || 1, 1, 3);
+      const sec = (this.map.sectors || []).find((s) => s.id === rz.sectorId || dist(s.x, s.y, rz.x, rz.y) <= rz.radius);
+      if (sec) {
+        sec.owner = 'rebels';
+        sec.rebelLocked = true;
+        sec.hadRebelGarrison = true;
+      }
+
+      // Nível 1: 2 Fuzileiros + 1 Bunker .50cal + Sacos de areia
+      assignToZone(this.spawnUnit('rebels', 'rifle_squad', rz.x - 95, rz.y + 45, 0), rz);
+      assignToZone(this.spawnUnit('rebels', 'rifle_squad', rz.x + 95, rz.y - 45, Math.PI), rz);
+      assignToZone(this.spawnUnit('rebels', 'concrete_bunker', rz.x + 120, rz.y + 110, 0), rz);
+      this.barricades.push(
+        new BarricadeLine({ x1: rz.x - 140, y1: rz.y - 120, x2: rz.x + 140, y2: rz.y - 120, team: 'rebels' })
+      );
+
+      // Nível 2: +1 Antitanque + 1 Bunker extra + 1 Humvee em patrulha
+      if (lvl >= 2) {
+        assignToZone(this.spawnUnit('rebels', 'at_javelin_squad', rz.x - 110, rz.y - 90, 0), rz);
+        assignToZone(this.spawnUnit('rebels', 'concrete_bunker', rz.x - 135, rz.y + 105, Math.PI), rz);
+        assignToZone(this.spawnUnit('rebels', 'humvee', rz.x + 160, rz.y - 140, 0), rz);
+      }
+
+      // Nível 3: +1 Sniper + 1 APC Stryker em cobertura
+      if (lvl >= 3) {
+        assignToZone(this.spawnUnit('rebels', 'sniper_squad', rz.x, rz.y - 140, 0), rz);
+        assignToZone(this.spawnUnit('rebels', 'apc_stryker', rz.x - 175, rz.y - 150, 0), rz);
+      }
+    }
+
+    // Tropas/Bunkers Rebeldes colocados manualmente no Editor
+    for (const ru of this.map.rebelUnits || []) {
+      const rz = (this.map.rebelZones || []).find((z) => dist(z.x, z.y, ru.x, ru.y) <= (z.radius || 392) + 120) || {
+        id: 'rz_manual',
+        x: ru.x,
+        y: ru.y,
+        radius: 392,
+      };
+      assignToZone(this.spawnUnit('rebels', ru.unitType || 'rifle_squad', ru.x, ru.y, ru.angle || 0), rz);
+    }
+
+    // Ocupação Automática inicial em casas/prédios intactos dentro da área rebelde
+    this._updateRebelAI(1.0);
+  }
+
+  _updateRebelAI(dt) {
+    this._rebelAiTimer = (this._rebelAiTimer || 0) - dt;
+    if (this._rebelAiTimer > 0) return;
+    this._rebelAiTimer = 0.6;
+
+    const rebels = (this.units || []).filter((u) => u.alive && u.team === 'rebels' && !u.surrendered);
+    if (rebels.length === 0) return;
+
+    for (const u of rebels) {
+      const hx = u.rebelHomeX ?? u.x;
+      const hy = u.rebelHomeY ?? u.y;
+      const rad = u.rebelRadius ?? 392;
+      const dHome = dist(u.x, u.y, hx, hy);
+
+      // 1. Trava Territorial (Territorial Leash): máx 12m (168u) fora da borda do território
+      if (dHome > rad + 168) {
+        if (u.garrisonedBuildingId) this._ungarrisonUnit(u);
+        u.holdPosition = false;
+        u.setMoveOrder(hx + (Math.random() - 0.5) * 120, hy + (Math.random() - 0.5) * 120);
+        continue;
+      }
+
+      // 2. Ocupação Automática de Prédios Guarnecíveis dentro da área rebelde
+      if (u.spec?.type === 'infantry' && !u.garrisonedBuildingId) {
+        const freeStruct = (this.map?.structures || []).find(
+          (st) =>
+            !st.destroyed &&
+            st.garrisonable &&
+            !st.garrisonUnitId &&
+            dist(st.x, st.y, hx, hy) <= rad + 80
+        );
+        if (freeStruct) {
+          if (dist(u.x, u.y, freeStruct.x, freeStruct.y) <= 135) {
+            this._garrisonUnitInBuilding(u, freeStruct);
+          } else if (!u.order || u.order.type === 'hold') {
+            u.setGarrisonOrder(freeStruct);
+          }
+        }
+      }
+
+      // 3. Patrulha de veículos rebeldes dentro do perímetro
+      if (u.spec?.type === 'vehicle' && (!u.order || u.order.type === 'hold')) {
+        const ang = Math.random() * Math.PI * 2;
+        const pr = rad * 0.65;
+        u.setMoveOrder(clamp(hx + Math.cos(ang) * pr, 120, BATTLEFIELD_SIZE - 120), clamp(hy + Math.sin(ang) * pr, 120, BATTLEFIELD_SIZE - 120));
+      }
+    }
   }
 
   selectBaseBuilding(buildingId) {
@@ -2139,8 +2333,8 @@ export class Game {
       (window.location.hostname === 'localhost' ||
         window.location.hostname === '127.0.0.1' ||
         window.location.hostname.startsWith('192.168.'));
-    if (isOpen && !isLocal) {
-      this.notify('EDITOR RESTRITO AO MODO LOCAL', 'O Editor de Mapas só pode ser aberto em servidor local.', '#ef4444');
+    if (isOpen && !isLocal && !this.isAdminUser()) {
+      this.notify('EDITOR RESTRITO', 'O Editor de Mapas só pode ser aberto em modo local ou pela conta Admin.', '#ef4444');
       return false;
     }
     this.mapEditorOpen = Boolean(isOpen);
@@ -2551,7 +2745,7 @@ export class Game {
     }
     if (typeof scale === 'number') this.mapEditorScale = clamp(scale, 0.5, 2.2);
     this.mapEditorTool = tool || null;
-    this.activeCommandMode = tool ? 'map_editor' : null;
+    this.activeCommandMode = this.mapEditorOpen || tool ? 'map_editor' : null;
     if (tool) {
       this.mapEditorOpen = true;
       if (this.timeScale > 0) {
@@ -2761,6 +2955,27 @@ export class Game {
     }
     if (tool === 'create_sector') {
       this.createEditorSector(x, y);
+      return;
+    }
+    if (tool === 'create_rebel_zone') {
+      this.createRebelZoneAt(x, y, this.editorRebelRadiusMeters || 28, this.editorRebelLevel || 1);
+      return;
+    }
+    if (tool === 'rebel_rifle' || tool === 'rebel_at' || tool === 'rebel_bunker') {
+      if (!Array.isArray(this.map.rebelUnits)) this.map.rebelUnits = [];
+      const uType =
+        tool === 'rebel_at' ? 'at_javelin_squad' : tool === 'rebel_bunker' ? 'concrete_bunker' : 'rifle_squad';
+      const entry = { id: `ru_${Date.now()}_${Math.floor(Math.random() * 999)}`, unitType: uType, x, y, angle: this.mapEditorAngle || 0 };
+      this.map.rebelUnits.push(entry);
+      const u = this.spawnUnit('rebels', uType, x, y, entry.angle);
+      if (u) {
+        u.rebelHomeX = x;
+        u.rebelHomeY = y;
+        u.rebelRadius = 392;
+      }
+      this.audio?.play?.('pickup');
+      this.spawnText(x, y - 20, `🏴‍☠️ ${uType.toUpperCase()} POSICIONADO`, '#ea580c');
+      this._emitHud();
       return;
     }
     const ang = this.mapEditorAngle || 0;
@@ -3048,7 +3263,67 @@ export class Game {
       });
     } catch { }
     this.setupMatch(this.gameMode, this.startingResourcesPreset, mapId, this.aiDifficulty);
+    this.renderer?.buildWorld?.(this.map);
+    this.selectedEditorSectorId = null;
+    this.selectedEditorObject = null;
+    this.selectedRebelZoneId = this.map?.rebelZones?.[0]?.id || null;
     this.notify('🔄 MAPA ORIGINAL RESTAURADO', `O mapa ${mapId} voltou ao layout original.`, '#fbbf24');
+  }
+
+  loadMapInEditor(mapId) {
+    if (!mapId) return false;
+    const prevTool = this.mapEditorTool || 'farmhouse';
+    this.setupMatch(this.gameMode || 'sandbox', this.startingResourcesPreset, mapId, this.aiDifficulty);
+    this.renderer?.buildWorld?.(this.map);
+    this.selectedEditorSectorId = null;
+    this.selectedEditorObject = null;
+    this.selectedRebelZoneId = this.map?.rebelZones?.[0]?.id || null;
+    this.setMapEditorOpen(true, prevTool);
+    this.notify('🗺️ MAPA CARREGADO NO EDITOR', `Editando agora: ${mapId}`, '#38bdf8');
+    this._emitHud();
+    return true;
+  }
+
+  async duplicateCurrentMap(customName = null) {
+    if (!this.map) return { ok: false };
+    const payload = this.map.exportCustomMapPayload();
+    const suggested = `${this.map.mapId} (Cópia)`;
+    let finalName = customName;
+    if (!finalName && typeof window !== 'undefined' && typeof window.prompt === 'function') {
+      finalName = window.prompt('Nome da Cópia do Mapa:', suggested) || '';
+    }
+    if (!finalName || !finalName.trim()) return { ok: false };
+    const entry = duplicateUserCustomMapEntry(this.map.mapId, finalName.trim(), payload);
+    if (!entry) return { ok: false };
+    try {
+      await fetch('/api/save-custom-map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapId: entry.id, data: entry.data }),
+      });
+    } catch { }
+    this.loadMapInEditor(entry.id);
+    this.notify('📋 MAPA DUPLICADO!', `Cópia "${entry.name}" criada e aberta no Editor.`, '#4ade80');
+    return { ok: true, entry };
+  }
+
+  async deleteCustomMap(mapId) {
+    if (!mapId) return { ok: false };
+    deleteUserCustomMapEntry(mapId);
+    try {
+      await fetch('/api/save-custom-map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapId, reset: true }),
+      });
+    } catch { }
+    if (this.map?.mapId === mapId) {
+      this.loadMapInEditor('normandy_fields');
+    } else {
+      this._emitHud();
+    }
+    this.notify('🗑️ MAPA EXCLUÍDO', `Mapa "${mapId}" removido com sucesso.`, '#ef4444');
+    return { ok: true };
   }
 
   getOutpostPlacementStatus(wx, wy, team = 'allies') {
@@ -4096,6 +4371,85 @@ export class Game {
       this._emitHud();
     }
     return disembarked.length;
+  }
+
+  loadNearbyIntoTransport(transportId) {
+    const tr = this.units.find(
+      (u) => u.id === transportId && u.alive && u.spec?.isTransport
+    );
+    if (!tr) return 0;
+    const maxCap = tr.maxCargoSquads || tr.spec?.transportCapacitySquads || 2;
+    const currentCount = (tr.cargoSquadIds || []).length;
+    const freeSlots = maxCap - currentCount;
+    if (freeSlots <= 0) {
+      this.audio.play('empty');
+      this.notify('TRANSPORTE LOTADO', `Capacidade máxima (${maxCap} esquadrões) atingida.`, '#f59e0b');
+      return 0;
+    }
+
+    const candidates = this.units
+      .filter(
+        (u) =>
+          u.alive &&
+          u.team === tr.team &&
+          u.spec?.type === 'infantry' &&
+          !u.embarkedInId &&
+          !u.garrisonedBuildingId &&
+          dist(u.x, u.y, tr.x, tr.y) <= 360
+      )
+      .sort((a, b) => dist(a.x, a.y, tr.x, tr.y) - dist(b.x, b.y, tr.x, tr.y))
+      .slice(0, freeSlots);
+
+    if (candidates.length === 0) {
+      this.pendingTransportId = tr.id;
+      this.activeCommandMode = 'board_transport';
+      this.notify(
+        '📥 EMBARCAR TROPAS',
+        'Clique em um esquadrão de infantaria aliado próximo para embarcar no transporte (Botão Direito cancela).',
+        '#38bdf8'
+      );
+      this._emitHud();
+      return 0;
+    }
+
+    for (const sq of candidates) {
+      sq.holdPosition = false;
+      sq.order = {
+        type: 'board_transport',
+        targetTransportId: tr.id,
+        targetX: tr.x,
+        targetY: tr.y,
+      };
+      sq.finalDestination = { x: tr.x, y: tr.y };
+      sq.waypoints = [];
+    }
+    this.audio.play('switch');
+    this.spawnText(tr.x, tr.y - 26, `📥 EMBARCANDO ${candidates.length} ESQ.`, '#38bdf8');
+    this._emitHud();
+    return candidates.length;
+  }
+
+  setActiveCommandMode(mode) {
+    this.audio.resume?.();
+    this.activeAirStrikeMode = null;
+    this.trenchPreview = null;
+    if (!mode || this.activeCommandMode === mode) {
+      this.activeCommandMode = null;
+      this.notify('MODO DE COMANDO CANCELADO', '', '#9a9484');
+    } else {
+      this.activeCommandMode = mode;
+      const msgMap = {
+        vehicle_patrol: ['🔄 MODO PATRULHA ATIVO', 'Clique no destino B (segure Shift para vários pontos) • Botão Direito cancela', '#38bdf8'],
+        vehicle_line_move: ['➡️ LINHA RETA SINCRONIZADA', 'Clique no destino para mover o grupo alinhado • Botão Direito cancela', '#4ade80'],
+        attack_move: ['⚔️ ATACAR MOVENDO', 'Clique no destino para avançar combatendo inimigos • Botão Direito cancela', '#f97316'],
+        board_transport: ['📥 EMBARCAR NO TRANSPORTE', 'Clique no veículo de transporte ou infantaria aliada • Botão Direito cancela', '#38bdf8'],
+      };
+      const [title, desc, col] = msgMap[mode] || ['MODO ATIVO', 'Clique no mapa para executar • Botão Direito cancela', '#f59e0b'];
+      this.notify(title, desc, col);
+      this.audio.play('switch');
+    }
+    this._emitHud();
+    return this.activeCommandMode;
   }
 
   // ============================================================================
@@ -5909,25 +6263,55 @@ export class Game {
       return;
     }
 
-    // 4c. Modos de Ordem Direta de Veículos / Tropas (Patrulha, Linha Reta Sincronizada, Atacar Movendo)
+    // 4c. Modos de Ordem Direta de Veículos / Tropas (Patrulha, Linha Reta Sincronizada, Atacar Movendo, Embarque)
     if (
       this.activeCommandMode === 'vehicle_patrol' ||
       this.activeCommandMode === 'vehicle_line_move' ||
-      this.activeCommandMode === 'attack_move'
+      this.activeCommandMode === 'attack_move' ||
+      this.activeCommandMode === 'board_transport'
     ) {
       if (input.mouse.rightClicked) {
         this.activeCommandMode = null;
+        this.pendingTransportId = null;
         this._emitHud();
         return;
       }
       if (input.mouse.clicked) {
         const cx = clamp(this.worldMouse.x, 90, BATTLEFIELD_SIZE - 90);
         const cy = clamp(this.worldMouse.y, 90, BATTLEFIELD_SIZE - 90);
+
+        if (this.activeCommandMode === 'board_transport') {
+          const tr = this.units.find((u) => u.id === this.pendingTransportId && u.alive && u.spec?.isTransport);
+          const clickedInf = this.units
+            .filter((u) => u.alive && u.team === this.myTeam && u.spec?.type === 'infantry' && !u.embarkedInId)
+            .sort((a, b) => dist(a.x, a.y, cx, cy) - dist(b.x, b.y, cx, cy))[0];
+          if (tr && clickedInf && dist(clickedInf.x, clickedInf.y, cx, cy) <= 95) {
+            if (clickedInf.garrisonedBuildingId) this._ungarrisonUnit(clickedInf);
+            clickedInf.holdPosition = false;
+            clickedInf.order = {
+              type: 'board_transport',
+              targetTransportId: tr.id,
+              targetX: tr.x,
+              targetY: tr.y,
+            };
+            clickedInf.finalDestination = { x: tr.x, y: tr.y };
+            clickedInf.waypoints = [];
+            this.audio.play('switch');
+            this.spawnText(clickedInf.x, clickedInf.y - 18, '📥 EMBARCANDO', '#38bdf8');
+          }
+          this.activeCommandMode = null;
+          this.pendingTransportId = null;
+          this._emitHud();
+          return;
+        }
+
         const sel = this.units.filter((u) => u.alive && u.faction === this.myFaction && u.selected && !u.embarkedInId);
+        const shiftHeld = Boolean(input.isDown?.('ShiftLeft') || input.isDown?.('ShiftRight'));
         if (sel.length > 0) {
           if (this.activeCommandMode === 'vehicle_patrol') {
             for (const u of sel) {
-              if (input.isDown?.('ShiftLeft') && Array.isArray(u.patrolRoute) && u.patrolRoute.length >= 2) {
+              u.holdPosition = false;
+              if (shiftHeld && Array.isArray(u.patrolRoute) && u.patrolRoute.length >= 2) {
                 u.patrolRoute.push({ x: cx, y: cy });
               } else {
                 u.patrolRoute = [{ x: u.x, y: u.y }, { x: cx, y: cy }];
@@ -5962,7 +6346,7 @@ export class Game {
           }
           this.audio.play('switch');
         }
-        if (!(this.activeCommandMode === 'vehicle_patrol' && input.isDown?.('ShiftLeft'))) {
+        if (!(this.activeCommandMode === 'vehicle_patrol' && shiftHeld)) {
           this.activeCommandMode = null;
         }
         this._emitHud();
@@ -6103,7 +6487,15 @@ export class Game {
               this.worldMouse.y,
               false
             );
-        const segLen = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+        let segLen = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+        if (this.activeCommandMode === 'build_wall' && segLen < 28) {
+          // Clique simples sem arrastar cria um segmento padrão de 140u centrado no clique
+          const cx = pts[0].x;
+          const cy = pts[0].y;
+          pts[0] = { x: clamp(cx - 70, 90, BATTLEFIELD_SIZE - 90), y: cy };
+          pts[1] = { x: clamp(cx + 70, 90, BATTLEFIELD_SIZE - 90), y: cy };
+          segLen = 140;
+        }
         const cmd = COMMAND_BY_ID[this.activeCommandMode];
         const cost = this.sandboxMode
           ? 0
@@ -6870,7 +7262,7 @@ export class Game {
       cy,
       130,
       (b) =>
-        b.team === 'enemies' &&
+        b.team !== this.myTeam &&
         b.alive !== false &&
         (this.intelRevealed || this.map.isPositionVisibleToAllies(b.x, b.y))
     );
@@ -6895,7 +7287,7 @@ export class Game {
       cy,
       58,
       (u) =>
-        u.team === 'enemies' &&
+        u.team !== this.myTeam &&
         !u.surrendered &&
         (this.intelRevealed || this.map.isPositionVisibleToAllies(u.x, u.y))
     );
@@ -7549,6 +7941,7 @@ export class Game {
       this._updateConstructors(simDt);
       this._updateAirDoctrinesAndAircrafts(simDt);
       this._updateAICommanders(simDt);
+      this._updateRebelAI(simDt);
       this._updateUnitsAndCombat(simDt);
       this._updateBulletsAndMines(simDt);
       this.map.updateFogOfWar(
@@ -7758,17 +8151,31 @@ export class Game {
   }
 
   _updateEconomyAndSectors(dt) {
-    // Captura dos 8 Pontos Estratégicos de Suprimento, Munição e Combustível
+    // Captura dos Pontos Estratégicos (com bloqueio se houver Rebeldes guarnecidos + Saque de +180 SUP / +75 MUN)
     for (const sec of this.map.sectors) {
       let allyPower = 0;
       let enemyPower = 0;
+      let rebelAliveCount = 0;
+      const checkR = Math.max(sec.radius + 90, 392);
       for (const u of this.units) {
         if (!u.alive || u.surrendered || u.captured) continue;
-        if (dist(u.x, u.y, sec.x, sec.y) <= sec.radius + 30) {
-          if (u.team === 'allies') allyPower += u.spec.captureRate || 0.45;
-          else if (u.team === 'enemies') enemyPower += u.spec.captureRate || 0.45;
+        if (dist(u.x, u.y, sec.x, sec.y) <= checkR) {
+          if (u.team === 'rebels') {
+            rebelAliveCount++;
+          } else if (dist(u.x, u.y, sec.x, sec.y) <= sec.radius + 30) {
+            if (u.team === 'allies') allyPower += u.spec.captureRate || 0.45;
+            else if (u.team === 'enemies') enemyPower += u.spec.captureRate || 0.45;
+          }
         }
       }
+
+      if (rebelAliveCount > 0) {
+        sec.rebelLocked = true;
+        sec.hadRebelGarrison = true;
+        sec.owner = 'rebels';
+        continue;
+      }
+      sec.rebelLocked = false;
 
       if (allyPower > enemyPower) {
         const prevOwner = sec.owner;
@@ -7778,17 +8185,33 @@ export class Game {
           this.victoryPoints += 40;
           this.addCommandPoints(15, 'Setor Capturado');
           this.audio.play('pickup');
-          this.notify(
-            `PONTO DE SUPRIMENTO CONQUISTADO!`,
-            `${sec.name} gerando +${sec.supplyBonus} SUP, +${sec.ammoBonus || 0} MUN, +${sec.fuelBonus || 0} COMB.`,
-            '#7faed9'
-          );
+          if (sec.hadRebelGarrison && !sec.rebelLootClaimed) {
+            sec.rebelLootClaimed = true;
+            this.supplies += 180;
+            this.ammo += 75;
+            this.spawnText(sec.x, sec.y - 34, '🏴‍☠️ SAQUE REBELDE: +180 SUP • +75 MUN', '#fbbf24');
+            this.notify(
+              '🏴‍☠️ TERRITÓRIO REBELDE CONQUISTADO!',
+              `${sec.name} limpo! Saque capturado: +180 SUP e +75 MUN.`,
+              '#fbbf24'
+            );
+          } else {
+            this.notify(
+              `PONTO DE SUPRIMENTO CONQUISTADO!`,
+              `${sec.name} gerando +${sec.supplyBonus} SUP, +${sec.ammoBonus || 0} MUN, +${sec.fuelBonus || 0} COMB.`,
+              '#7faed9'
+            );
+          }
         }
       } else if (enemyPower > allyPower) {
         const prevOwner = sec.owner;
         sec.captureProgress = Math.max(-100, sec.captureProgress - (enemyPower - allyPower) * 7.5 * dt);
         if (sec.captureProgress <= -75 && prevOwner !== 'enemies') {
           sec.owner = 'enemies';
+          if (sec.hadRebelGarrison && !sec.rebelLootClaimed) {
+            sec.rebelLootClaimed = true;
+            this.enemySupplies.enemy_1 = (this.enemySupplies.enemy_1 || 0) + 180;
+          }
           this.notify('ALERTA DE SETOR!', `O inimigo tomou ${sec.name}!`, '#c94a38');
         }
       }
@@ -9106,14 +9529,27 @@ export class Game {
                     u.angle = u.facingAngle;
                   }
                   if (u.order.type === 'move' || u.order.type === 'occupy_trench') {
-                    u.order.type = 'hold';
-                    if (u.tacticalOrderMode === 'DEFEND') {
-                      u.holdPosition = true;
-                      u.tacticalTargetLabel = 'Defendendo Posição';
-                      u.tacticalOrderMode = null;
+                    if (
+                      u.order.type === 'move' &&
+                      Array.isArray(u.patrolRoute) &&
+                      u.patrolRoute.length >= 2 &&
+                      !u.holdPosition
+                    ) {
+                      u.patrolIndex = ((u.patrolIndex ?? 0) + 1) % u.patrolRoute.length;
+                      const nextPt = u.patrolRoute[u.patrolIndex];
+                      if (nextPt) {
+                        u.setMoveOrder(nextPt.x, nextPt.y);
+                      }
                     } else {
-                      u.tacticalOrderMode = null;
-                      u.tacticalTargetLabel = null;
+                      u.order.type = 'hold';
+                      if (u.tacticalOrderMode === 'DEFEND') {
+                        u.holdPosition = true;
+                        u.tacticalTargetLabel = 'Defendendo Posição';
+                        u.tacticalOrderMode = null;
+                      } else {
+                        u.tacticalOrderMode = null;
+                        u.tacticalTargetLabel = null;
+                      }
                     }
                   }
                 }
@@ -9914,10 +10350,13 @@ export class Game {
             cinematicLowCam: Boolean(this.cinematicLowCam),
             sandboxMode: Boolean(this.sandboxMode),
             mapEditorOpen: Boolean(this.mapEditorOpen),
+      availableMaps: getAvailableBattlefieldMaps(),
             mapEditorTool: this.mapEditorTool || null,
             mapEditorAngleDeg: Math.round((((this.mapEditorAngle || 0) * 180) / Math.PI + 360) % 360),
             mapEditorScale: Number((this.mapEditorScale || 1.0).toFixed(2)),
             selectedEditorSectorId: this.selectedEditorSectorId || null,
+      selectedRebelZoneId: this.selectedRebelZoneId || null,
+      rebelZones: (this.map?.rebelZones || []).map((rz) => ({ ...rz })),
             selectedEditorObject: this.selectedEditorObject
               ? {
                 id: this.selectedEditorObject.id,
@@ -10126,19 +10565,18 @@ export class Game {
                 inHeavyCover: u.inHeavyCover,
                 inLightCover: u.inLightCover,
                 garrisonedBuildingId: u.garrisonedBuildingId,
-                soldiers: (u.soldiers || [])
-                  .filter((s) => s.alive)
-                  .map((s) => ({
-                    id: s.id,
-                    name: s.name,
-                    rank: s.rank,
-                    weapon: s.weapon,
-                    weaponIcon: s.weaponIcon,
-                    hp: Math.ceil(s.hp),
-                    maxHp: s.maxHp,
-                    alive: s.alive,
-                    selected: Boolean(s.selected),
-                  })),
+                soldiers: (u.soldiers || []).map((s, idx) => ({
+                  id: s.id,
+                  num: idx + 1,
+                  name: s.name,
+                  rank: s.rank,
+                  weapon: s.weapon,
+                  weaponIcon: s.weaponIcon,
+                  hp: Math.max(0, Math.ceil(s.hp)),
+                  maxHp: s.maxHp,
+                  alive: Boolean(s.alive),
+                  selected: Boolean(s.selected),
+                })),
               };
             }),
             sectors: this.map.sectors.map((s) => ({

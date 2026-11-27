@@ -60,8 +60,39 @@ export function saveUserCustomMapEntry(entry) {
   const next = [entry, ...list];
   try {
     localStorage.setItem(USER_CUSTOM_MAPS_KEY, JSON.stringify(next));
-  } catch {}
+  } catch { }
   return next;
+}
+
+export function deleteUserCustomMapEntry(mapId) {
+  if (typeof localStorage === 'undefined' || !mapId) return [];
+  const next = getUserCustomMaps().filter((m) => m.id !== mapId);
+  try {
+    localStorage.setItem(USER_CUSTOM_MAPS_KEY, JSON.stringify(next));
+    localStorage.removeItem(`COF_CUSTOM_MAP_${mapId}`);
+  } catch { }
+  return next;
+}
+
+export function duplicateUserCustomMapEntry(mapId, newName = null, fallbackPayload = null) {
+  const existing = getUserCustomMaps().find((m) => m.id === mapId);
+  const baseData = existing?.data || fallbackPayload;
+  if (!baseData) return null;
+  const baseName = (newName && String(newName).trim()) || `${existing?.name || mapId} (Cópia)`;
+  const slug = baseName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '');
+  const newId = `custom_${slug || 'mapa'}_${Date.now().toString(36).slice(-4)}`;
+  const entry = {
+    id: newId,
+    name: baseName,
+    theme: existing?.theme || baseData.theme || 'rural',
+    sectorsCount: (baseData.sectors || []).length || existing?.sectorsCount || 12,
+    data: { ...baseData, mapId: newId },
+  };
+  saveUserCustomMapEntry(entry);
+  return entry;
 }
 
 export function getAvailableBattlefieldMaps() {
@@ -1251,6 +1282,20 @@ export const ARMY_FACTIONS = {
     uniformColor: 0x696342,
     helmetColor: 0x4a452d,
     vehicleColor: 0x736c48,
+  },
+  rebels: {
+    id: 'rebels',
+    team: 'rebels',
+    name: 'Milícia Rebelde Local',
+    commanderTitle: 'Comandante Insurgente',
+    doctrine: 'Guarnição Territorial & Emboscada',
+    short: 'REBELDES',
+    color: '#ea580c',
+    badgeBorder: '#ea580c',
+    badgeFill: '#292524',
+    uniformColor: 0x5c4033,
+    helmetColor: 0x292524,
+    vehicleColor: 0x4a3728,
   },
   enemy_1: {
     id: 'enemy_1',

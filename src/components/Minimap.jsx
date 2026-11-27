@@ -342,6 +342,8 @@ export default function Minimap({ gameRef, expanded = false, compact = false }) 
         const isCons = u.unitType === 'constructor_truck' || u.spec?.isConstructor;
         ctx.fillStyle = u.surrendered
           ? '#ffffff'
+          : u.team === 'rebels'
+          ? '#ea580c'
           : isHarv && u.faction === myFaction
           ? '#f59e0b'
           : isCons && u.faction === myFaction
@@ -529,7 +531,6 @@ export default function Minimap({ gameRef, expanded = false, compact = false }) 
           u.tacticalTargetLabel = `⚔️ Em Assalto: ${clickedEnemy.short || clickedEnemy.name || 'Inimigo'}`;
           u.tacticalAttackOrder = true;
           u.setAttackOrder(clickedEnemy);
-          u.selected = false; // Auto-desmarcação após enviar
         });
         game._emitHud();
         setRosterTick((t) => (t + 1) % 10000);
@@ -651,19 +652,19 @@ export default function Minimap({ gameRef, expanded = false, compact = false }) 
       );
 
       if (dragPx < 6) {
-        // Clique simples (< 6px): seleciona/alterna tropa (raio 18px) OU Forma B (atacar setor/inimigo se já houver tropa selecionada)
         const canvas = canvasRef.current;
         const pxToWorld = canvas ? BATTLEFIELD_SIZE / Math.max(1, canvas.width) : 10;
-        const clickedAlly = findAllyNear(game, sb.x1, sb.y1, 18 * pxToWorld);
-        if (clickedAlly) {
-          clickedAlly.selected = !clickedAlly.selected;
-          game._emitHud();
-          setRosterTick((t) => (t + 1) % 10000);
-          return;
-        }
-
         const hasSelected = game.units.some((u) => isMobilePlayerUnit(u) && u.selected);
-        if (hasSelected) {
+        const clickedAlly = findAllyNear(game, sb.x1, sb.y1, 18 * pxToWorld);
+
+        // Se já houver tropas selecionadas e não estiver segurando Shift ao clicar em aliado, envia para a posição!
+        if (hasSelected && (!clickedAlly || !e?.shiftKey)) {
+          if (clickedAlly && !clickedAlly.selected && e?.ctrlKey) {
+            clickedAlly.selected = true;
+            game._emitHud();
+            setRosterTick((t) => (t + 1) % 10000);
+            return;
+          }
           const clickedSector = game.map.sectors.find(
             (s) => Math.hypot(sb.x1 - s.x, sb.y1 - s.y) <= s.radius + 240
           );
@@ -672,6 +673,13 @@ export default function Minimap({ gameRef, expanded = false, compact = false }) 
             clickedSector ? clickedSector.x : sb.x1,
             clickedSector ? clickedSector.y : sb.y1
           );
+          return;
+        }
+
+        if (clickedAlly) {
+          clickedAlly.selected = !clickedAlly.selected;
+          game._emitHud();
+          setRosterTick((t) => (t + 1) % 10000);
           return;
         }
 
@@ -819,77 +827,193 @@ export default function Minimap({ gameRef, expanded = false, compact = false }) 
           onContextMenu={(e) => e.preventDefault()}
         />
 
-        {expanded && (
-          <div
-            className="tmap-squad-sidebar"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="tmap-sidebar-title">
-              ESQUADRÕES ({playerUnits.filter((u) => u.selected).length}/{playerUnits.length})
-            </div>
-            <button
-              type="button"
-              className="tmap-squad-btn"
-              style={{
-                borderColor: '#c28e38',
-                color: '#c28e38',
-                justifyContent: 'center',
-                fontWeight: 800,
-                marginBottom: 4,
-              }}
+        {expanded && (() => {
+          const isUnitIdle = (u) =>
+            (!u.order || u.order.type === 'hold') &&
+            !u.holdPosition &&
+            !u.garrisonedBuildingId &&
+            !u.inTrench &&
+            !(u.patrolRoute && u.patrolRoute.length >= 2);
+          const idleUnits = playerUnits.filter(isUnitIdle);
+          const positionedUnits = playerUnits.filter((u) => !isUnitIdle(u));
+
+          const categories = [
+            {
+              id: 'infantry',
+              label: '🪖 INFANTARIA',
+              units: playerUnits.filter((u) => u.spec?.type === 'infantry' && !u.spec?.isConstructor),
+            },
+            {
+              id: 'vehicles',
+              label: '🛡️ BLINDADOS & VEÍCULOS',
+              units: playerUnits.filter(
+                (u) => u.spec?.type === 'vehicle' && !u.spec?.isConstructor && !u.spec?.isHarvester && !u.spec?.isTransport
+              ),
+            },
+            {
+              id: 'logistics',
+              label: '🏗️ ENGENHARIA & LOGÍSTICA',
+              units: playerUnits.filter((u) => u.spec?.isConstructor || u.spec?.isHarvester || u.spec?.isTransport),
+            },
+            {
+              id: 'support',
+              label: '🛸 APOIO TÁTICO',
+              units: playerUnits.filter(
+                (u) =>
+                  u.spec?.type !== 'infantry' &&
+                  u.spec?.type !== 'vehicle' &&
+                  !u.spec?.isConstructor &&
+                  !u.spec?.isHarvester &&
+                  !u.spec?.isTransport
+              ),
+            },
+          ].filter((c) => c.units.length > 0);
+
+          const getUnitStatusMeta = (u) => {
+            if (u.patrolRoute && u.patrolRoute.length >= 2) {
+              return { text: '🔄 PATRULHA', color: '#38bdf8' };
+            }
+            if (u.order?.type === 'attack_unit' || u.order?.type === 'attack_building' || u.order?.type === 'attack') {
+              return { text: '⚔️ COMBATE', color: '#f87171' };
+            }
+            if (u.order?.type && u.order.type !== 'hold') {
+              return { text: '🏃 EM MARCHA', color: '#facc15' };
+            }
+            if (u.holdPosition || u.garrisonedBuildingId || u.inTrench) {
+              return { text: '🛡️ EM POSIÇÃO', color: '#4ade80' };
+            }
+            return { text: '💤 OCIOSA', color: '#94a3b8' };
+          };
+
+          return (
+            <div
+              className="tmap-squad-sidebar"
               onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                const allSelected =
-                  playerUnits.length > 0 && playerUnits.every((u) => u.selected);
-                playerUnits.forEach((u) => {
-                  u.selected = !allSelected;
-                });
-                game?._emitHud();
-                setRosterTick((t) => (t + 1) % 10000);
-              }}
+              onClick={(e) => e.stopPropagation()}
             >
-              {playerUnits.length > 0 && playerUnits.every((u) => u.selected)
-                ? `✕ DESMARCAR TODAS (${playerUnits.length})`
-                : `▸ SELECIONAR TODAS (${playerUnits.length})`}
-            </button>
-            <div className="tmap-squad-list">
-              {playerUnits.map((u) => {
-                const isMovingOrAttacking = u.order && u.order.type !== 'hold';
-                const targetText = isMovingOrAttacking
-                  ? u.tacticalTargetLabel ||
-                    (u.order.type === 'attack' ? 'Atacando Inimigo' : 'Em marcha')
-                  : null;
-                return (
-                  <button
-                    key={u.id}
-                    type="button"
-                    className={`tmap-squad-btn ${u.selected ? 'active' : ''}`}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      u.selected = !u.selected;
-                      game._emitHud();
-                      setRosterTick((t) => (t + 1) % 10000);
-                    }}
-                  >
-                    <div className="tmap-squad-row">
-                      <span className="tmap-squad-name">
-                        <span className="tmap-squad-check">{u.selected ? '✓' : ' '}</span>
-                        {u.short}
-                      </span>
-                      <small>{Math.round((u.hp / Math.max(1, u.maxHp)) * 100)}%</small>
+              <div className="tmap-sidebar-title">
+                TROPAS ({playerUnits.filter((u) => u.selected).length}/{playerUnits.length})
+              </div>
+              <div style={{ display: 'flex', gap: 4, marginBottom: 4, fontSize: 10 }}>
+                <button
+                  type="button"
+                  className="tmap-squad-btn"
+                  style={{ flex: 1, justifyContent: 'center', borderColor: '#64748b', color: '#cbd5e1', padding: '4px 6px' }}
+                  title="Selecionar apenas tropas ociosas sem ordem ativa"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    playerUnits.forEach((u) => {
+                      u.selected = isUnitIdle(u);
+                    });
+                    game?._emitHud();
+                    setRosterTick((t) => (t + 1) % 10000);
+                  }}
+                >
+                  💤 Ociosas ({idleUnits.length})
+                </button>
+                <div
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: 4,
+                    border: '1px solid rgba(74, 222, 128, 0.35)',
+                    background: 'rgba(16, 36, 22, 0.55)',
+                    color: '#86efac',
+                    fontWeight: 700,
+                    padding: '4px 6px',
+                  }}
+                >
+                  📍 Posição ({positionedUnits.length})
+                </div>
+              </div>
+              <button
+                type="button"
+                className="tmap-squad-btn"
+                style={{
+                  borderColor: '#c28e38',
+                  color: '#c28e38',
+                  justifyContent: 'center',
+                  fontWeight: 800,
+                  marginBottom: 4,
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const allSelected =
+                    playerUnits.length > 0 && playerUnits.every((u) => u.selected);
+                  playerUnits.forEach((u) => {
+                    u.selected = !allSelected;
+                  });
+                  game?._emitHud();
+                  setRosterTick((t) => (t + 1) % 10000);
+                }}
+              >
+                {playerUnits.length > 0 && playerUnits.every((u) => u.selected)
+                  ? `✕ DESMARCAR TODAS (${playerUnits.length})`
+                  : `▸ SELECIONAR TODAS (${playerUnits.length})`}
+              </button>
+              <div className="tmap-squad-list">
+                {categories.map((cat) => (
+                  <div key={cat.id} style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+                    <div className="tmap-cat-header">
+                      <span>{cat.label}</span>
+                      <span>{cat.units.length}</span>
                     </div>
-                    {targetText && (
-                      <div className="tmap-squad-target">➔ ⚔️ {targetText}</div>
-                    )}
-                  </button>
-                );
-              })}
+                    {cat.units.map((u) => {
+                      const st = getUnitStatusMeta(u);
+                      return (
+                        <div key={u.id} style={{ display: 'flex', gap: 4, alignItems: 'stretch' }}>
+                          <button
+                            type="button"
+                            className={`tmap-squad-btn ${u.selected ? 'active' : ''}`}
+                            style={{ flex: 1 }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              u.selected = !u.selected;
+                              game._emitHud();
+                              setRosterTick((t) => (t + 1) % 10000);
+                            }}
+                          >
+                            <div className="tmap-squad-row">
+                              <span className="tmap-squad-name">
+                                <span className="tmap-squad-check">{u.selected ? '✓' : ' '}</span>
+                                {u.short}
+                              </span>
+                              <small>{Math.round((u.hp / Math.max(1, u.maxHp)) * 100)}%</small>
+                            </div>
+                            <div className="tmap-status-pill" style={{ color: st.color }}>
+                              {st.text}
+                              {u.tacticalTargetLabel ? ` • ${u.tacticalTargetLabel}` : ''}
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            className="tmap-squad-btn"
+                            style={{ width: 28, justifyContent: 'center', padding: 0, flexShrink: 0 }}
+                            title="Centralizar câmera nesta tropa"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              game.camera.x = u.x;
+                              game.camera.y = u.y;
+                              u.selected = true;
+                              game._emitHud();
+                              setRosterTick((t) => (t + 1) % 10000);
+                            }}
+                          >
+                            🎯
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {hoverInfo && <div className="tmap-hover-pill">📍 {hoverInfo}</div>}

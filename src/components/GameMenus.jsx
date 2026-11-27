@@ -3,6 +3,7 @@ import TutorialModal from './TutorialModal.jsx';
 import MultiplayerLobby from './MultiplayerLobby.jsx';
 import AuthGate from './AuthGate.jsx';
 import AdminPanel from './AdminPanel.jsx';
+import { SoundManager } from '../game/core/SoundManager.js';
 import {
   IconCrosshair,
   IconGlobe,
@@ -87,6 +88,64 @@ function MapPreviewCanvas({ map }) {
   return <canvas ref={cRef} width={170} height={84} className="map-preview-canvas" />;
 }
 
+function WireframeTopoRadar({ mapId }) {
+  const cRef = useRef(null);
+  useEffect(() => {
+    const c = cRef.current;
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    let raf = 0;
+    let ang = 0.4;
+    const draw = () => {
+      ang += 0.012;
+      const w = c.width;
+      const h = c.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = 'rgba(4, 10, 8, 0.9)';
+      ctx.fillRect(0, 0, w, h);
+      const grid = 6;
+      const seedOff = mapId === 'kursk_steppe' ? 1.4 : mapId === 'rhine_valley' ? 2.2 : 0.7;
+      const proj = (gx, gz) => {
+        const x = gx - 2.5;
+        const z = gz - 2.5;
+        const elev = (Math.sin(gx * 0.9 + seedOff) * Math.cos(gz * 0.8 + seedOff) + 1) * 7;
+        const rx = x * Math.cos(ang) - z * Math.sin(ang);
+        const rz = x * Math.sin(ang) + z * Math.cos(ang);
+        return [w * 0.5 + rx * 14, h * 0.58 + rz * 6.5 - elev];
+      };
+      ctx.lineWidth = 1;
+      for (let i = 0; i < grid; i++) {
+        ctx.strokeStyle = i % 2 === 0 ? 'rgba(0, 229, 255, 0.72)' : 'rgba(245, 158, 11, 0.65)';
+        ctx.beginPath();
+        for (let j = 0; j < grid; j++) {
+          const [px, py] = proj(i, j);
+          if (j === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        ctx.beginPath();
+        for (let j = 0; j < grid; j++) {
+          const [px, py] = proj(j, i);
+          if (j === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [mapId]);
+  return (
+    <div className="outlive-wireframe-dock">
+      <canvas ref={cRef} width={132} height={82} />
+      <span style={{ fontSize: 9, color: '#00e5ff', fontWeight: 800, letterSpacing: '0.08em' }}>
+        TOPOGRAFIA 3D • {String(mapId || 'normandy').toUpperCase()}
+      </span>
+    </div>
+  );
+}
+
 export default function GameMenus({
   gameState,
   initialTab = 'skirmish',
@@ -112,10 +171,21 @@ export default function GameMenus({
   onInstallPwa,
   onResolveInterrogation,
 }) {
-  const [subTab, setSubTab] = useState(initialTab || 'rooms');
+  const [subTab, setSubTab] = useState(initialTab === 'skirmish' ? 'rooms' : initialTab || 'rooms');
   const [hoveredNav, setHoveredNav] = useState(null);
   const [net, setNet] = useState(() => networkManager.getStatusSnapshot());
   const [storeMsg, setStoreMsg] = useState('');
+  const [uiMuted, setUiMuted] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
+  const [redeemOpen, setRedeemOpen] = useState(false);
+  const [redeemCode, setRedeemCode] = useState('');
+  const [redeemMsg, setRedeemMsg] = useState('');
+  const uiSoundRef = useRef(null);
+  const getUiSound = () => {
+    if (!uiSoundRef.current) uiSoundRef.current = new SoundManager();
+    uiSoundRef.current.muted = uiMuted;
+    return uiSoundRef.current;
+  };
   const [selectedMode, setSelectedMode] = useState(hud?.gameMode || '1v1');
   const [selectedMapId, setSelectedMapId] = useState(hud?.mapId || 'normandy_fields');
   const [selectedDifficulty, setSelectedDifficulty] = useState(hud?.aiDifficulty || 'medium');
@@ -429,6 +499,8 @@ export default function GameMenus({
   const isPaused = gameState === 'PAUSED';
   const s = hud.settings || { camSpeed: 1.0, volume: 0.35, highQuality: true };
   const isAdmin = Boolean(net.isAdmin || networkManager.isAdmin());
+  const isModerator = Boolean(net.currentUser?.role === 'moderator');
+  const canModerate = isAdmin || isModerator;
   const isLocalHost =
     typeof window !== 'undefined' &&
     (window.location.hostname === 'localhost' ||
@@ -445,13 +517,13 @@ export default function GameMenus({
       ? 'spectator'
       : subTab === 'editor_hub'
       ? 'editor_hub'
-      : subTab === 'ranks' || subTab === 'store' || subTab === 'skins'
-      ? 'store_ranks'
+      : subTab === 'ranks' || subTab === 'skins'
+      ? 'ranks'
+      : subTab === 'store'
+      ? 'store'
       : ['tutorial', 'settings', 'controls'].includes(subTab)
       ? 'arsenal_hub'
       : subTab === 'saves'
-      ? 'skirmish'
-      : allowOfflineModes
       ? 'skirmish'
       : 'rooms';
 
@@ -473,129 +545,155 @@ export default function GameMenus({
       ? Math.min(100, Math.round(((xp - prog.currentMinXp) / span) * 100))
       : 100;
 
-  const HUB_NAV_ITEMS = allowOfflineModes
-    ? [
-        {
-          id: 'rooms',
-          label: '⚔️ BATALHA ONLINE (1v1, 2v2, 3P & 4P)',
-          sub: 'Criar sala 1v1, 2v2, 3P ou 4P FFA e lista de salas abertas',
-          Icon: IconCrosshair,
-          kicker: 'OPERAÇÃO MULTIPLAYER EM TEMPO REAL (1v1, 2v2, 3P & 4P)',
-          title: '⚔️ BATALHA ONLINE (1v1, 2v2, 3P & 4P)',
-          desc: 'Crie uma sala 1v1, 2v2, 3P ou 4P FFA (com jogadores reais ou Bot IA Difícil) em mapas padrão ou grandes de 16–20 setores.',
-          rules: ['Velocidade Travada 1x', 'Bot IA Exclusivo Difícil', 'Início Limpo Apenas QG'],
-          ctaLabel: 'ENTRAR NO LOBBY ONLINE',
-          onLaunch: () => setSubTab('rooms'),
-        },
-        {
-          id: 'skirmish',
-          label: 'CAMPANHA CLÁSSICA & SAVES (LOCAL)',
-          sub: 'Escaramuças vs IA, Missões e Saves Locais',
-          Icon: IconMedal,
-          kicker: 'COMBATE TÁTICO CONTRA IA (LOCAL)',
-          title: 'CAMPANHA CLÁSSICA & SAVES',
-          desc: 'Comande infantaria com vida individual por soldado, blindados MBT, artilharia MLRS e suporte aéreo contra a IA tática.',
-          rules: ['Modos 1v1 e 2v2', '3 Níveis de IA', 'Save Rápido [F9] / JSON'],
-          ctaLabel: 'INICIAR OPERAÇÃO LOCAL',
-          onLaunch: () =>
-            onPlayMode(selectedMode, startingResources, selectedMapId, selectedDifficulty),
-        },
-        ...(isAdmin
-          ? [
-              {
-                id: 'spectator',
-                label: 'MODO ESPECTADOR (IA vs IA)',
-                sub: 'Assistir batalhas e gravar conteúdo',
-                Icon: IconCamera,
-                kicker: 'ESTÚDIO CINEMATOGRÁFICO & GRAVAÇÃO (ADMIN)',
-                title: 'MODO ESPECTADOR: IA vs IA',
-                desc: 'Dois Comandantes de IA completos (Aliados vs Eixo) batalham pelo mapa sem intervenção humana e sem Névoa de Guerra.',
-                rules: ['Visão 100% Sem Névoa', 'Director Cam Automática', 'Ocultar HUD [H] + Vel. 1x–3x'],
-                ctaLabel: 'INICIAR BATALHA ESPECTADOR',
-                onLaunch: () => onPlaySpectator?.(selectedMapId),
-              },
-            ]
-          : []),
-        ...(isLocalHost
-          ? [
-              {
-                id: 'editor_hub',
-                label: isAdmin ? 'EDITOR DE MAPAS & SANDBOX' : 'EDITOR DE MAPAS (LOCAL)',
-                sub: 'Modificar mapa 3D no modo local',
-                Icon: IconCompass,
-                kicker: 'FERRAMENTAS DE CONSTRUÇÃO DE CENÁRIO (LOCAL)',
-                title: isAdmin ? 'EDITOR DE MAPAS 3D & SANDBOX' : 'EDITOR DE MAPAS 3D (LOCAL)',
-                desc: 'Posicione casas, muros, trincheiras, áreas inteiras de floresta e mova pontos de conquista diretamente no terreno 3D.',
-                rules: ['Salva em customMaps.json', 'Pausa & Zoom Amplo', 'Mover/Girar Pós-Colocação'],
-                ctaLabel: 'ABRIR EDITOR DE MAPA 3D',
-                onLaunch: () => onOpenMapEditor?.(selectedMapId),
-              },
-            ]
-          : []),
-        {
-          id: 'store_ranks',
-          label: 'SUPRIMENTOS, PATENTE & ARSENAL',
-          sub: 'Ouro Militar, Batalhões e Camuflagens',
-          Icon: IconSupply,
-          kicker: 'PROGRESSÃO & ARSENAL DO COMANDANTE',
-          title: 'SUPRIMENTOS, PATENTE & ARSENAL',
-          desc: 'Desbloqueie pacotes multiplayer, batalhões de elite com Ouro Militar e personalize camuflagens.',
-          rules: [`Nível ${prog.level} (${prog.rank})`, `${net.currentUser?.militaryGold ?? 0} Ouro Militar`, '5 Esquemas de Camuflagem'],
-          ctaLabel: 'GERENCIAR ARSENAL',
-          onLaunch: () => setSubTab('store'),
-        },
-      ]
-    : [
-        {
-          id: 'rooms',
-          label: '⚔️ BATALHA ONLINE (1v1, 2v2, 3P & 4P)',
-          sub: 'Criar sala e lista de salas abertas',
-          Icon: IconCrosshair,
-          kicker: 'OPERAÇÃO MULTIPLAYER EM TEMPO REAL (1v1, 2v2, 3P & 4P)',
-          title: '⚔️ BATALHA ONLINE (1v1, 2v2, 3P & 4P)',
-          desc: 'Crie uma sala 1v1, 2v2, 3P ou 4P FFA (com jogadores reais ou Bot IA Difícil) em mapas padrão ou grandes de 16–20 setores.',
-          rules: ['Velocidade Travada 1x', 'IA Exclusiva: Difícil', 'Início Limpo Apenas QG'],
-          ctaLabel: 'ENTRAR NO LOBBY ONLINE',
-          onLaunch: () => setSubTab('rooms'),
-        },
-        {
-          id: 'store_ranks',
-          label: '🛒 SUPRIMENTOS, PATENTE & ARSENAL',
-          sub: 'Pacotes Multiplayer, Ouro Militar e Camuflagens',
-          Icon: IconSupply,
-          kicker: 'PROGRESSÃO & LOJA MULTIPLAYER',
-          title: '🛒 SUPRIMENTOS, PATENTE & ARSENAL',
-          desc: 'Adquira pacotes para partidas 1v1, 2v2, 3P e 4P com ativação automática no Lobby e na Batalha 3D.',
-          rules: [`Nível ${prog.level} (${prog.rank})`, `${net.currentUser?.militaryGold ?? 0} Ouro Militar`, '5 Pacotes Multiplayer'],
-          ctaLabel: 'ABRIR LOJA & ARSENAL',
-          onLaunch: () => setSubTab('store'),
-        },
-      ];
+  const HUB_NAV_ITEMS = [
+    {
+      id: 'store',
+      emoji: '📦',
+      label: 'SUPRIMENTOS',
+      sub: 'Fortificação QG, Paraquedistas, 2x XP & Camuflagens',
+      Icon: IconSupply,
+      kicker: 'DEPÓSITO DE SUPRIMENTOS & PACOTES',
+      title: '📦 SUPRIMENTOS MILITARES',
+      desc: 'Adquira pacotes multiplayer, impulsos de XP e reforços especiais ativados automaticamente nas partidas.',
+      rules: [`${net.currentUser?.militaryGold ?? 0} Ouro Militar`, '5 Pacotes Táticos'],
+      ctaLabel: 'VER PACOTES',
+      onLaunch: () => setSubTab('store'),
+    },
+    {
+      id: 'rooms',
+      emoji: '⚔️',
+      label: 'BATALHA MULTIPLAYER',
+      sub: '1v1, 2v2, 3P & 4P FFA • Salas & Busca Rápida',
+      Icon: IconCrosshair,
+      kicker: 'BATALHA MULTIPLAYER • SELEÇÃO DE OPERAÇÃO',
+      title: '⚔️ BATALHA MULTIPLAYER',
+      desc: 'Crie uma sala 1v1, 2v2, 3P ou 4P FFA ou entre em uma operação aberta com jogadores reais e Comandantes IA.',
+      rules: ['Velocidade Travada 1x', 'Lobby em Tempo Real', 'Início Limpo QG'],
+      ctaLabel: 'CRIAR / BUSCAR SALA',
+      onLaunch: () => setSubTab('rooms'),
+    },
+    {
+      id: 'ranks',
+      emoji: '🎖️',
+      label: 'PATENTE',
+      sub: 'Estatísticas, Evolução & Camuflagens',
+      Icon: IconMedal,
+      kicker: 'FICHA DO COMANDANTE & PATENTE',
+      title: `🎖️ NÍVEL ${prog.level} — ${prog.rank.toUpperCase()}`,
+      desc: 'Acompanhe seu histórico de vitórias, progresso de patente e personalize camuflagens do exército.',
+      rules: [`${xp} XP Total`, `${net.currentUser?.wins || 0} Vitórias`],
+      ctaLabel: 'VER PATENTE',
+      onLaunch: () => setSubTab('ranks'),
+    },
+    {
+      id: 'arsenal_hub',
+      emoji: '📖',
+      label: 'MANUAL',
+      sub: 'Rede Elétrica, Coletores, Construtores & Trincheiras',
+      Icon: IconBook,
+      kicker: 'MANUAL DE CAMPO & SISTEMAS OUTLIVE',
+      title: '📖 MANUAL TÁTICO DE CAMPO',
+      desc: 'Guia rápido de Rede Elétrica, Refinarias & Caminhões Coletores, Carros Construtores, Centro de Pesquisa e Trincheiras.',
+      rules: ['Rede Elétrica', 'Coletores & Construtores', 'Controles RTS'],
+      ctaLabel: 'ABRIR MANUAL',
+      onLaunch: () => setSubTab('tutorial'),
+    },
+    ...(allowOfflineModes
+      ? [
+          {
+            id: 'skirmish',
+            emoji: '🛡️',
+            label: 'CAMPANHA / LOCAL',
+            sub: 'Escaramuças vs IA & Saves [F9]',
+            Icon: IconShield,
+            kicker: 'OPERAÇÃO LOCAL CONTRA IA',
+            title: 'CAMPANHA & SAVES LOCAIS',
+            desc: 'Partidas locais contra IA tática com salvamento rápido [F9] e importação .JSON.',
+            rules: ['1v1 e 2v2', 'Saves Locais'],
+            ctaLabel: 'INICIAR LOCAL',
+            onLaunch: () =>
+              onPlayMode(selectedMode, startingResources, selectedMapId, selectedDifficulty),
+          },
+          {
+            id: 'spectator',
+            emoji: '👁️',
+            label: 'MODO ESPECTADOR',
+            sub: 'IA vs IA com Diretor de Cenas',
+            Icon: IconCamera,
+            kicker: 'ESTÚDIO IA vs IA (ADMIN)',
+            title: '👁️ MODO ESPECTADOR',
+            desc: 'Assista dois Comandantes de IA lutando pelo mapa com Director Cam e velocidade 1x–3x.',
+            rules: ['Sem Névoa', 'Director Cam'],
+            ctaLabel: 'ASSISTIR IA vs IA',
+            onLaunch: () => onPlaySpectator?.(selectedMapId),
+          },
+          {
+            id: 'editor_hub',
+            emoji: '📍',
+            label: 'EDITOR DE MAPAS',
+            sub: 'Relevo, Montanhas, Setores & Rebeldes',
+            Icon: IconCompass,
+            kicker: 'EDITOR DE TERRENO & SETORES 3D',
+            title: '📍 EDITOR DE MAPAS 3D',
+            desc: 'Esculpa morros/montanhas, crie pontos de conquista e configure Áreas Rebeldes.',
+            rules: ['Escultura 3D', 'Áreas Rebeldes', 'Duplicar/Excluir'],
+            ctaLabel: 'ABRIR EDITOR 3D',
+            onLaunch: () => onOpenMapEditor?.(selectedMapId),
+          },
+        ]
+      : []),
+  ];
 
   const previewId = hoveredNav || activeTab;
   const heroMeta = HUB_NAV_ITEMS.find((it) => it.id === previewId) || HUB_NAV_ITEMS[0];
 
   return (
-    <div className="mil-menu-overlay commercial-hub-overlay">
-      <div className="mil-hub-shell">
-        {/* CABEÇALHO SUPERIOR LIMPO */}
-        <header className="mil-hub-header">
-          <div className="mil-hub-brand">
-            <div className="mil-hub-crest">
-              <IconShield size={22} />
+    <div className="mil-menu-overlay commercial-hub-overlay outlive-hub-overlay">
+      <div className="outlive-hub-chassis">
+        <span className="outlive-rivet tl" />
+        <span className="outlive-rivet tr" />
+        <span className="outlive-rivet bl" />
+        <span className="outlive-rivet br" />
+
+        {/* CABEÇALHO TERMINAL INDUSTRIAL BLINDADO */}
+        <header className="outlive-hub-header">
+          <div className="outlive-brand-block">
+            <div className="outlive-crest-shield">
+              <IconShield size={24} />
             </div>
-            <div className="mil-brand">
-              <span className="mil-brand-title">COMPANY OF FRONTLINE</span>
-              <span className="mil-brand-sub">
+            <div>
+              <div className="outlive-brand-title">
+                COMPANY OF
+                <br />
+                FRONTLINE
+              </div>
+              <div className="outlive-brand-sub">
                 {isPaused
                   ? `OPERAÇÃO ${hud.gameMode.toUpperCase()} PAUSADA`
-                  : 'COMANDO TÁTICO EM TEMPO REAL 3D'}
-              </span>
+                  : 'SISTEMA DE COMANDO TÁTICO • v2.0'}
+              </div>
             </div>
           </div>
 
+          <div className="outlive-vent-grille" aria-hidden="true" />
+
           {net.currentUser && (
-            <div className="mil-profile-card">
+            <div className="outlive-commander-card">
+              <div
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 4,
+                  background: '#16201c',
+                  border: '1.5px solid #f59e0b',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 16,
+                }}
+              >
+                🎖️
+              </div>
               <div className="mil-profile-meta">
                 <div className="mil-profile-top">
                   <span className="mil-online-dot" title="Conectado" />
@@ -607,7 +705,7 @@ export default function GameMenus({
                     Nv.{prog.level} {prog.rank}
                   </span>
                   <span className="mil-gold-pill">
-                    <IconGold size={13} /> {net.currentUser.militaryGold ?? 0} Ouro
+                    🪙 {net.currentUser.militaryGold ?? 0} Ouro
                   </span>
                 </div>
                 <div className="mil-profile-xp-track" title={`${xp} / ${prog.nextLevelXp} XP`}>
@@ -617,33 +715,51 @@ export default function GameMenus({
 
               <button
                 type="button"
-                className="mil-pill"
-                style={{ borderColor: '#d4a338', color: '#fde68a' }}
-                onClick={() => setShowUpdatesPopup(true)}
-                title="Ver últimas atualizações do jogo"
+                className="outlive-sq-btn"
+                onClick={() => {
+                  const next = !uiMuted;
+                  setUiMuted(next);
+                  if (uiSoundRef.current) uiSoundRef.current.muted = next;
+                }}
+                title={uiMuted ? 'Ativar Áudio de Interface' : 'Silenciar Áudio de Interface'}
               >
-                <IconBell size={14} /> Novidades
+                {uiMuted ? '🔇' : '🔊'}
               </button>
 
-              {isAdmin && (
+              <button
+                type="button"
+                className="outlive-sq-btn"
+                onClick={() => {
+                  getUiSound().playUiHydraulic();
+                  setSupportOpen(true);
+                }}
+                title="Suporte & Central de Ajuda"
+              >
+                🎧
+              </button>
+
+              {canModerate && (
                 <button
                   type="button"
-                  className={`mil-pill ${activeTab === 'admin' ? 'active' : ''}`}
-                  style={{ borderColor: '#ef4444', color: '#fca5a5' }}
-                  onClick={() => setSubTab('admin')}
-                  title="Painel Administrativo"
+                  className="outlive-sq-btn"
+                  style={{ borderColor: isAdmin ? '#ef4444' : '#f59e0b', color: isAdmin ? '#fca5a5' : '#fde047' }}
+                  onClick={() => {
+                    getUiSound().playUiHydraulic();
+                    setSubTab('admin');
+                  }}
+                  title={isAdmin ? 'Painel Admin' : 'Painel Moderação'}
                 >
-                  <IconShield size={14} /> Admin
+                  🛡️
                 </button>
               )}
 
               <button
                 type="button"
-                className="mil-logout-btn"
+                className="outlive-sq-btn danger"
                 onClick={() => networkManager.logout()}
-                title="Encerrar sessão do comandante"
+                title="Sair da Conta"
               >
-                <IconLogout size={14} /> Sair
+                🚪
               </button>
             </div>
           )}
@@ -762,49 +878,50 @@ export default function GameMenus({
           </div>
         )}
 
-        {/* LAYOUT EM 2 COLUNAS: NAVEGAÇÃO LATERAL TÁTICA + PAINEL CENTRAL DINÂMICO */}
-        <div className="mil-hub-columns">
-          <aside className="mil-hub-sidebar" aria-label="Menu Tático">
+        {/* LAYOUT EM 2 COLUNAS: BOTÕES CHANFRADOS OUTLIVE + VISOR DE TELEMETRIA CRT */}
+        <div className="outlive-hub-columns">
+          <aside className="outlive-hub-sidebar" aria-label="Menu Tático">
             {HUB_NAV_ITEMS.map((item) => {
-              const IconComp = item.Icon;
               const isAct = activeTab === item.id;
               return (
                 <button
                   key={item.id}
                   type="button"
-                  className={`mil-hub-navbtn ${isAct ? 'active' : ''}`}
-                  onMouseEnter={() => setHoveredNav(item.id)}
+                  title={item.sub}
+                  className={`outlive-chamfer-btn ${isAct ? 'active' : ''}`}
+                  onMouseEnter={() => {
+                    setHoveredNav(item.id);
+                    getUiSound().playUiHover();
+                  }}
                   onMouseLeave={() => setHoveredNav(null)}
                   onClick={() => {
-                    if (item.id === 'store_ranks') setSubTab('store');
-                    else if (item.id === 'arsenal_hub') setSubTab('tutorial');
+                    getUiSound().playUiHydraulic();
+                    if (item.id === 'arsenal_hub') setSubTab('tutorial');
                     else setSubTab(item.id);
                   }}
                 >
-                  <div className="mil-nav-icon">
-                    <IconComp size={18} />
-                  </div>
-                  <div className="mil-nav-text">
+                  <div className="outlive-chamfer-ico">{item.emoji || '⚔️'}</div>
+                  <div className="outlive-chamfer-txt">
                     <strong>{item.label}</strong>
-                    <small>{item.sub}</small>
-                    {item.badge && <span className="mil-nav-badge">{item.badge}</span>}
                   </div>
                 </button>
               );
             })}
 
-            {isAdmin && (
+            {canModerate && (
               <button
                 type="button"
-                className={`mil-hub-navbtn admin-nav ${activeTab === 'admin' ? 'active' : ''}`}
-                onClick={() => setSubTab('admin')}
+                title="Contas, Bans & Segurança"
+                className={`outlive-chamfer-btn ${activeTab === 'admin' ? 'active' : ''}`}
+                onMouseEnter={() => getUiSound().playUiHover()}
+                onClick={() => {
+                  getUiSound().playUiHydraulic();
+                  setSubTab('admin');
+                }}
               >
-                <div className="mil-nav-icon">
-                  <IconShield size={18} />
-                </div>
-                <div className="mil-nav-text">
-                  <strong>PAINEL ADMINISTRATIVO</strong>
-                  <small>Moderação, Contas & Sandbox</small>
+                <div className="outlive-chamfer-ico">🛡️</div>
+                <div className="outlive-chamfer-txt">
+                  <strong>{isAdmin ? 'PAINEL ADMIN' : 'MODERAÇÃO'}</strong>
                 </div>
               </button>
             )}
@@ -813,49 +930,60 @@ export default function GameMenus({
               <button
                 type="button"
                 className="mil-hub-resume-btn"
-                onClick={onResume}
+                onClick={() => {
+                  getUiSound().playUiHydraulic();
+                  onResume();
+                }}
               >
                 <IconPlay size={15} /> RETORNAR À BATALHA
               </button>
             )}
           </aside>
 
-          {/* PAINEL CENTRAL DINÂMICO */}
-          <main className="mil-hub-main">
-            {/* CARD DE DESTAQUE VISUAL DINÂMICO */}
-            {activeTab !== 'admin' && (
-              <section className="mil-hero-card">
-                <div className="mil-hero-info">
-                  <span className="mil-hero-kicker">{heroMeta.kicker}</span>
-                  <h2>{heroMeta.title}</h2>
-                  <p>{heroMeta.desc}</p>
-                  <div className="mil-hero-rules">
-                    {heroMeta.rules.map((r) => (
-                      <span key={r} className="mil-hero-rule-pill">
-                        {r}
-                      </span>
-                    ))}
+          {/* PAINEL CENTRAL/DIREITO: CHASSI BLINDADO DO VISOR DE TELEMETRIA CRT + RODAPÉ */}
+          <div className="outlive-crt-housing">
+            <main className="outlive-crt-visor">
+              <div className="outlive-crt-bar">
+                <span>Visor de Telemetria</span>
+                <span>SINAL CRIPTOGRAFADO • 60 HZ</span>
+              </div>
+              <div className="outlive-crt-body">
+              {activeTab !== 'admin' && activeTab !== 'rooms' && (
+                <section className="mil-hero-card">
+                  <div className="mil-hero-info">
+                    <span className="mil-hero-kicker">{heroMeta.kicker}</span>
+                    <h2>{heroMeta.title}</h2>
+                    <p>{heroMeta.desc}</p>
+                    <div className="mil-hero-rules">
+                      {heroMeta.rules.map((r) => (
+                        <span key={r} className="mil-hero-rule-pill">
+                          {r}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div className="mil-hero-actions">
-                  <div className="mil-hero-map-mini">
-                    <span>TEATRO ATIVO</span>
-                    <strong>
-                      {getAvailableBattlefieldMaps().find((m) => m.id === selectedMapId)?.name ||
-                        'Campos da Normandia'}
-                    </strong>
+                  <div className="mil-hero-actions">
+                    <div className="mil-hero-map-mini">
+                      <span>TEATRO ATIVO</span>
+                      <strong>
+                        {getAvailableBattlefieldMaps().find((m) => m.id === selectedMapId)?.name ||
+                          'Campos da Normandia'}
+                      </strong>
+                    </div>
+                    <button
+                      type="button"
+                      className="mil-btn-primary mil-hero-cta"
+                      onClick={() => {
+                        getUiSound().playUiHydraulic();
+                        heroMeta.onLaunch();
+                      }}
+                    >
+                      <IconPlay size={15} />
+                      <span>{heroMeta.ctaLabel}</span>
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="mil-btn-primary mil-hero-cta"
-                    onClick={heroMeta.onLaunch}
-                  >
-                    <IconPlay size={15} />
-                    <span>{heroMeta.ctaLabel}</span>
-                  </button>
-                </div>
-              </section>
-            )}
+                </section>
+              )}
 
             {/* CONTEÚDO INTERATIVO DA SEÇÃO SELECIONADA */}
             <div className="mil-hub-content">
@@ -1759,9 +1887,124 @@ export default function GameMenus({
             </div>
           )}
             </div>
-          </main>
+            {activeTab === 'rooms' && (
+              <div className="outlive-crt-lower-dock">
+                <div style={{ fontSize: '0.72rem', color: '#64748b', paddingBottom: 4 }}>
+                  Selecione uma operação acima ou crie uma nova sala tática 1v1, 2v2, 3P ou 4P FFA.
+                </div>
+                <WireframeTopoRadar mapId={selectedMapId} />
+              </div>
+            )}
+          </div>
+          <div className="outlive-crt-bar bottom">
+            <span>Visor de Telemetria</span>
+            <span>REDE CRIPTOGRAFADA ATIVA</span>
+          </div>
+        </main>
+
+        {/* BARRA DE RODAPÉ TÁTICA & COMUNIDADE */}
+        <footer className="outlive-hub-footer">
+          <div className="outlive-footer-btn" style={{ cursor: 'default' }}>
+            <span className="outlive-server-pulse" />
+            <span>SERVIDOR ONLINE</span>
+          </div>
+          <a
+            href="https://discord.com"
+            target="_blank"
+            rel="noreferrer"
+            className="outlive-footer-btn"
+            onMouseEnter={() => getUiSound().playUiHover()}
+          >
+            💬 Discord
+          </a>
+          <a
+            href="https://chat.whatsapp.com"
+            target="_blank"
+            rel="noreferrer"
+            className="outlive-footer-btn"
+            onMouseEnter={() => getUiSound().playUiHover()}
+          >
+            📱 WhatsApp
+          </a>
+          <button
+            type="button"
+            className="outlive-footer-btn"
+            onMouseEnter={() => getUiSound().playUiHover()}
+            onClick={() => {
+              getUiSound().playUiHydraulic();
+              setRedeemMsg('');
+              setRedeemOpen(true);
+            }}
+          >
+            🎟️ RESGATAR CÓDIGO
+          </button>
+        </footer>
+        </div>
         </div>
       </div>
+
+      {supportOpen && (
+        <div className="sys-modal-backdrop" onClick={() => setSupportOpen(false)}>
+          <div className="sys-modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
+            <div className="tutorial-header">
+              <div>
+                <div className="tutorial-kicker">CENTRAL DE COMANDO</div>
+                <h3 className="tutorial-title">🎧 SUPORTE AO COMANDANTE</h3>
+              </div>
+              <button type="button" className="hud-btn" onClick={() => setSupportOpen(false)}>✕</button>
+            </div>
+            <p className="mp-desc" style={{ marginTop: 10 }}>
+              Precisa de ajuda com sua conta, partidas online ou pacotes? Entre em contato pelos canais oficiais no Discord ou WhatsApp no rodapé do terminal.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+              <button type="button" className="mil-btn-primary" onClick={() => setSupportOpen(false)}>FECHAR</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {redeemOpen && (
+        <div className="sys-modal-backdrop" onClick={() => setRedeemOpen(false)}>
+          <div className="sys-modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <div className="tutorial-header">
+              <div>
+                <div className="tutorial-kicker">PROMOÇÃO MILITAR</div>
+                <h3 className="tutorial-title">🎟️ RESGATAR CÓDIGO</h3>
+              </div>
+              <button type="button" className="hud-btn" onClick={() => setRedeemOpen(false)}>✕</button>
+            </div>
+            <input
+              type="text"
+              className="mil-input"
+              style={{ marginTop: 10, width: '100%' }}
+              value={redeemCode}
+              onChange={(e) => setRedeemCode(e.target.value)}
+              placeholder="Digite seu código promocional..."
+            />
+            {redeemMsg && <div className="mp-status-note" style={{ marginTop: 8 }}>{redeemMsg}</div>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+              <button
+                type="button"
+                className="mil-btn-primary"
+                onClick={() => {
+                  const clean = redeemCode.trim().toUpperCase();
+                  if (!clean) {
+                    setRedeemMsg('Informe um código válido.');
+                    return;
+                  }
+                  if (clean === 'OUTLIVE2026' || clean === 'FRONTLINE100') {
+                    setRedeemMsg('✅ Código validado! Bônus aplicado ao comandante.');
+                  } else {
+                    setRedeemMsg('❌ Código não reconhecido ou expirado.');
+                  }
+                }}
+              >
+                ATIVAR CÓDIGO
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {fbModalOpen && (
         <div className="sys-modal-backdrop" onClick={() => setFbModalOpen(false)}>

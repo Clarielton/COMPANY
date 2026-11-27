@@ -300,6 +300,7 @@ export default function HUD({
   };
 
   const builtSet = new Set(hud.builtBuildings || []);
+  const isEditorActive = Boolean(hud.mapEditorOpen || editorDrawerOpen);
   const specOpsUnits = ADVANCED_UNITS.filter((u) => u.requiresBuilding === 'spec_ops_center');
   const armorUnits = ADVANCED_UNITS.filter((u) => u.requiresBuilding === 'motor_pool');
   const selectedBld = hud.selectedBuilding;
@@ -539,7 +540,7 @@ export default function HUD({
       )}
 
       {/* BARRA SUPERIOR FINA ESTILO OUTLIVE (36px) */}
-      {!editorDrawerOpen && (() => {
+      {!isEditorActive && (() => {
         const p = hud.powerStats || { producedMw: 60, consumedMw: 0, efficiencyPct: 100, isLowPower: false };
         const pColor = p.isLowPower ? '#ef4444' : p.efficiencyPct <= 115 ? '#facc15' : '#4ade80';
         const ownedSec = (hud.sectors || []).filter((s) => s.owner === 'allies').length;
@@ -625,7 +626,7 @@ export default function HUD({
                   <IconWrench size={12} /> F10
                 </button>
               )}
-              {isLocalHost && (
+              {(isLocalHost || isAdmin) && (
                 <button
                   type="button"
                   className="outlive-top-btn"
@@ -633,7 +634,7 @@ export default function HUD({
                     setEditorDrawerOpen(true);
                     gameRef.current?.setMapEditorOpen?.(true, editorTool);
                   }}
-                  title="Editor de Mapas 3D Local"
+                  title="Editor de Mapas 3D"
                 >
                   🛠️ Editor
                 </button>
@@ -687,11 +688,10 @@ export default function HUD({
         </div>
       </div>
 
-      {/* MODO EDITOR DE MAPA 3D (Mantido intacto quando editorDrawerOpen === true) */}
-      {editorDrawerOpen && (
-      <HudPanel id="command" className="hud-top-right" layoutApi={layoutApi}>
-        <div className="toolbar-row compact-combat-bar" style={{ display: 'none' }} />
-        {isLocalHost && editorDrawerOpen && (() => {
+      {/* MODO EDITOR DE MAPA 3D (Container próprio sem limite de 320px do hud-top-right) */}
+      {isEditorActive && (isLocalHost || isAdmin) && (
+      <div className="hud-editor-dock-shell">
+        {(() => {
           const activeToolId = hud.mapEditorTool !== undefined ? hud.mapEditorTool : editorTool;
           const activeAngle =
             typeof hud.mapEditorAngleDeg === 'number' ? hud.mapEditorAngleDeg : editorAngleDeg;
@@ -802,6 +802,54 @@ export default function HUD({
                   {editorCollapsed ? '▶ Expandir Menu' : '◀ Recolher Menu'}
                 </button>
               </div>
+
+              {/* GERENCIADOR DE MAPAS: SELECIONAR, DUPLICAR & EXCLUIR */}
+              {!editorCollapsed && (
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 6 }}>
+                  <select
+                    className="mil-input"
+                    style={{ flex: 1, fontSize: '0.72rem', padding: '3px 6px' }}
+                    value={hud.mapId || 'normandy_fields'}
+                    onChange={(e) => gameRef.current?.loadMapInEditor(e.target.value)}
+                    title="Trocar mapa aberto no Editor"
+                  >
+                    {(hud.availableMaps || []).map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.isCustom ? `⭐ ${m.name}` : m.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="mil-ed-cambtn"
+                    style={{ padding: '4px 7px', fontSize: '0.72rem' }}
+                    onClick={() => gameRef.current?.duplicateCurrentMap()}
+                    title="Duplicar mapa atual como novo mapa customizado"
+                  >
+                    📋 Duplicar
+                  </button>
+                  <button
+                    type="button"
+                    className="mil-ed-cambtn"
+                    style={{
+                      padding: '4px 7px',
+                      fontSize: '0.72rem',
+                      borderColor: '#ef4444',
+                      color: '#fca5a5',
+                      opacity: String(hud.mapId || '').startsWith('custom_') ? 1 : 0.45,
+                    }}
+                    disabled={!String(hud.mapId || '').startsWith('custom_')}
+                    onClick={() => {
+                      if (window.confirm(`Excluir permanentemente o mapa "${hud.mapId}"?`)) {
+                        gameRef.current?.deleteCustomMap(hud.mapId);
+                      }
+                    }}
+                    title="Excluir mapa customizado selecionado"
+                  >
+                    🗑️ Excluir
+                  </button>
+                </div>
+              )}
 
               {/* BARRA DE CÂMERA EM 1 LINHA (34PX DE ALTURA) */}
               <div className="mil-editor-cambar">
@@ -924,6 +972,7 @@ export default function HUD({
                       { id: 'nature', label: '🌲 NATUREZA' },
                       { id: 'terrain', label: '⛰️ RELEVO' },
                       { id: 'sectors', label: '🚩 SETORES' },
+                      { id: 'rebels', label: '🏴‍☠️ REBELDES' },
                     ].map((t) => (
                       <button
                         key={t.id}
@@ -935,6 +984,8 @@ export default function HUD({
                             selectTool('move_sector');
                           } else if (t.id === 'terrain') {
                             selectTool('sculpt_hill');
+                          } else if (t.id === 'rebels') {
+                            selectTool('create_rebel_zone');
                           }
                         }}
                       >
@@ -1112,6 +1163,7 @@ export default function HUD({
                                   { id: 'neutral', label: 'Neutro' },
                                   { id: 'allies', label: 'Time 1 (Azul)' },
                                   { id: 'enemies', label: 'Time 2 (Verm.)' },
+                                  { id: 'rebels', label: '🏴‍☠️ Rebeldes' },
                                 ].map((ow) => (
                                   <button
                                     key={ow.id}
@@ -1157,6 +1209,102 @@ export default function HUD({
                         </button>
                       </div>
                     )}
+
+                    {editorTab === 'rebels' && (() => {
+                      const rzList = hud.rebelZones || [];
+                      const selRz = rzList.find((z) => z.id === hud.selectedRebelZoneId) || rzList[0] || null;
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          <div className="mil-editor-grid2">
+                            {[
+                              { id: 'create_rebel_zone', icon: '🏴‍☠️', title: 'Criar Área Rebelde' },
+                              { id: 'rebel_rifle', icon: '🪖', title: 'Fuzileiros Rebeldes' },
+                              { id: 'rebel_at', icon: '🚀', title: 'AT Rebelde' },
+                              { id: 'rebel_bunker', icon: '🛡️', title: 'Bunker Rebelde' },
+                            ].map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                className={`mil-ed-item ${activeToolId === item.id ? 'active' : ''}`}
+                                onClick={() => selectTool(item.id)}
+                              >
+                                <span className="mil-ed-item-ico">{item.icon}</span>
+                                <span className="mil-ed-item-txt">{item.title}</span>
+                              </button>
+                            ))}
+                          </div>
+
+                          {selRz && (
+                            <div
+                              style={{
+                                padding: 8,
+                                borderRadius: 6,
+                                background: 'rgba(25, 16, 12, 0.9)',
+                                border: '1px solid rgba(234, 88, 12, 0.45)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 6,
+                              }}
+                            >
+                              <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#fdba74' }}>
+                                ÁREA REBELDE ({rzList.length} no mapa)
+                              </div>
+                              {rzList.length > 1 && (
+                                <select
+                                  className="mil-input"
+                                  value={selRz.id}
+                                  onChange={(e) => gameRef.current?.selectRebelZone(e.target.value)}
+                                >
+                                  {rzList.map((z, idx) => (
+                                    <option key={z.id} value={z.id}>
+                                      Área Rebelde #{idx + 1} (Nv.{z.level} • {Math.round(z.radius / 14)}m)
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                              <div style={{ display: 'flex', gap: 4 }}>
+                                {[18, 28, 40].map((rm) => (
+                                  <button
+                                    key={rm}
+                                    type="button"
+                                    className={`mil-pill ${Math.round((selRz.radius || 392) / 14) === rm ? 'active' : ''}`}
+                                    style={{ flex: 1, fontSize: '0.72rem' }}
+                                    onClick={() => gameRef.current?.updateRebelZone(selRz.id, { radiusMeters: rm })}
+                                  >
+                                    Raio {rm}m
+                                  </button>
+                                ))}
+                              </div>
+                              <div style={{ display: 'flex', gap: 4 }}>
+                                {[
+                                  { l: 1, name: 'Nv.1 Posto' },
+                                  { l: 2, name: 'Nv.2 Bastilha' },
+                                  { l: 3, name: 'Nv.3 Fortaleza' },
+                                ].map((lv) => (
+                                  <button
+                                    key={lv.l}
+                                    type="button"
+                                    className={`mil-pill ${(selRz.level || 1) === lv.l ? 'active' : ''}`}
+                                    style={{ flex: 1, fontSize: '0.72rem' }}
+                                    onClick={() => gameRef.current?.updateRebelZone(selRz.id, { level: lv.l })}
+                                  >
+                                    {lv.name}
+                                  </button>
+                                ))}
+                              </div>
+                              <button
+                                type="button"
+                                className="mil-pill"
+                                style={{ borderColor: '#ef4444', color: '#fca5a5' }}
+                                onClick={() => gameRef.current?.deleteRebelZone(selRz.id)}
+                              >
+                                🗑️ Excluir Área Rebelde
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </>
               )}
@@ -1179,11 +1327,11 @@ export default function HUD({
             </div>
           );
         })()}
-      </HudPanel>
+      </div>
       )}
 
       {/* CONSOLE TÁTICO INFERIOR CLÁSSICO ESTILO OUTLIVE (175px • 3 MÓDULOS FIXOS) */}
-      {!editorDrawerOpen && (() => {
+      {!isEditorActive && (() => {
         const pStats = hud.powerStats || { producedMw: 60, consumedMw: 0, efficiencyPct: 100, isLowPower: false };
         const defaultTip = selectedBld
           ? `${selectedBld.name} — Clique no mapa com Botão Direito para definir o Ponto de Encontro.`
@@ -1557,15 +1705,25 @@ export default function HUD({
                   () => gameRef.current?.setActiveCommandMode?.("vehicle_patrol"),
                   { active: hud.activeCommandMode === "vehicle_patrol" }
                 )}
-                {mkBtn(
-                  "veh_line_move",
-                  "➡️",
-                  "Linha Reta",
-                  "Sincronizar",
-                  "Move o grupo em formação alinhada na velocidade do tanque mais lento.",
-                  () => gameRef.current?.setActiveCommandMode?.("vehicle_line_move"),
-                  { active: hud.activeCommandMode === "vehicle_line_move" }
-                )}
+                {leadSquad.isTransport
+                  ? mkBtn(
+                      "veh_load",
+                      "📥",
+                      "Carregar",
+                      `${leadSquad.cargoSquadsCount || 0}/${leadSquad.maxCargoSquads || 2} Esq`,
+                      "Embarca esquadrões de infantaria próximos ou clique em uma tropa aliada para embarcar.",
+                      () => gameRef.current?.loadNearbyIntoTransport?.(leadSquad.id),
+                      { locked: (leadSquad.cargoSquadsCount || 0) >= (leadSquad.maxCargoSquads || 2) }
+                    )
+                  : mkBtn(
+                      "veh_line_move",
+                      "➡️",
+                      "Linha Reta",
+                      "Sincronizar",
+                      "Move o grupo em formação alinhada na velocidade do tanque mais lento.",
+                      () => gameRef.current?.setActiveCommandMode?.("vehicle_line_move"),
+                      { active: hud.activeCommandMode === "vehicle_line_move" }
+                    )}
                 {mkBtn(
                   "veh_hold",
                   "⚓",
@@ -1575,15 +1733,25 @@ export default function HUD({
                   () => gameRef.current?.toggleSelectedHoldPosition(),
                   { active: leadSquad.holdPosition }
                 )}
-                {mkBtn(
-                  "veh_attack_move",
-                  "⚔️",
-                  "Atacar Mov.",
-                  "Avançar",
-                  "Avança até o destino parando para destruir inimigos no caminho.",
-                  () => gameRef.current?.setActiveCommandMode?.("attack_move"),
-                  { active: hud.activeCommandMode === "attack_move" }
-                )}
+                {leadSquad.isTransport
+                  ? mkBtn(
+                      "veh_unload",
+                      "📤",
+                      "Soltar Tropas",
+                      (leadSquad.cargoSoldiersCount || 0) > 0 ? `[U] ${leadSquad.cargoSoldiersCount}s` : "Vazio",
+                      "Desembarca imediatamente todas as tropas embarcadas neste veículo [Tecla U].",
+                      () => gameRef.current?.disembarkAllFromTransport?.(leadSquad.id),
+                      { locked: (leadSquad.cargoSquadsCount || 0) === 0 }
+                    )
+                  : mkBtn(
+                      "veh_attack_move",
+                      "⚔️",
+                      "Atacar Mov.",
+                      "Avançar",
+                      "Avança até o destino parando para destruir inimigos no caminho.",
+                      () => gameRef.current?.setActiveCommandMode?.("attack_move"),
+                      { active: hud.activeCommandMode === "attack_move" }
+                    )}
                 {mkBtn(
                   "veh_stance",
                   "🛡️",
@@ -1646,7 +1814,7 @@ export default function HUD({
               { id: "thermal_plant", icon: "⚛️", name: "Termelétrica", cost: "420S • 80C", tip: "Usina Termelétrica: Gera +140 MW e conecta prédios em 36m.", onClick: () => gameRef.current?.startPlaceBaseBuilding("thermal_plant") },
               { id: "pow_camp", icon: "⛓️", name: "Campo POW", cost: "260S • 40C", tip: "Campo de Prisioneiros: Gera +5 SUP/s por prisioneiro.", onClick: () => gameRef.current?.startPlaceBaseBuilding("pow_camp") },
               { id: "build_bunker", icon: "🏰", name: "Bunker .50cal", cost: `${COMMAND_BY_ID.build_bunker?.cost || 180}S`, tip: "Bunker Blindado .50cal conectado à Rede Elétrica.", onClick: () => gameRef.current?.triggerActionById("build_bunker") },
-              { id: "build_fortified_wall", icon: "🧱", name: "Muralha", cost: `${COMMAND_BY_ID.build_fortified_wall?.cost || 80}S`, tip: "Muralha Contínua de Concreto.", onClick: () => gameRef.current?.triggerActionById("build_fortified_wall") },
+              { id: "build_wall", icon: "🧱", name: "Muralha", cost: `${COMMAND_BY_ID.build_wall?.cost || 80}S`, tip: "Muralha Contínua de Concreto (clique ou arraste na base).", onClick: () => gameRef.current?.triggerActionById("build_wall") },
               { id: "build_outpost", icon: "📦", name: "Posto SUP", cost: "160S", tip: "Posto de Suprimentos: Aumenta renda do setor dominado.", onClick: () => gameRef.current?.triggerActionById("build_outpost") },
               { id: "air_tab", icon: "✈️", name: "Ataques Aéreos", cost: hasAirCommand ? "Pronto" : "🔒 Radar", tip: "Abrir comandos de Suporte Aéreo ([Z], [X], [C]).", onClick: () => setConsolePage("air") },
               { id: "back_main", icon: "↩️", name: "Voltar", cost: "Principal", tip: "Voltar para o catálogo principal da Base.", onClick: () => setConsolePage("main") },
@@ -1769,12 +1937,62 @@ export default function HUD({
                         );
                       })}
                     </div>
+                  ) : leadSquad.isInfantry ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
+                      <div className="outlive-soldiers-strip">
+                        {(leadSquad.soldiers || []).map((s, idx) => {
+                          const sPct = s.alive ? Math.max(0, Math.min(100, Math.round((s.hp / Math.max(1, s.maxHp)) * 100))) : 0;
+                          const hpCol = sPct > 60 ? "#4ade80" : sPct > 30 ? "#facc15" : "#ef4444";
+                          return (
+                            <div
+                              key={s.id || idx}
+                              className={`outlive-soldier-chip ${!s.alive ? "dead" : ""} ${s.selected ? "selected" : ""}`}
+                              title={s.alive ? `${s.rank || "Soldado"} ${s.name || `#${idx + 1}`} • ${s.weapon || ""} • ${s.hp}/${s.maxHp} HP` : `Baixa em combate`}
+                            >
+                              <div className="outlive-soldier-top">
+                                <span>{s.alive ? (s.weaponIcon || "🪖") : "💀"}</span>
+                                <strong>{s.alive ? `${s.hp}` : "0"}</strong>
+                              </div>
+                              <div className="outlive-mini-hp-track">
+                                <div className="outlive-mini-hp-fill" style={{ width: `${sPct}%`, background: hpCol }} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="outlive-formations-bar">
+                        <span style={{ fontSize: 9.5, color: "#94a3b8", fontWeight: 800 }}>FORMAÇÃO:</span>
+                        {SQUAD_FORMATIONS.map((f) => (
+                          <button
+                            key={f.id}
+                            type="button"
+                            className={`outlive-form-pill ${leadSquad.formation === f.id ? "active" : ""}`}
+                            title={f.desc || f.name}
+                            onClick={() => gameRef.current?.setSelectedFormation?.(f.id)}
+                          >
+                            {f.icon} {f.short || f.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   ) : (
                     <div className="outlive-visor-stats">
-                      <div className="outlive-stat-box"><span>{leadSquad.isHarvester ? "Carga" : "Ataque"}</span><strong>{leadSquad.isHarvester ? `${leadSquad.harvesterLoad || 0}%` : leadSquad.attack || 0}</strong></div>
+                      <div className="outlive-stat-box">
+                        <span>{leadSquad.isHarvester ? "Carga" : leadSquad.isTransport ? "Embarque" : "Ataque"}</span>
+                        <strong>
+                          {leadSquad.isHarvester
+                            ? `${leadSquad.harvesterLoad || 0}%`
+                            : leadSquad.isTransport
+                              ? `${leadSquad.cargoSquadsCount || 0}/${leadSquad.maxCargoSquads || 2} Esq`
+                              : leadSquad.attack || 0}
+                        </strong>
+                      </div>
                       <div className="outlive-stat-box"><span>Blindagem</span><strong>{leadSquad.armor || 0}%</strong></div>
                       <div className="outlive-stat-box"><span>Alcance</span><strong>{leadSquad.range || 0}m</strong></div>
-                      <div className="outlive-stat-box"><span>Efetivo</span><strong>{leadSquad.isInfantry ? `${leadSquad.soldiersAlive}/${leadSquad.maxSoldiers}` : "1 Veículo"}</strong></div>
+                      <div className="outlive-stat-box">
+                        <span>{leadSquad.isTransport ? "Passageiros" : "Efetivo"}</span>
+                        <strong>{leadSquad.isTransport ? `${leadSquad.cargoSoldiersCount || 0}/${leadSquad.maxCargoSoldiers || 12}` : "1 Veículo"}</strong>
+                      </div>
                     </div>
                   )}
                 </>
@@ -1886,7 +2104,7 @@ export default function HUD({
       })()}
 
       {/* BARRA SANDBOX COMPACTA E RECOLHÍVEL (Sem colidir com o topo direito ou avisos) */}
-      {!editorDrawerOpen && isAdmin && hud.sandboxMode && (
+      {!isEditorActive && isAdmin && hud.sandboxMode && (
         <div className="sandbox-floating-dock">
           <button
             type="button"

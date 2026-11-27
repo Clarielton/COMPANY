@@ -414,6 +414,25 @@ export class SoundManager {
     this._noiseBuf(this.whiteNoiseBuf, 0.09, 2400 + Math.random() * 1400, 0.055, 'bandpass', this.sfxGain);
   }
 
+  playUiHover() {
+    this.resume();
+    if (!this.ctx || this.muted) return;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (this.last.uiHover && now - this.last.uiHover < 55) return;
+    this.last.uiHover = now;
+    this.tone(920, 0.032, 0.045, 'triangle', 460);
+  }
+
+  playUiHydraulic() {
+    this.resume();
+    if (!this.ctx || this.muted) return;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (this.last.uiHyd && now - this.last.uiHyd < 75) return;
+    this.last.uiHyd = now;
+    this.tone(135, 0.095, 0.11, 'sawtooth', 58);
+    this._noiseBuf(this.whiteNoiseBuf, 0.045, 1600, 0.04, 'bandpass', this.sfxGain);
+  }
+
   _noiseBuf(buffer, dur, freq, vol, type = 'lowpass', dest = this.sfxGain) {
     const c = this.ctx;
     if (!c || !buffer) return;
